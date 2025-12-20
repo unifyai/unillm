@@ -1,0 +1,12 @@
+.env
+.env.*
+*.env
+.sensitive_data
+
+*venv/
+__pycache__/
+
+.cache.ndjson
+.cache_write.ndjson
+
+.vscode/
