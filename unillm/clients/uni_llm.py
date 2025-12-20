@@ -73,12 +73,6 @@ class _UniClient(_Client, abc.ABC):
         tool_choice: Optional[ChatCompletionToolChoiceOptionParam] = None,
         parallel_tool_calls: Optional[bool] = None,
         reasoning_effort: Optional[str] = None,
-        # platform arguments
-        tags: Optional[List[str]] = None,
-        drop_params: Optional[bool] = True,
-        region: Optional[str] = None,
-        log_query_body: Optional[bool] = True,
-        log_response_body: Optional[bool] = True,
         api_key: Optional[str] = None,
         # python client arguments
         stateful: bool = False,
@@ -188,21 +182,6 @@ class _UniClient(_Client, abc.ABC):
             parallel_tool_calls: Whether to enable parallel function calling during tool
             use.
 
-            tags: Arbitrary number of tags to classify this API query as needed. Helpful
-            for generally grouping queries across tasks and users, for logging purposes.
-
-            drop_params: Whether or not to drop unsupported OpenAI params by the
-            provider you’re using.
-
-            region: A string used to represent the region where the endpoint is
-            accessed. Only relevant for on-prem deployments with certain providers like
-            `vertex-ai`, `aws-bedrock` and `azure-ml`, where the endpoint is being
-            accessed through a specified region.
-
-            log_query_body: Whether to log the contents of the query json body.
-
-            log_response_body: Whether to log the contents of the response json body.
-
             stateful:  Whether the conversation history is preserved within the messages
             of this client. If True, then history is preserved. If False, then this acts
             as a stateless client, and message histories must be managed by the user.
@@ -258,12 +237,6 @@ class _UniClient(_Client, abc.ABC):
             tool_choice=tool_choice,
             parallel_tool_calls=parallel_tool_calls,
             reasoning_effort=reasoning_effort,
-            # platform arguments
-            tags=tags,
-            drop_params=drop_params,
-            region=region,
-            log_query_body=log_query_body,
-            log_response_body=log_response_body,
             api_key=api_key,
             # python client arguments
             stateful=stateful,
@@ -319,11 +292,6 @@ class _UniClient(_Client, abc.ABC):
         endpoint,
         stream,
         stream_options,
-        tags,
-        drop_params,
-        region,
-        log_query_body,
-        log_response_body,
     ):
         prompt_dict = prompt.components
         if "extra_body" in prompt_dict:
@@ -337,12 +305,6 @@ class _UniClient(_Client, abc.ABC):
             stream=stream,
             stream_options=stream_options,
             extra_body={  # platform arguments
-                "signature": "python",
-                "tags": tags,
-                "drop_params": drop_params,
-                "region": region,
-                "log_query_body": log_query_body,
-                "log_response_body": log_response_body,
                 # passthrough json arguments
                 **extra_body,
             },
@@ -588,12 +550,6 @@ class _UniClient(_Client, abc.ABC):
         tool_choice: Optional[ChatCompletionToolChoiceOptionParam] = None,
         parallel_tool_calls: Optional[bool] = None,
         reasoning_effort: Optional[str] = None,
-        # platform arguments
-        tags: Optional[List[str]] = None,
-        drop_params: Optional[bool] = None,
-        region: Optional[str] = None,
-        log_query_body: Optional[bool] = None,
-        log_response_body: Optional[bool] = None,
         # python client arguments
         stateful: Optional[bool] = None,
         return_full_completion: Optional[bool] = None,
@@ -704,21 +660,6 @@ class _UniClient(_Client, abc.ABC):
             parallel_tool_calls: Whether to enable parallel function calling during tool
             use.
 
-            tags: Arbitrary number of tags to classify this API query as needed. Helpful
-            for generally grouping queries across tasks and users, for logging purposes.
-
-            drop_params: Whether or not to drop unsupported OpenAI params by the
-            provider you’re using.
-
-            region: A string used to represent the region where the endpoint is
-            accessed. Only relevant for on-prem deployments with certain providers like
-            `vertex-ai`, `aws-bedrock` and `azure-ml`, where the endpoint is being
-            accessed through a specified region.
-
-            log_query_body: Whether to log the contents of the query json body.
-
-            log_response_body: Whether to log the contents of the response json body.
-
             stateful:  Whether the conversation history is preserved within the messages
             of this client. If True, then history is preserved. If False, then this acts
             as a stateless client, and message histories must be managed by the user.
@@ -813,12 +754,6 @@ class _UniClient(_Client, abc.ABC):
                 self._parallel_tool_calls,
             ),
             reasoning_effort=_default(reasoning_effort, self._reasoning_effort),
-            # platform arguments
-            tags=_default(tags, self._tags),
-            drop_params=_default(drop_params, self._drop_params),
-            region=_default(region, self._region),
-            log_query_body=_default(log_query_body, self._log_query_body),
-            log_response_body=_default(log_response_body, self._log_response_body),
             # python client arguments
             return_full_completion=return_full_completion,
             cache=_default(cache, is_caching_enabled()),
@@ -847,12 +782,6 @@ class Unify(_UniClient):
         prompt: Prompt,
         # stream
         stream_options: Optional[ChatCompletionStreamOptionsParam],
-        # platform arguments
-        tags: Optional[List[str]],
-        drop_params: Optional[bool],
-        region: Optional[str],
-        log_query_body: Optional[bool],
-        log_response_body: Optional[bool],
         # python client arguments
         return_full_completion: bool,
     ) -> Generator[str, None, None]:
@@ -861,11 +790,6 @@ class Unify(_UniClient):
             endpoint=endpoint,
             stream=True,
             stream_options=stream_options,
-            tags=tags,
-            drop_params=drop_params,
-            region=region,
-            log_query_body=log_query_body,
-            log_response_body=log_response_body,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
@@ -886,12 +810,6 @@ class Unify(_UniClient):
         self,
         endpoint: str,
         prompt: Prompt,
-        # platform arguments
-        tags: Optional[List[str]],
-        drop_params: Optional[bool],
-        region: Optional[str],
-        log_query_body: Optional[bool],
-        log_response_body: Optional[bool],
         # python client arguments
         return_full_completion: bool,
         cache: Union[bool, str],
@@ -902,11 +820,6 @@ class Unify(_UniClient):
             endpoint=endpoint,
             stream=False,
             stream_options=None,
-            tags=tags,
-            drop_params=drop_params,
-            region=region,
-            log_query_body=log_query_body,
-            log_response_body=log_response_body,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
@@ -992,12 +905,6 @@ class Unify(_UniClient):
         tool_choice: Optional[ChatCompletionToolChoiceOptionParam],
         parallel_tool_calls: Optional[bool],
         reasoning_effort: Optional[str],
-        # platform arguments
-        tags: Optional[List[str]],
-        drop_params: Optional[bool],
-        region: Optional[str],
-        log_query_body: Optional[bool],
-        log_response_body: Optional[bool],
         # python client arguments
         return_full_completion: bool,
         cache: Union[bool, str],
@@ -1036,24 +943,12 @@ class Unify(_UniClient):
                 prompt,
                 # stream
                 stream_options=stream_options,
-                # platform arguments
-                tags=tags,
-                drop_params=drop_params,
-                region=region,
-                log_query_body=log_query_body,
-                log_response_body=log_response_body,
                 # python client arguments
                 return_full_completion=return_full_completion,
             )
         return self._generate_non_stream(
             self._endpoint,
             prompt,
-            # platform arguments
-            tags=tags,
-            drop_params=drop_params,
-            region=region,
-            log_query_body=log_query_body,
-            log_response_body=log_response_body,
             # python client arguments
             return_full_completion=return_full_completion,
             cache=cache,
@@ -1082,12 +977,6 @@ class AsyncUnify(_UniClient):
         prompt: Prompt,
         # stream
         stream_options: Optional[ChatCompletionStreamOptionsParam],
-        # platform arguments
-        tags: Optional[List[str]],
-        drop_params: Optional[bool],
-        region: Optional[str],
-        log_query_body: Optional[bool],
-        log_response_body: Optional[bool],
         # python client arguments
         return_full_completion: bool,
     ) -> AsyncGenerator[str, None]:
@@ -1096,11 +985,6 @@ class AsyncUnify(_UniClient):
             endpoint=endpoint,
             stream=True,
             stream_options=stream_options,
-            tags=tags,
-            drop_params=drop_params,
-            region=region,
-            log_query_body=log_query_body,
-            log_response_body=log_response_body,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
@@ -1119,12 +1003,6 @@ class AsyncUnify(_UniClient):
         self,
         endpoint: str,
         prompt: Prompt,
-        # platform arguments
-        tags: Optional[List[str]],
-        drop_params: Optional[bool],
-        region: Optional[str],
-        log_query_body: Optional[bool],
-        log_response_body: Optional[bool],
         # python client arguments
         return_full_completion: bool,
         cache: Union[bool, str],
@@ -1135,11 +1013,6 @@ class AsyncUnify(_UniClient):
             endpoint=endpoint,
             stream=False,
             stream_options=None,
-            tags=tags,
-            drop_params=drop_params,
-            region=region,
-            log_query_body=log_query_body,
-            log_response_body=log_response_body,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
@@ -1228,12 +1101,6 @@ class AsyncUnify(_UniClient):
         tool_choice: Optional[ChatCompletionToolChoiceOptionParam],
         parallel_tool_calls: Optional[bool],
         reasoning_effort: Optional[str],
-        # platform arguments
-        tags: Optional[List[str]],
-        drop_params: Optional[bool],
-        region: Optional[str],
-        log_query_body: Optional[bool],
-        log_response_body: Optional[bool],
         # python client arguments
         return_full_completion: bool,
         cache: Union[bool, str],
@@ -1273,24 +1140,12 @@ class AsyncUnify(_UniClient):
                 prompt,
                 # stream
                 stream_options=stream_options,
-                # platform arguments
-                tags=tags,
-                drop_params=drop_params,
-                region=region,
-                log_query_body=log_query_body,
-                log_response_body=log_response_body,
                 # python client arguments
                 return_full_completion=return_full_completion,
             )
         return await self._generate_non_stream(
             self._endpoint,
             prompt,
-            # platform arguments
-            tags=tags,
-            drop_params=drop_params,
-            region=region,
-            log_query_body=log_query_body,
-            log_response_body=log_response_body,
             # python client arguments
             return_full_completion=return_full_completion,
             cache=cache,

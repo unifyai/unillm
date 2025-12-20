@@ -56,11 +56,6 @@ class _Client(ABC):
         parallel_tool_calls: Optional[bool],
         reasoning_effort: Optional[str],
         # platform arguments
-        tags: Optional[List[str]],
-        drop_params: Optional[bool],
-        region: Optional[str] = None,
-        log_query_body: Optional[bool],
-        log_response_body: Optional[bool],
         api_key: Optional[str],
         # python client arguments
         stateful: bool,
@@ -96,11 +91,6 @@ class _Client(ABC):
         self._tool_choice = None
         self._parallel_tool_calls = None
         self._reasoning_effort = None
-        self._tags = None
-        self._drop_params = None
-        self._region = None
-        self._log_query_body = None
-        self._log_response_body = None
         self._stateful = None
         self._return_full_completion = None
         self._cache = None
@@ -131,12 +121,6 @@ class _Client(ABC):
         self.set_tool_choice(tool_choice)
         self.set_parallel_tool_calls(parallel_tool_calls)
         self.set_reasoning_effort(reasoning_effort)
-        # platform arguments
-        self.set_tags(tags)
-        self.set_drop_params(drop_params)
-        self.set_region(region)
-        self.set_log_query_body(log_query_body)
-        self.set_log_response_body(log_response_body)
         # python client arguments
         self.set_stateful(stateful)
         self.set_return_full_completion(return_full_completion)
@@ -391,56 +375,6 @@ class _Client(ABC):
             The default reasoning.
         """
         return self._reasoning_effort
-
-    @property
-    def tags(self) -> Optional[List[str]]:
-        """
-        Get the default tags, if set.
-
-        Returns:
-            The default tags.
-        """
-        return self._tags
-
-    @property
-    def drop_params(self) -> Optional[bool]:
-        """
-        Get the default drop_params bool, if set.
-
-        Returns:
-            The default drop_params bool.
-        """
-        return self._drop_params
-
-    @property
-    def region(self) -> Optional[str]:
-        """
-        Get the default region, if set.
-
-        Returns:
-            The default region.
-        """
-        return self._region
-
-    @property
-    def log_query_body(self) -> Optional[bool]:
-        """
-        Get the default log query body bool, if set.
-
-        Returns:
-            The default log query body bool.
-        """
-        return self._log_query_body
-
-    @property
-    def log_response_body(self) -> Optional[bool]:
-        """
-        Get the default log response body bool, if set.
-
-        Returns:
-            The default log response body bool.
-        """
-        return self._log_response_body
 
     @property
     def stateful(self) -> bool:
@@ -868,32 +802,6 @@ class _Client(ABC):
         self._region = value
         return self
 
-    def set_log_query_body(self, value: bool) -> Self:
-        """
-        Set the default log query body bool.
-
-        Args:
-            value: The default log query body bool.
-
-        Returns:
-            This client, useful for chaining inplace calls.
-        """
-        self._log_query_body = value
-        return self
-
-    def set_log_response_body(self, value: bool) -> Self:
-        """
-        Set the default log response body bool.
-
-        Args:
-            value: The default log response body bool.
-
-        Returns:
-            This client, useful for chaining inplace calls.
-        """
-        self._log_response_body = value
-        return self
-
     def set_stateful(self, value: bool) -> Self:
         """
         Set the default stateful bool.
@@ -1268,8 +1176,6 @@ class _Client(ABC):
                         tags=self._tags,
                         drop_params=self._drop_params,
                         region=self._region,
-                        log_query_body=self._log_query_body,
-                        log_response_body=self._log_response_body,
                         api_key=self._api_key,
                         # python client arguments
                         stateful=self._stateful,
@@ -1312,11 +1218,6 @@ class _Client(ABC):
                     tool_choice=self._tool_choice,
                     parallel_tool_calls=self._parallel_tool_calls,
                     # platform arguments
-                    tags=self._tags,
-                    drop_params=self._drop_params,
-                    region=self._region,
-                    log_query_body=self._log_query_body,
-                    log_response_body=self._log_response_body,
                     api_key=self._api_key,
                     # python client arguments
                     stateful=self._stateful,
@@ -1363,12 +1264,6 @@ class _Client(ABC):
         tool_choice: Optional[ChatCompletionToolChoiceOptionParam],
         parallel_tool_calls: Optional[bool],
         reasoning_effort: Optional[str],
-        # platform arguments
-        tags: Optional[List[str]],
-        drop_params: Optional[bool],
-        region: Optional[str],
-        log_query_body: Optional[bool],
-        log_response_body: Optional[bool],
         # python client arguments
         return_full_completion: bool,
         cache: Union[bool, str],
