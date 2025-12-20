@@ -21,7 +21,7 @@ import openai
 
 # local
 import unify
-from openai._types import Headers, Query
+from openai._types import Headers
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionMessageParam,
@@ -81,7 +81,6 @@ class _UniClient(_Client, abc.ABC):
         cache_backend: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
-        extra_query: Optional[Query] = None,
         **kwargs,
     ):
         """Initialize the Uni LLM Unify client.
@@ -204,10 +203,6 @@ class _UniClient(_Client, abc.ABC):
             provider-specific, and are not part of the OpenAI standard. They are handled
             by the provider-specific API.
 
-            extra_query: Additional "passthrough" query parameters for the request which
-            are provider-specific, and are not part of the OpenAI standard. They are
-            handled by the provider-specific API.
-
             kwargs: Additional "passthrough" JSON properties for the body of the
             request, which are provider-specific, and are not part of the OpenAI
             standard. They will be handled by the provider-specific API.
@@ -245,7 +240,6 @@ class _UniClient(_Client, abc.ABC):
             cache_backend=cache_backend,
             # passthrough arguments
             extra_headers=extra_headers,
-            extra_query=extra_query,
             **kwargs,
         )
         super().__init__(**self._base_constructor_args)
@@ -548,7 +542,6 @@ class _UniClient(_Client, abc.ABC):
         cache_backend: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
-        extra_query: Optional[Query] = None,
         service_tier: Optional[str] = None,
         **kwargs,
     ):
@@ -673,10 +666,6 @@ class _UniClient(_Client, abc.ABC):
             provider-specific, and are not part of the OpenAI standard. They are handled
             by the provider-specific API.
 
-            extra_query: Additional "passthrough" query parameters for the request which
-            are provider-specific, and are not part of the OpenAI standard. They are
-            handled by the provider-specific API.
-
             kwargs: Additional "passthrough" JSON properties for the body of the
             request, which are provider-specific, and are not part of the OpenAI
             standard. They will be handled by the provider-specific API.
@@ -751,7 +740,6 @@ class _UniClient(_Client, abc.ABC):
             cache_backend=_default(cache_backend, self._cache_backend),
             # passthrough arguments
             extra_headers=_default(extra_headers, self._extra_headers),
-            extra_query=_default(extra_query, self._extra_query),
             **kwargs,
         )
         ret = self._apply_stateful_logic(
@@ -900,7 +888,6 @@ class Unify(_UniClient):
         cache_backend: str,
         # passthrough arguments
         extra_headers: Optional[Headers],
-        extra_query: Optional[Query],
         **kwargs,
     ) -> Union[Generator[str, None, None], str]:  # noqa: DAR101, DAR201, DAR401
         prompt = Prompt(
@@ -923,7 +910,6 @@ class Unify(_UniClient):
             parallel_tool_calls=parallel_tool_calls,
             reasoning_effort=reasoning_effort,
             extra_headers=extra_headers,
-            extra_query=extra_query,
         )
         if stream:
             return self._generate_stream(
@@ -1093,7 +1079,6 @@ class AsyncUnify(_UniClient):
         cache_backend: str,
         # passthrough arguments
         extra_headers: Optional[Headers],
-        extra_query: Optional[Query],
         service_tier: Optional[str] = None,
         **kwargs,
     ) -> Union[AsyncGenerator[str, None], str]:  # noqa: DAR101, DAR201, DAR401
@@ -1115,7 +1100,6 @@ class AsyncUnify(_UniClient):
             tool_choice=tool_choice,
             parallel_tool_calls=parallel_tool_calls,
             extra_headers=extra_headers,
-            extra_query=extra_query,
             reasoning_effort=reasoning_effort,
             service_tier=service_tier,
         )

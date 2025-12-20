@@ -1,12 +1,12 @@
 # global
 import copy
 from abc import ABC, abstractmethod
-from typing import Dict, Iterable, List, Mapping, Optional, Type, Union
+from typing import Dict, Iterable, List, Optional, Type, Union
 
 import requests
 
 # noinspection PyProtectedMember
-from openai._types import Body, Headers, Query
+from openai._types import Headers
 from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionStreamOptionsParam,
@@ -64,7 +64,6 @@ class _Client(ABC):
         cache_backend: str,
         # passthrough arguments
         extra_headers: Optional[Headers],
-        extra_query: Optional[Query],
         **kwargs,
     ) -> None:
 
@@ -96,8 +95,6 @@ class _Client(ABC):
         self._cache = None
         self._cache_backend = None
         self._extra_headers = None
-        self._extra_query = None
-        self._extra_body = None
 
         # set based on arguments
         self.set_system_message(system_message)
@@ -128,8 +125,6 @@ class _Client(ABC):
         self.set_cache_backend(cache_backend)
         # passthrough arguments
         self.set_extra_headers(extra_headers)
-        self.set_extra_query(extra_query)
-        self.set_extra_body(kwargs)
 
         # Store defaults
         self._defaults = {
@@ -415,26 +410,6 @@ class _Client(ABC):
             The default extra headers.
         """
         return self._extra_headers
-
-    @property
-    def extra_query(self) -> Optional[Query]:
-        """
-        Get the default extra query, if set.
-
-        Returns:
-            The default extra query.
-        """
-        return self._extra_query
-
-    @property
-    def extra_body(self) -> Optional[Mapping[str, str]]:
-        """
-        Get the default extra body, if set.
-
-        Returns:
-            The default extra body.
-        """
-        return self._extra_body
 
     # Setters #
     # --------#
@@ -867,32 +842,6 @@ class _Client(ABC):
         self._extra_headers = value
         return self
 
-    def set_extra_query(self, value: Query) -> Self:
-        """
-        Set the default extra query.
-
-        Args:
-            value: The default extra query.
-
-        Returns:
-            This client, useful for chaining inplace calls.
-        """
-        self._extra_query = value
-        return self
-
-    def set_extra_body(self, value: Body) -> Self:
-        """
-        Set the default extra body.
-
-        Args:
-            value: The default extra body.
-
-        Returns:
-            This client, useful for chaining inplace calls.
-        """
-        self._extra_body = value
-        return self
-
     # Reset Methods #
     # -------------#
 
@@ -1183,8 +1132,6 @@ class _Client(ABC):
                         cache=self._cache,
                         # passthrough arguments
                         extra_headers=self._extra_headers,
-                        extra_query=self._extra_query,
-                        **self._extra_body,
                     ),
                 },
             ),
@@ -1225,8 +1172,6 @@ class _Client(ABC):
                     cache=self._cache,
                     # passthrough arguments
                     extra_headers=self._extra_headers,
-                    extra_query=self._extra_query,
-                    extra_body=self._extra_body,
                 ),
             },
         )
@@ -1269,7 +1214,6 @@ class _Client(ABC):
         cache: Union[bool, str],
         # passthrough arguments
         extra_headers: Optional[Headers],
-        extra_query: Optional[Query],
         **kwargs,
     ):
         raise NotImplementedError
