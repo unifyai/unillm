@@ -53,7 +53,6 @@ from unify.universal_api.utils.provider_preprocessing import (
 )
 
 from unify.utils._caching import _get_cache, _write_to_cache, is_caching_enabled
-from unify.utils.caching.cache_benchmark import get_cache_stats
 from ..helpers import _default
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
@@ -1125,7 +1124,6 @@ class Unify(_UniClient):
                     backend=cache_backend,
                 )
                 in_cache = True if chat_completion is not None else False
-        benchmark = get_cache_stats()
         if chat_completion is None:
             try:
                 if endpoint in LOCAL_MODELS:
@@ -1153,16 +1151,10 @@ class Unify(_UniClient):
                         )(**kw)
                     else:
                         chat_completion = chat_method(**kw)
-                        benchmark.llm_calls += 1
                     if unify.CLIENT_LOGGING:
                         print(f"done (thread {threading.get_ident()})")
             except openai.APIStatusError as e:
                 raise Exception(e.message)
-        if cache in [True, "both", "read", "read-only"]:
-            if in_cache:
-                benchmark.hits += 1
-            else:
-                benchmark.misses += 1
         if (chat_completion is not None or read_closest) and cache in [
             True,
             "both",
@@ -1456,7 +1448,6 @@ class AsyncUnify(_UniClient):
                 chat_method = self._client.chat.completions.create
         chat_completion = None
         in_cache = False
-        benchmark = get_cache_stats()
         if cache in [True, "both", "read", "read-only"]:
             if self._traced:
 
@@ -1489,11 +1480,6 @@ class AsyncUnify(_UniClient):
                     backend=cache_backend,
                 )
                 in_cache = True if chat_completion is not None else False
-        if cache in [True, "both", "read", "read-only"]:
-            if in_cache:
-                benchmark.hits += 1
-            else:
-                benchmark.misses += 1
         if chat_completion is None:
             try:
                 if endpoint in LOCAL_MODELS:
@@ -1524,7 +1510,6 @@ class AsyncUnify(_UniClient):
                         chat_completion = await chat_method(
                             **kw,
                         )
-                        benchmark.llm_calls += 1
                     if unify.CLIENT_LOGGING:
                         print(
                             f"done (thread {threading.get_ident()})",
