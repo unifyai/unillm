@@ -1197,7 +1197,7 @@ class AsyncUnify(_UniClient):
                     response_body=chat_completion.model_dump(),
                     consume_credits=True,
                 ),
-                name="unify_client_log_query",
+                name="unillm_log_query",
             )
         if return_full_completion:
             return chat_completion
