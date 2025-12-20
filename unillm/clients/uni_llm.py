@@ -959,16 +959,11 @@ class Unify(_UniClient):
             read_closest = True
         else:
             read_closest = False
-        if self._direct_mode:
-            chat_method = litellm.completion
-            kw["model"] = get_model_alias(endpoint)
-            kw.pop("extra_body")
-        else:
-            if "response_format" in kw:
-                chat_method = self._client.beta.chat.completions.parse
-                del kw["stream"]
-            else:
-                chat_method = self._client.chat.completions.create
+
+        chat_method = litellm.completion
+        kw["model"] = get_model_alias(endpoint)
+        kw.pop("extra_body")
+
         chat_completion = None
         in_cache = False
         if cache in [True, "both", "read", "read-only"]:
@@ -998,7 +993,7 @@ class Unify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if self._direct_mode and not in_cache:
+        if not in_cache:
             response_format = kw.get("response_format")
             if response_format is not None:
                 try:
@@ -1213,23 +1208,16 @@ class AsyncUnify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
-        if self._direct_mode:
-            kw.pop("extra_body")
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
             read_closest = True
         else:
             read_closest = False
-        if self._direct_mode:
-            chat_method = litellm.acompletion
-            kw["model"] = get_model_alias(endpoint)
-        else:
-            if "response_format" in kw and kw["response_format"]:
-                chat_method = self._client.beta.chat.completions.parse
-                if "stream" in kw:
-                    del kw["stream"]  # .parse() does not accept the stream argument
-            else:
-                chat_method = self._client.chat.completions.create
+
+        chat_method = litellm.acompletion
+        kw["model"] = get_model_alias(endpoint)
+        kw.pop("extra_body")
+
         chat_completion = None
         in_cache = False
         if cache in [True, "both", "read", "read-only"]:
