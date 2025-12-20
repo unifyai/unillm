@@ -31,13 +31,8 @@ from openai.types.chat import (
 )
 from pydantic import BaseModel
 from typing_extensions import Self
-from unify import BASE_URL
 from unify.universal_api.clients.helpers import (
     _assert_is_valid_endpoint,
-)
-from unify.universal_api.utils.httpx_logging import (
-    make_async_httpx_client_for_unify_logging,
-    make_httpx_client_for_unify_logging,
 )
 from unify.universal_api.utils.provider_preprocessing import (
     apply_provider_preprocessing,
@@ -286,7 +281,6 @@ class _UniClient(_Client, abc.ABC):
             **self._base_constructor_args,
         )
         self.set_endpoint(endpoint)
-        self._client = self._get_client()
 
     # Settable Properties #
     # --------------------#
@@ -561,13 +555,6 @@ class _UniClient(_Client, abc.ABC):
             self._messages.clear()
 
         return response
-
-    # Abstract #
-    # ---------#
-
-    @abc.abstractmethod
-    def _get_client(self):
-        raise NotImplementedError
 
     # Generate #
     # ---------#
@@ -854,18 +841,6 @@ class Unify(_UniClient):
     """Class for interacting with the Unify chat completions endpoint in a synchronous
     manner."""
 
-    def _get_client(self):
-        try:
-            http_client = make_httpx_client_for_unify_logging(BASE_URL)
-            return openai.OpenAI(
-                base_url=f"{BASE_URL}",
-                api_key=self._api_key,
-                timeout=3600.0,  # one hour
-                http_client=http_client,
-            )
-        except openai.OpenAIError as e:
-            raise Exception(f"Failed to initialize Unify client: {str(e)}")
-
     def _generate_stream(
         self,
         endpoint: str,
@@ -1101,19 +1076,6 @@ class AsyncUnify(_UniClient):
     """Class for interacting with the Unify chat completions endpoint in a synchronous
     manner."""
 
-    def _get_client(self):
-        try:
-            # Async event hooks must use AsyncClient
-            http_client = make_async_httpx_client_for_unify_logging(BASE_URL)
-            return openai.AsyncOpenAI(
-                base_url=f"{BASE_URL}",
-                api_key=self._api_key,
-                timeout=3600.0,  # one hour
-                http_client=http_client,
-            )
-        except openai.APIStatusError as e:
-            raise Exception(f"Failed to initialize Unify client: {str(e)}")
-
     async def _generate_stream(
         self,
         endpoint: str,
@@ -1144,7 +1106,7 @@ class AsyncUnify(_UniClient):
         apply_provider_preprocessing(kw, self._provider)
         kw.pop("extra_body")
         try:
-            async_stream = await self._client.chat.completions.create(**kw)
+            async_stream = await litellm.acompletion(**kw)
             async for chunk in async_stream:  # type: ignore[union-attr]
                 if return_full_completion:
                     yield chunk
@@ -1345,9 +1307,3 @@ class AsyncUnify(_UniClient):
             instance.
         """
         return Unify(**self._constructor_args)
-
-    async def close(self):
-        """
-        Close the underlying client.
-        """
-        await self._client.close()
