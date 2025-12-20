@@ -79,7 +79,6 @@ class _UniClient(_Client, abc.ABC):
         parallel_tool_calls: Optional[bool] = None,
         reasoning_effort: Optional[str] = None,
         # platform arguments
-        use_custom_keys: bool = False,
         tags: Optional[List[str]] = None,
         drop_params: Optional[bool] = True,
         region: Optional[str] = None,
@@ -194,9 +193,6 @@ class _UniClient(_Client, abc.ABC):
             parallel_tool_calls: Whether to enable parallel function calling during tool
             use.
 
-            use_custom_keys:  Whether to use custom API keys or our unified API keys
-            with the backend provider.
-
             tags: Arbitrary number of tags to classify this API query as needed. Helpful
             for generally grouping queries across tasks and users, for logging purposes.
 
@@ -268,7 +264,6 @@ class _UniClient(_Client, abc.ABC):
             parallel_tool_calls=parallel_tool_calls,
             reasoning_effort=reasoning_effort,
             # platform arguments
-            use_custom_keys=use_custom_keys,
             tags=tags,
             drop_params=drop_params,
             region=region,
@@ -330,7 +325,6 @@ class _UniClient(_Client, abc.ABC):
         endpoint,
         stream,
         stream_options,
-        use_custom_keys,
         tags,
         drop_params,
         region,
@@ -350,7 +344,6 @@ class _UniClient(_Client, abc.ABC):
             stream_options=stream_options,
             extra_body={  # platform arguments
                 "signature": "python",
-                "use_custom_keys": use_custom_keys,
                 "tags": tags,
                 "drop_params": drop_params,
                 "region": region,
@@ -609,7 +602,6 @@ class _UniClient(_Client, abc.ABC):
         parallel_tool_calls: Optional[bool] = None,
         reasoning_effort: Optional[str] = None,
         # platform arguments
-        use_custom_keys: Optional[bool] = None,
         tags: Optional[List[str]] = None,
         drop_params: Optional[bool] = None,
         region: Optional[str] = None,
@@ -725,9 +717,6 @@ class _UniClient(_Client, abc.ABC):
             parallel_tool_calls: Whether to enable parallel function calling during tool
             use.
 
-            use_custom_keys:  Whether to use custom API keys or our unified API keys
-            with the backend provider. Defaults to False.
-
             tags: Arbitrary number of tags to classify this API query as needed. Helpful
             for generally grouping queries across tasks and users, for logging purposes.
 
@@ -838,7 +827,6 @@ class _UniClient(_Client, abc.ABC):
             ),
             reasoning_effort=_default(reasoning_effort, self._reasoning_effort),
             # platform arguments
-            use_custom_keys=_default(use_custom_keys, self._use_custom_keys),
             tags=_default(tags, self._tags),
             drop_params=_default(drop_params, self._drop_params),
             region=_default(region, self._region),
@@ -885,7 +873,6 @@ class Unify(_UniClient):
         # stream
         stream_options: Optional[ChatCompletionStreamOptionsParam],
         # platform arguments
-        use_custom_keys: bool,
         tags: Optional[List[str]],
         drop_params: Optional[bool],
         region: Optional[str],
@@ -899,7 +886,6 @@ class Unify(_UniClient):
             endpoint=endpoint,
             stream=True,
             stream_options=stream_options,
-            use_custom_keys=use_custom_keys,
             tags=tags,
             drop_params=drop_params,
             region=region,
@@ -926,7 +912,6 @@ class Unify(_UniClient):
         endpoint: str,
         prompt: Prompt,
         # platform arguments
-        use_custom_keys: bool,
         tags: Optional[List[str]],
         drop_params: Optional[bool],
         region: Optional[str],
@@ -942,7 +927,6 @@ class Unify(_UniClient):
             endpoint=endpoint,
             stream=False,
             stream_options=None,
-            use_custom_keys=use_custom_keys,
             tags=tags,
             drop_params=drop_params,
             region=region,
@@ -1034,7 +1018,6 @@ class Unify(_UniClient):
         parallel_tool_calls: Optional[bool],
         reasoning_effort: Optional[str],
         # platform arguments
-        use_custom_keys: bool,
         tags: Optional[List[str]],
         drop_params: Optional[bool],
         region: Optional[str],
@@ -1079,7 +1062,6 @@ class Unify(_UniClient):
                 # stream
                 stream_options=stream_options,
                 # platform arguments
-                use_custom_keys=use_custom_keys,
                 tags=tags,
                 drop_params=drop_params,
                 region=region,
@@ -1092,7 +1074,6 @@ class Unify(_UniClient):
             self._endpoint,
             prompt,
             # platform arguments
-            use_custom_keys=use_custom_keys,
             tags=tags,
             drop_params=drop_params,
             region=region,
@@ -1140,7 +1121,6 @@ class AsyncUnify(_UniClient):
         # stream
         stream_options: Optional[ChatCompletionStreamOptionsParam],
         # platform arguments
-        use_custom_keys: bool,
         tags: Optional[List[str]],
         drop_params: Optional[bool],
         region: Optional[str],
@@ -1154,7 +1134,6 @@ class AsyncUnify(_UniClient):
             endpoint=endpoint,
             stream=True,
             stream_options=stream_options,
-            use_custom_keys=use_custom_keys,
             tags=tags,
             drop_params=drop_params,
             region=region,
@@ -1179,7 +1158,6 @@ class AsyncUnify(_UniClient):
         endpoint: str,
         prompt: Prompt,
         # platform arguments
-        use_custom_keys: bool,
         tags: Optional[List[str]],
         drop_params: Optional[bool],
         region: Optional[str],
@@ -1195,7 +1173,6 @@ class AsyncUnify(_UniClient):
             endpoint=endpoint,
             stream=False,
             stream_options=None,
-            use_custom_keys=use_custom_keys,
             tags=tags,
             drop_params=drop_params,
             region=region,
@@ -1290,7 +1267,6 @@ class AsyncUnify(_UniClient):
         parallel_tool_calls: Optional[bool],
         reasoning_effort: Optional[str],
         # platform arguments
-        use_custom_keys: bool,
         tags: Optional[List[str]],
         drop_params: Optional[bool],
         region: Optional[str],
@@ -1336,7 +1312,6 @@ class AsyncUnify(_UniClient):
                 # stream
                 stream_options=stream_options,
                 # platform arguments
-                use_custom_keys=use_custom_keys,
                 tags=tags,
                 drop_params=drop_params,
                 region=region,
@@ -1349,7 +1324,6 @@ class AsyncUnify(_UniClient):
             self._endpoint,
             prompt,
             # platform arguments
-            use_custom_keys=use_custom_keys,
             tags=tags,
             drop_params=drop_params,
             region=region,

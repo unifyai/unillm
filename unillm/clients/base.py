@@ -56,7 +56,6 @@ class _Client(ABC):
         parallel_tool_calls: Optional[bool],
         reasoning_effort: Optional[str],
         # platform arguments
-        use_custom_keys: bool,
         tags: Optional[List[str]],
         drop_params: Optional[bool],
         region: Optional[str] = None,
@@ -97,7 +96,6 @@ class _Client(ABC):
         self._tool_choice = None
         self._parallel_tool_calls = None
         self._reasoning_effort = None
-        self._use_custom_keys = None
         self._tags = None
         self._drop_params = None
         self._region = None
@@ -134,7 +132,6 @@ class _Client(ABC):
         self.set_parallel_tool_calls(parallel_tool_calls)
         self.set_reasoning_effort(reasoning_effort)
         # platform arguments
-        self.set_use_custom_keys(use_custom_keys)
         self.set_tags(tags)
         self.set_drop_params(drop_params)
         self.set_region(region)
@@ -394,16 +391,6 @@ class _Client(ABC):
             The default reasoning.
         """
         return self._reasoning_effort
-
-    @property
-    def use_custom_keys(self) -> bool:
-        """
-        Get the default use custom keys bool, if set.
-
-        Returns:
-            The default use custom keys bool.
-        """
-        return self._use_custom_keys
 
     @property
     def tags(self) -> Optional[List[str]]:
@@ -842,19 +829,6 @@ class _Client(ABC):
         self._reasoning_effort = value
         return self
 
-    def set_use_custom_keys(self, value: bool) -> Self:
-        """
-        Set the default use custom keys bool.
-
-        Args:
-            value: The default use custom keys bool.
-
-        Returns:
-            This client, useful for chaining inplace calls.
-        """
-        self._use_custom_keys = value
-        return self
-
     def set_tags(self, value: List[str]) -> Self:
         """
         Set the default tags.
@@ -1291,7 +1265,6 @@ class _Client(ABC):
                         tool_choice=self._tool_choice,
                         parallel_tool_calls=self._parallel_tool_calls,
                         # platform arguments
-                        use_custom_keys=self._use_custom_keys,
                         tags=self._tags,
                         drop_params=self._drop_params,
                         region=self._region,
@@ -1339,7 +1312,6 @@ class _Client(ABC):
                     tool_choice=self._tool_choice,
                     parallel_tool_calls=self._parallel_tool_calls,
                     # platform arguments
-                    use_custom_keys=self._use_custom_keys,
                     tags=self._tags,
                     drop_params=self._drop_params,
                     region=self._region,
@@ -1392,7 +1364,6 @@ class _Client(ABC):
         parallel_tool_calls: Optional[bool],
         reasoning_effort: Optional[str],
         # platform arguments
-        use_custom_keys: bool,
         tags: Optional[List[str]],
         drop_params: Optional[bool],
         region: Optional[str],
