@@ -20,24 +20,11 @@ from typing_extensions import Self
 from unify import BASE_URL
 from unify.utils import http
 
-# noinspection PyProtectedMember
 from unify.utils.helpers import _create_request_header, _validate_api_key
-
-
-def set_client_direct_mode(value: bool) -> None:
-    """
-    Set the direct mode for the client.
-
-    Args:
-        value: The value to set the direct mode to.
-    """
-    _Client._set_default_direct_mode(value)
 
 
 class _Client(ABC):
     """Base Abstract class for interacting with the Unify chat completions endpoint."""
-
-    _DEFAULT_DIRECT_MODE = False
 
     def __init__(
         self,
@@ -79,7 +66,6 @@ class _Client(ABC):
         # python client arguments
         stateful: bool,
         return_full_completion: bool,
-        direct_mode: bool,
         cache: Union[bool, str],
         cache_backend: str,
         # passthrough arguments
@@ -119,7 +105,6 @@ class _Client(ABC):
         self._log_response_body = None
         self._stateful = None
         self._return_full_completion = None
-        self._direct_mode = None
         self._cache = None
         self._cache_backend = None
         self._extra_headers = None
@@ -158,7 +143,6 @@ class _Client(ABC):
         # python client arguments
         self.set_stateful(stateful)
         self.set_return_full_completion(return_full_completion)
-        self.set_direct_mode(direct_mode)
         self.set_cache(cache)
         self.set_cache_backend(cache_backend)
         # passthrough arguments
@@ -190,10 +174,6 @@ class _Client(ABC):
             "parallel_tool_calls": parallel_tool_calls,
             "reasoning_effort": reasoning_effort,
         }
-
-    @classmethod
-    def _set_default_direct_mode(cls, value: bool) -> None:
-        cls._DEFAULT_DIRECT_MODE = value
 
     # Properties #
     # -----------#
@@ -964,19 +944,6 @@ class _Client(ABC):
             This client, useful for chaining inplace calls.
         """
         self._return_full_completion = value
-        return self
-
-    def set_direct_mode(self, value: bool) -> Self:
-        """
-        Set the default direct mode bool.
-
-        Args:
-            value: The default direct mode bool.
-
-        Returns:
-            This client, useful for chaining inplace calls.
-        """
-        self._direct_mode = value
         return self
 
     def set_cache(self, value: bool) -> Self:

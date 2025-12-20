@@ -89,7 +89,6 @@ class _UniClient(_Client, abc.ABC):
         # python client arguments
         stateful: bool = False,
         return_full_completion: bool = False,
-        direct_mode: Optional[bool] = None,
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
         # passthrough arguments
@@ -279,7 +278,6 @@ class _UniClient(_Client, abc.ABC):
             # python client arguments
             stateful=stateful,
             return_full_completion=return_full_completion,
-            direct_mode=direct_mode or _Client._DEFAULT_DIRECT_MODE,
             cache=cache,
             cache_backend=cache_backend,
             # passthrough arguments
@@ -910,10 +908,9 @@ class Unify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
-        if self._direct_mode:
-            kw.pop("extra_body")
+        kw.pop("extra_body")
         try:
-            chat_completion = self._client.chat.completions.create(**kw)
+            chat_completion = litellm.completion(**kw)
             for chunk in chat_completion:
                 if return_full_completion:
                     content = chunk
@@ -1166,8 +1163,7 @@ class AsyncUnify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
-        if self._direct_mode:
-            kw.pop("extra_body")
+        kw.pop("extra_body")
         try:
             async_stream = await self._client.chat.completions.create(**kw)
             async for chunk in async_stream:  # type: ignore[union-attr]
@@ -1247,7 +1243,7 @@ class AsyncUnify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if self._direct_mode and not in_cache:
+        if not in_cache:
             response_format = kw.get("response_format")
             if response_format is not None:
                 try:
