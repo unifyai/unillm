@@ -17,7 +17,6 @@ from typing import (
 )
 
 import litellm
-import openai
 
 # local
 import unify
@@ -781,7 +780,7 @@ class Unify(_UniClient):
                     content = chunk.choices[0].delta.content  # type: ignore[union-attr]    # noqa: E501
                 if content is not None:
                     yield content
-        except openai.APIStatusError as e:
+        except litellm.exceptions.APIError as e:
             raise Exception(e.message)
 
     def _generate_non_stream(
@@ -824,7 +823,7 @@ class Unify(_UniClient):
         if chat_completion is None:
             try:
                 chat_completion = chat_method(**kw)
-            except openai.APIStatusError as e:
+            except litellm.exceptions.APIError as e:
                 raise Exception(e.message)
         if (chat_completion is not None or read_closest) and cache in [
             True,
@@ -968,7 +967,7 @@ class AsyncUnify(_UniClient):
                     yield chunk
                 else:
                     yield chunk.choices[0].delta.content or ""
-        except openai.APIStatusError as e:
+        except litellm.exceptions.APIError as e:
             raise Exception(e.message)
 
     async def _generate_non_stream(
@@ -1011,7 +1010,7 @@ class AsyncUnify(_UniClient):
         if chat_completion is None:
             try:
                 chat_completion = await chat_method(**kw)
-            except openai.APIStatusError as e:
+            except litellm.exceptions.APIError as e:
                 raise Exception(e.message)
         if (chat_completion is not None or read_closest) and cache in [
             True,
