@@ -294,20 +294,11 @@ class _UniClient(_Client, abc.ABC):
         stream_options,
     ):
         prompt_dict = prompt.components
-        if "extra_body" in prompt_dict:
-            extra_body = prompt_dict["extra_body"]
-            del prompt_dict["extra_body"]
-        else:
-            extra_body = {}
         kw = dict(
             model=endpoint,
             **prompt_dict,
             stream=stream,
             stream_options=stream_options,
-            extra_body={  # platform arguments
-                # passthrough json arguments
-                **extra_body,
-            },
         )
         return {k: v for k, v in kw.items() if v is not None}
 
@@ -761,7 +752,7 @@ class _UniClient(_Client, abc.ABC):
             # passthrough arguments
             extra_headers=_default(extra_headers, self._extra_headers),
             extra_query=_default(extra_query, self._extra_query),
-            **{**self._extra_body, **kwargs},
+            **kwargs,
         )
         ret = self._apply_stateful_logic(
             response=ret,
@@ -793,7 +784,6 @@ class Unify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
-        kw.pop("extra_body")
         try:
             chat_completion = litellm.completion(**kw)
             for chunk in chat_completion:
@@ -831,7 +821,6 @@ class Unify(_UniClient):
 
         chat_method = litellm.completion
         kw["model"] = get_model_alias(endpoint)
-        kw.pop("extra_body")
 
         chat_completion = None
         in_cache = False
@@ -935,7 +924,6 @@ class Unify(_UniClient):
             reasoning_effort=reasoning_effort,
             extra_headers=extra_headers,
             extra_query=extra_query,
-            extra_body=kwargs,
         )
         if stream:
             return self._generate_stream(
@@ -988,7 +976,6 @@ class AsyncUnify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
-        kw.pop("extra_body")
         try:
             async_stream = await litellm.acompletion(**kw)
             async for chunk in async_stream:  # type: ignore[union-attr]
@@ -1024,7 +1011,6 @@ class AsyncUnify(_UniClient):
 
         chat_method = litellm.acompletion
         kw["model"] = get_model_alias(endpoint)
-        kw.pop("extra_body")
 
         chat_completion = None
         in_cache = False
@@ -1130,7 +1116,6 @@ class AsyncUnify(_UniClient):
             parallel_tool_calls=parallel_tool_calls,
             extra_headers=extra_headers,
             extra_query=extra_query,
-            extra_body=kwargs,
             reasoning_effort=reasoning_effort,
             service_tier=service_tier,
         )
