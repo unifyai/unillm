@@ -41,8 +41,6 @@ from typing_extensions import Self
 from unify import BASE_URL, LOCAL_MODELS
 from unify.universal_api.clients.helpers import (
     _assert_is_valid_endpoint,
-    _assert_is_valid_model,
-    _assert_is_valid_provider,
 )
 from unify.universal_api.utils.httpx_logging import (
     make_async_httpx_client_for_unify_logging,
@@ -336,50 +334,7 @@ class _UniClient(_Client, abc.ABC):
         """
         _assert_is_valid_endpoint(value, api_key=self._api_key)
         self._endpoint = value
-        if value == "user-input":
-            return self
-        lhs = value.split("->")[0]
-        if "@" in lhs:
-            self._model, self._provider = lhs.split("@")
-        else:
-            self._model = lhs
-            self._provider = value.split("->")[1]
-        return self
-
-    def set_model(self, value: str) -> Self:
-        """
-        Set the model name.  # noqa: DAR101.
-
-        Args:
-            value: The model name.
-
-        Returns:
-            This client, useful for chaining inplace calls.
-        """
-        custom_or_local = self._provider == "local" or "custom" in self._provider
-        _assert_is_valid_model(
-            value,
-            custom_or_local=custom_or_local,
-            api_key=self._api_key,
-        )
-        if self._provider:
-            self._endpoint = "@".join([value, self._provider])
-        return self
-
-    def set_provider(self, value: str) -> Self:
-        """
-        Set the provider name.  # noqa: DAR101.
-
-        Args:
-            value: The provider name.
-
-        Returns:
-            This client, useful for chaining inplace calls.
-        """
-        _assert_is_valid_provider(value, api_key=self._api_key)
-        self._provider = value
-        if self._model:
-            self._endpoint = "@".join([self._model, value])
+        self._model, self._provider = value.split("@")
         return self
 
     @staticmethod
