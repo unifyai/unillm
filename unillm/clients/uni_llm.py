@@ -38,7 +38,7 @@ from openai.types.chat import (
 from openai.types.chat.chat_completion import Choice
 from pydantic import BaseModel
 from typing_extensions import Self
-from unify import BASE_URL, LOCAL_MODELS
+from unify import BASE_URL
 from unify.universal_api.clients.helpers import (
     _assert_is_valid_endpoint,
 )
@@ -924,28 +924,22 @@ class Unify(_UniClient):
         if self._direct_mode:
             kw.pop("extra_body")
         try:
-            if endpoint in LOCAL_MODELS:
-                kw.pop("extra_body")
-                kw.pop("model")
-                kw.pop("max_completion_tokens")
-                chat_completion = LOCAL_MODELS[endpoint](**kw)
+            if unify.CLIENT_LOGGING:
+                print(f"calling {kw['model']}... (thread {threading.get_ident()})")
+            if self.traced:
+                chat_completion = unify.traced(
+                    self._client.chat.completions.create,
+                    span_type="llm-stream",
+                    name=(
+                        endpoint
+                        if tags is None
+                        else endpoint + "[" + ",".join([str(t) for t in tags]) + "]"
+                    ),
+                )(**kw)
             else:
-                if unify.CLIENT_LOGGING:
-                    print(f"calling {kw['model']}... (thread {threading.get_ident()})")
-                if self.traced:
-                    chat_completion = unify.traced(
-                        self._client.chat.completions.create,
-                        span_type="llm-stream",
-                        name=(
-                            endpoint
-                            if tags is None
-                            else endpoint + "[" + ",".join([str(t) for t in tags]) + "]"
-                        ),
-                    )(**kw)
-                else:
-                    chat_completion = self._client.chat.completions.create(**kw)
-                if unify.CLIENT_LOGGING:
-                    print(f"done (thread {threading.get_ident()})")
+                chat_completion = self._client.chat.completions.create(**kw)
+            if unify.CLIENT_LOGGING:
+                print(f"done (thread {threading.get_ident()})")
             for chunk in chat_completion:
                 if return_full_completion:
                     content = chunk
@@ -1039,33 +1033,24 @@ class Unify(_UniClient):
                 in_cache = True if chat_completion is not None else False
         if chat_completion is None:
             try:
-                if endpoint in LOCAL_MODELS:
-                    kw.pop("extra_body")
-                    kw.pop("model")
-                    kw.pop("max_completion_tokens")
-                    chat_completion = LOCAL_MODELS[endpoint](**kw)
+                if unify.CLIENT_LOGGING:
+                    print(
+                        f"calling {kw['model']}... (thread {threading.get_ident()})",
+                    )
+                if self._traced:
+                    chat_completion = unify.traced(
+                        chat_method,
+                        span_type="llm",
+                        name=(
+                            endpoint
+                            if tags is None
+                            else endpoint + "[" + ",".join([str(t) for t in tags]) + "]"
+                        ),
+                    )(**kw)
                 else:
-                    if unify.CLIENT_LOGGING:
-                        print(
-                            f"calling {kw['model']}... (thread {threading.get_ident()})",
-                        )
-                    if self._traced:
-                        chat_completion = unify.traced(
-                            chat_method,
-                            span_type="llm",
-                            name=(
-                                endpoint
-                                if tags is None
-                                else endpoint
-                                + "["
-                                + ",".join([str(t) for t in tags])
-                                + "]"
-                            ),
-                        )(**kw)
-                    else:
-                        chat_completion = chat_method(**kw)
-                    if unify.CLIENT_LOGGING:
-                        print(f"done (thread {threading.get_ident()})")
+                    chat_completion = chat_method(**kw)
+                if unify.CLIENT_LOGGING:
+                    print(f"done (thread {threading.get_ident()})")
             except openai.APIStatusError as e:
                 raise Exception(e.message)
         if (chat_completion is not None or read_closest) and cache in [
@@ -1281,29 +1266,23 @@ class AsyncUnify(_UniClient):
         if self._direct_mode:
             kw.pop("extra_body")
         try:
-            if endpoint in LOCAL_MODELS:
-                kw.pop("extra_body")
-                kw.pop("model")
-                kw.pop("max_completion_tokens")
-                async_stream = await LOCAL_MODELS[endpoint](**kw)
+            if unify.CLIENT_LOGGING:
+                print(f"calling {kw['model']}... (thread {threading.get_ident()})")
+            if self._traced:
+                # ToDo: test if this works, it probably won't
+                async_stream = await unify.traced(
+                    self._client.chat.completions.create,
+                    span_type="llm-stream",
+                    name=(
+                        endpoint
+                        if tags is None
+                        else endpoint + "[" + ",".join([str(t) for t in tags]) + "]"
+                    ),
+                )(**kw)
             else:
-                if unify.CLIENT_LOGGING:
-                    print(f"calling {kw['model']}... (thread {threading.get_ident()})")
-                if self._traced:
-                    # ToDo: test if this works, it probably won't
-                    async_stream = await unify.traced(
-                        self._client.chat.completions.create,
-                        span_type="llm-stream",
-                        name=(
-                            endpoint
-                            if tags is None
-                            else endpoint + "[" + ",".join([str(t) for t in tags]) + "]"
-                        ),
-                    )(**kw)
-                else:
-                    async_stream = await self._client.chat.completions.create(**kw)
-                if unify.CLIENT_LOGGING:
-                    print(f"done (thread {threading.get_ident()})")
+                async_stream = await self._client.chat.completions.create(**kw)
+            if unify.CLIENT_LOGGING:
+                print(f"done (thread {threading.get_ident()})")
             async for chunk in async_stream:  # type: ignore[union-attr]
                 if return_full_completion:
                     yield chunk
@@ -1395,38 +1374,29 @@ class AsyncUnify(_UniClient):
                 in_cache = True if chat_completion is not None else False
         if chat_completion is None:
             try:
-                if endpoint in LOCAL_MODELS:
-                    kw.pop("extra_body")
-                    kw.pop("model")
-                    kw.pop("max_completion_tokens")
-                    chat_completion = await LOCAL_MODELS[endpoint](**kw)
+                if unify.CLIENT_LOGGING:
+                    print(
+                        f"calling {kw['model']}... (thread {threading.get_ident()})",
+                    )
+                if self.traced:
+                    chat_completion = await unify.traced(
+                        chat_method,
+                        span_type="llm",
+                        name=(
+                            endpoint
+                            if tags is None
+                            else endpoint + "[" + ",".join([str(t) for t in tags]) + "]"
+                        ),
+                        fn_type="async",
+                    )(**kw)
                 else:
-                    if unify.CLIENT_LOGGING:
-                        print(
-                            f"calling {kw['model']}... (thread {threading.get_ident()})",
-                        )
-                    if self.traced:
-                        chat_completion = await unify.traced(
-                            chat_method,
-                            span_type="llm",
-                            name=(
-                                endpoint
-                                if tags is None
-                                else endpoint
-                                + "["
-                                + ",".join([str(t) for t in tags])
-                                + "]"
-                            ),
-                            fn_type="async",
-                        )(**kw)
-                    else:
-                        chat_completion = await chat_method(
-                            **kw,
-                        )
-                    if unify.CLIENT_LOGGING:
-                        print(
-                            f"done (thread {threading.get_ident()})",
-                        )
+                    chat_completion = await chat_method(
+                        **kw,
+                    )
+                if unify.CLIENT_LOGGING:
+                    print(
+                        f"done (thread {threading.get_ident()})",
+                    )
             except openai.APIStatusError as e:
                 raise Exception(e.message)
         if (chat_completion is not None or read_closest) and cache in [
