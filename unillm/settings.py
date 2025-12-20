@@ -9,8 +9,16 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Unify
+    UNIFY_API_KEY: SecretStr = SecretStr("")
+
+    # OpenAI
     OPENAI_API_KEY: SecretStr = SecretStr("")
+
+    # Anthropic
     ANTHROPIC_API_KEY: SecretStr = SecretStr("")
+
+    # Google Vertex AI
     GOOGLE_APPLICATION_CREDENTIALS: SecretStr = SecretStr("")
     VERTEXAI_LOCATION: SecretStr = SecretStr("")
     VERTEXAI_PROJECT: SecretStr = SecretStr("")
