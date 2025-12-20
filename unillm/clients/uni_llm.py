@@ -3,9 +3,6 @@ import abc
 import asyncio
 import inspect
 
-# noinspection PyProtectedMember
-import time
-import uuid
 from typing import (
     Any,
     AsyncGenerator,
@@ -25,16 +22,13 @@ import openai
 # local
 import unify
 from openai._types import Headers, Query
-from openai.types import CompletionUsage
 from openai.types.chat import (
     ChatCompletion,
-    ChatCompletionMessage,
     ChatCompletionMessageParam,
     ChatCompletionStreamOptionsParam,
     ChatCompletionToolChoiceOptionParam,
     ChatCompletionToolParam,
 )
-from openai.types.chat.chat_completion import Choice
 from pydantic import BaseModel
 from typing_extensions import Self
 from unify import BASE_URL
@@ -973,8 +967,6 @@ class Unify(_UniClient):
             if "response_format" in kw:
                 chat_method = self._client.beta.chat.completions.parse
                 del kw["stream"]
-            elif endpoint == "user-input":
-                chat_method = lambda *a, **kw: input("write your agent response:\n")
             else:
                 chat_method = self._client.chat.completions.create
         chat_completion = None
@@ -1020,31 +1012,6 @@ class Unify(_UniClient):
                 consume_credits=True,
             )
         if return_full_completion:
-            if endpoint == "user-input":
-                input_msg = sum(len(msg) for msg in prompt.components["messages"])
-                return ChatCompletion(
-                    id=str(uuid.uuid4()),
-                    object="chat.completion",
-                    created=int(time.time()),
-                    model=endpoint,
-                    choices=[
-                        Choice(
-                            index=0,
-                            message=ChatCompletionMessage(
-                                role="assistant",
-                                content=chat_completion,
-                            ),
-                            finish_reason="stop",
-                        ),
-                    ],
-                    usage=CompletionUsage(
-                        prompt_tokens=input_msg,
-                        completion_tokens=len(chat_completion),
-                        total_tokens=input_msg + len(chat_completion),
-                    ),
-                )
-            return chat_completion
-        elif endpoint == "user-input":
             return chat_completion
         content = chat_completion.choices[0].message.content
         if content:
