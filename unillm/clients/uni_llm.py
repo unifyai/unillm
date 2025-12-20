@@ -64,10 +64,8 @@ litellm.drop_params = True
 class _UniClient(_Client, abc.ABC):
     def __init__(
         self,
-        endpoint: Optional[str] = None,
+        endpoint: str,
         *,
-        model: Optional[str] = None,
-        provider: Optional[str] = None,
         system_message: Optional[str] = None,
         messages: Optional[List[ChatCompletionMessageParam]] = None,
         frequency_penalty: Optional[float] = None,
@@ -115,10 +113,6 @@ class _UniClient(_Client, abc.ABC):
             endpoint: Endpoint name in OpenAI API format:
             <model_name>@<provider_name>
             Defaults to None.
-
-            model: Name of the model. Should only be set if endpoint is not set.
-
-            provider: Name of the provider. Should only be set if endpoint is not set.
 
             system_message: An optional string containing the system message. This
             always appears at the beginning of the list of messages.
@@ -309,25 +303,9 @@ class _UniClient(_Client, abc.ABC):
         super().__init__(**self._base_constructor_args)
         self._constructor_args = dict(
             endpoint=endpoint,
-            model=model,
-            provider=provider,
             **self._base_constructor_args,
         )
-        if endpoint and (model or provider):
-            raise Exception(
-                "if the model or provider are passed, then the endpoint must not be"
-                "passed.",
-            )
-        self._endpoint = None
-        self._provider = None
-        self._model = None
-        if endpoint:
-            self.set_endpoint(endpoint)
-        if provider:
-            self.set_provider(provider)
-        if model:
-            self.set_model(model)
-
+        self.set_endpoint(endpoint)
         self._client = self._get_client()
 
     # Settable Properties #
@@ -342,26 +320,6 @@ class _UniClient(_Client, abc.ABC):
             The endpoint name.
         """
         return self._endpoint
-
-    @property
-    def model(self) -> str:
-        """
-        Get the model name.
-
-        Returns:
-            The model name.
-        """
-        return self._model
-
-    @property
-    def provider(self) -> str:
-        """
-        Get the provider name.
-
-        Returns:
-            The provider name.
-        """
-        return self._provider
 
     # Setters #
     # --------#
