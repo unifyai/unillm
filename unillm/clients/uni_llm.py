@@ -289,7 +289,7 @@ class _UniClient(_Client, abc.ABC):
     ):
         prompt_dict = prompt.components
         kw = dict(
-            model=endpoint,
+            model=get_model_alias(endpoint),
             **prompt_dict,
             stream=stream,
             stream_options=stream_options,
@@ -808,7 +808,6 @@ class Unify(_UniClient):
             read_closest = False
 
         chat_method = litellm.completion
-        kw["model"] = get_model_alias(endpoint)
 
         chat_completion = None
         in_cache = False
@@ -996,7 +995,6 @@ class AsyncUnify(_UniClient):
             read_closest = False
 
         chat_method = litellm.acompletion
-        kw["model"] = get_model_alias(endpoint)
 
         chat_completion = None
         in_cache = False
