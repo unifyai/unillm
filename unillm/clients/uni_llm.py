@@ -30,9 +30,6 @@ from openai.types.chat import (
 )
 from pydantic import BaseModel
 from typing_extensions import Self
-from unify.universal_api.clients.helpers import (
-    _assert_is_valid_endpoint,
-)
 from unify.universal_api.utils.provider_preprocessing import (
     apply_provider_preprocessing,
 )
@@ -274,7 +271,7 @@ class _UniClient(_Client, abc.ABC):
         Returns:
             This client, useful for chaining inplace calls.
         """
-        _assert_is_valid_endpoint(value, api_key=self._api_key)
+        self._model_alias = get_model_alias(value)
         self._endpoint = value
         self._model, self._provider = value.split("@")
         return self

@@ -14,11 +14,14 @@ def register_model_alias_map(
 
 def get_model_alias(endpoint: str) -> str:
     """
-    Get the alias for a model. If the model is not found, return the original model.
+    Get the alias for a model. If the model is not found, throws an exception.
 
     Args:
         endpoint: The endpoint of the model.
     Returns:
         LiteLLM model name for the model.
     """
-    return _MODEL_ALIAS_MAP.get(endpoint, endpoint)
+    alias = _MODEL_ALIAS_MAP.get(endpoint)
+    if alias is None:
+        raise ValueError(f"Model {endpoint} not found")
+    return alias
