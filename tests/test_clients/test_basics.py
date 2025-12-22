@@ -3,7 +3,7 @@ from unillm.clients.uni_llm import Unify, AsyncUnify
 
 models = [
     "gpt-4o-mini@openai",
-    "claude-3.5-haiku@anthropic",
+    "claude-4.5-haiku@anthropic",
 ]
 
 
