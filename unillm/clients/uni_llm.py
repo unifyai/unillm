@@ -494,7 +494,7 @@ class _UniClient(_Client, abc.ABC):
                     if return_full_completion:
                         self._messages.insert(
                             placeholder_idx,
-                            res.choices[0].message.model_dump(),
+                            res.choices[0].message.model_dump(warnings=False),
                         )
                     else:
                         self._messages.insert(
@@ -510,7 +510,7 @@ class _UniClient(_Client, abc.ABC):
         # ---------- non-streaming path ----------
         if stateful:
             if return_full_completion:
-                assistant_dict = response.choices[0].message.model_dump()
+                assistant_dict = response.choices[0].message.model_dump(warnings=False)
             else:
                 assistant_dict = {"role": "assistant", "content": str(response)}
             self._append_to_history(assistant_dict)
@@ -823,8 +823,6 @@ class Unify(_UniClient):
         else:
             read_closest = False
 
-        chat_method = litellm.completion
-
         chat_completion = None
         in_cache = False
         if cache in [True, "both", "read", "read-only"]:
@@ -839,7 +837,7 @@ class Unify(_UniClient):
             in_cache = True if chat_completion is not None else False
         if chat_completion is None:
             try:
-                chat_completion = chat_method(**kw)
+                chat_completion = litellm.completion(**kw)
             except litellm.exceptions.APIError as e:
                 raise Exception(e.message)
         if (chat_completion is not None or read_closest) and cache in [
@@ -864,7 +862,7 @@ class Unify(_UniClient):
             unify.log_query(
                 endpoint=f"{endpoint}",
                 query_body=kw,
-                response_body=chat_completion.model_dump(),
+                response_body=chat_completion.model_dump(warnings=False),
                 consume_credits=True,
             )
         if return_full_completion:
@@ -1053,7 +1051,7 @@ class AsyncUnify(_UniClient):
                     unify.log_query,
                     endpoint=f"{endpoint}",
                     query_body=kw,
-                    response_body=chat_completion.model_dump(),
+                    response_body=chat_completion.model_dump(warnings=False),
                     consume_credits=True,
                 ),
                 name="unillm_log_query",
