@@ -82,8 +82,7 @@ def apply_provider_preprocessing(
         return kw
 
     # Only Anthropic preprocessing for now
-    first_provider = (provider or "").split("->")[0].strip()
-    if first_provider != "anthropic":
+    if provider != "anthropic":
         return kw
 
     messages = copy.deepcopy(messages)
