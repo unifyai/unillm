@@ -738,45 +738,6 @@ class _Client(ABC):
         self._reasoning_effort = value
         return self
 
-    def set_tags(self, value: List[str]) -> Self:
-        """
-        Set the default tags.
-
-        Args:
-            value: The default tags.
-
-        Returns:
-            This client, useful for chaining inplace calls.
-        """
-        self._tags = value
-        return self
-
-    def set_drop_params(self, value: bool) -> Self:
-        """
-        Set the default drop params bool.
-
-        Args:
-            value: The default drop params bool.
-
-        Returns:
-            This client, useful for chaining inplace calls.
-        """
-        self._drop_params = value
-        return self
-
-    def set_region(self, value: str) -> Self:
-        """
-        Set the default region.
-
-        Args:
-            value: The default region.
-
-        Returns:
-            This client, useful for chaining inplace calls.
-        """
-        self._region = value
-        return self
-
     def set_stateful(self, value: bool) -> Self:
         """
         Set the default stateful bool.
@@ -1122,9 +1083,6 @@ class _Client(ABC):
                         tool_choice=self._tool_choice,
                         parallel_tool_calls=self._parallel_tool_calls,
                         # platform arguments
-                        tags=self._tags,
-                        drop_params=self._drop_params,
-                        region=self._region,
                         api_key=self._api_key,
                         # python client arguments
                         stateful=self._stateful,
