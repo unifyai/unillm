@@ -22,6 +22,36 @@ def _move_system_messages_to_front(
     return system + non_system
 
 
+def _needs_thinking_workaround(
+    messages: List[Dict[str, Any]],
+    reasoning_effort: Optional[str],
+) -> bool:
+    """
+    Check if we need to inject a user message workaround for Anthropic thinking mode.
+
+    Anthropic requires thinking_blocks in assistant messages when thinking mode is enabled.
+    Since thinking_blocks are server-generated and cannot be faked, we inject a simple
+    user message when:
+    1. Thinking mode is enabled (via reasoning_effort)
+    2. None of the assistant messages have thinking_blocks
+    3. The final message is a tool result
+    """
+    # Check if thinking mode is enabled via reasoning_effort
+    if not reasoning_effort:
+        return False
+
+    # Check if final message is a tool result
+    if messages[-1].get("role") != "tool":
+        return False
+
+    # Check if any assistant message has thinking_blocks
+    for msg in messages:
+        if msg.get("role") == "assistant" and msg.get("thinking_blocks"):
+            return False
+
+    return True
+
+
 def _combine_adjacent_user_messages(
     messages: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], bool]:
@@ -99,6 +129,12 @@ def apply_provider_preprocessing(
                 "content": CONCURRENT_USER_MESSAGES_EXPLANATION,
             },
         )
+
+    # Workaround for Anthropic thinking mode: when thinking is enabled but no
+    # assistant messages have thinking_blocks (they're server-generated), and
+    # the final message is a tool result, inject a user message to avoid API errors.
+    if _needs_thinking_workaround(messages, kw.get("reasoning_effort", None)):
+        messages.append({"role": "user", "content": "\n"})
 
     kw["messages"] = messages
     return kw
