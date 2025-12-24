@@ -986,8 +986,6 @@ class AsyncUnify(_UniClient):
         else:
             read_closest = False
 
-        chat_method = litellm.acompletion
-
         chat_completion = None
         in_cache = False
         if cache in [True, "both", "read", "read-only"]:
@@ -1002,7 +1000,7 @@ class AsyncUnify(_UniClient):
             in_cache = True if chat_completion is not None else False
         if chat_completion is None:
             try:
-                chat_completion = await chat_method(**kw)
+                chat_completion = await litellm.acompletion(**kw)
             except litellm.exceptions.APIError as e:
                 raise Exception(e.message)
         if (chat_completion is not None or read_closest) and cache in [
