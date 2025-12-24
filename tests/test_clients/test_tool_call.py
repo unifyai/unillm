@@ -98,13 +98,12 @@ async def test_tool_call_async(model):
 
 @pytest.mark.asyncio
 async def test_tool_call_async_thinking_blocks(model):
-    call_id = "fast_tool_420"
+    call_id = "fast_tool_123"
     history = [
         {
             "role": "user",
             "content": (
-                "First call the async tool `fast_tool` (which just returns a token), "
-                "then use the `add` tool with 2 and 3 and reply with the result only."
+                "Call the tool `fast_tool` (which just returns a token) and reply with the result only"
             ),
         },
         {
@@ -127,4 +126,5 @@ async def test_tool_call_async_thinking_blocks(model):
     ]
 
     client = new_llm_client(model, stateful=True, is_async=True)
-    response = await client.generate(messages=history, return_full_completion=True)
+    response = await client.generate(messages=history)
+    assert "fast" in response
