@@ -30,9 +30,7 @@ from openai.types.chat import (
 )
 from pydantic import BaseModel
 from typing_extensions import Self
-from unify.universal_api.utils.provider_preprocessing import (
-    apply_provider_preprocessing,
-)
+from .provider_preprocessing import apply_provider_preprocessing
 
 from unify.utils._caching import _get_cache, _write_to_cache, is_caching_enabled
 from ..helpers import _default
