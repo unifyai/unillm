@@ -8,6 +8,7 @@ import asyncio
 from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 
 litellm.drop_params = True
+litellm.modify_params = True
 
 
 # Optimized for high throughput
