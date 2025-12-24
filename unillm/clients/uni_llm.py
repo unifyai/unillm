@@ -17,7 +17,6 @@ from typing import (
 )
 
 import litellm
-import aiohttp
 
 # local
 import unify
@@ -40,27 +39,6 @@ from ..helpers import _default
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
 from ..types import Prompt
-
-litellm.drop_params = True
-from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
-
-
-# Optimized for high throughput
-async def make_session():
-    return aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=300),
-        connector=aiohttp.TCPConnector(
-            limit=1000,  # High connection limit
-            limit_per_host=200,  # Per host limit
-            ttl_dns_cache=600,  # DNS cache
-            keepalive_timeout=60,  # Keep connections alive
-            enable_cleanup_closed=True,
-        ),
-    )
-
-
-session = asyncio.run(make_session())  # TODO: temporary
-litellm.base_llm_aiohttp_handler = BaseLLMAIOHTTPHandler(client_session=session)
 
 
 class _UniClient(_Client, abc.ABC):
