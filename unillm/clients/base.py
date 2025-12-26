@@ -462,6 +462,8 @@ class _Client(ABC):
         Returns:
             This client, useful for chaining inplace calls.
         """
+        if value is None:
+            value = []
         self._messages = value
         if isinstance(value, list) and value and value[0]["role"] == "system":
             self.set_system_message(value[0]["content"])
