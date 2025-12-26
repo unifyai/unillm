@@ -37,6 +37,7 @@ from ..helpers import _default
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
 from ..types import Prompt
+from .shared_session import SHARED_SESSION
 
 
 class _UniClient(_Client, abc.ABC):
@@ -765,7 +766,7 @@ class Unify(_UniClient):
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
         try:
-            chat_completion = litellm.completion(**kw)
+            chat_completion = litellm.completion(shared_session=SHARED_SESSION, **kw)
             for chunk in chat_completion:
                 if return_full_completion:
                     content = chunk
@@ -813,7 +814,10 @@ class Unify(_UniClient):
             in_cache = True if chat_completion is not None else False
         if chat_completion is None:
             try:
-                chat_completion = litellm.completion(**kw)
+                chat_completion = litellm.completion(
+                    shared_session=SHARED_SESSION,
+                    **kw,
+                )
             except litellm.exceptions.APIError as e:
                 raise Exception(e.message)
         if (chat_completion is not None or read_closest) and cache in [
@@ -952,7 +956,10 @@ class AsyncUnify(_UniClient):
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
         try:
-            async_stream = await litellm.acompletion(**kw)
+            async_stream = await litellm.acompletion(
+                shared_session=SHARED_SESSION,
+                **kw,
+            )
             async for chunk in async_stream:  # type: ignore[union-attr]
                 if return_full_completion:
                     yield chunk
@@ -998,7 +1005,10 @@ class AsyncUnify(_UniClient):
             in_cache = True if chat_completion is not None else False
         if chat_completion is None:
             try:
-                chat_completion = await litellm.acompletion(**kw)
+                chat_completion = await litellm.acompletion(
+                    shared_session=SHARED_SESSION,
+                    **kw,
+                )
             except litellm.exceptions.APIError as e:
                 raise Exception(e.message)
         if (chat_completion is not None or read_closest) and cache in [
