@@ -33,6 +33,7 @@ from typing_extensions import Self
 from .provider_preprocessing import apply_provider_preprocessing
 
 from unify.utils._caching import _get_cache, _write_to_cache, is_caching_enabled
+from ..cache_events import _emit_cache_event
 from ..helpers import _default
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
@@ -820,6 +821,14 @@ class Unify(_UniClient):
                 )
             except litellm.exceptions.APIError as e:
                 raise Exception(e.message)
+        # Emit cache event for external tracking
+        _emit_cache_event(
+            {
+                "cache_status": "hit" if in_cache else "miss",
+                "endpoint": endpoint,
+                "request_kw": kw,
+            }
+        )
         if (chat_completion is not None or read_closest) and cache in [
             True,
             "both",
@@ -1011,6 +1020,14 @@ class AsyncUnify(_UniClient):
                 )
             except litellm.exceptions.APIError as e:
                 raise Exception(e.message)
+        # Emit cache event for external tracking
+        _emit_cache_event(
+            {
+                "cache_status": "hit" if in_cache else "miss",
+                "endpoint": endpoint,
+                "request_kw": kw,
+            }
+        )
         if (chat_completion is not None or read_closest) and cache in [
             True,
             "both",
