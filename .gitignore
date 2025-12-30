@@ -10,3 +10,4 @@ __pycache__/
 .cache_write.ndjson
 
 .vscode/
+unillm.egg-info/
