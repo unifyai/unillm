@@ -37,6 +37,7 @@ from ..cache_events import _emit_cache_event
 from ..helpers import _default
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
+from ..io_logging import write_request_pending, append_response_and_finalize
 from ..types import Prompt
 from .shared_session import SHARED_SESSION
 
@@ -795,6 +796,10 @@ class Unify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
+
+        # Write request to log file (before LLM call) so we don't lose it if call hangs
+        pending_path = write_request_pending(kw, label=endpoint)
+
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
             read_closest = True
@@ -821,14 +826,28 @@ class Unify(_UniClient):
                 )
             except litellm.exceptions.APIError as e:
                 raise Exception(e.message)
-        # Emit cache event for external tracking
+
+        # Determine cache status and emit event
+        cache_status = "hit" if in_cache else "miss"
         _emit_cache_event(
             {
-                "cache_status": "hit" if in_cache else "miss",
+                "cache_status": cache_status,
                 "endpoint": endpoint,
                 "request_kw": kw,
             }
         )
+
+        # Finalize log file with response and cache status
+        try:
+            resp_body = (
+                chat_completion.model_dump(warnings=False)
+                if hasattr(chat_completion, "model_dump")
+                else chat_completion
+            )
+            append_response_and_finalize(pending_path, resp_body, cache_status, label=endpoint)
+        except Exception:
+            pass
+
         if (chat_completion is not None or read_closest) and cache in [
             True,
             "both",
@@ -994,6 +1013,10 @@ class AsyncUnify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
+
+        # Write request to log file (before LLM call) so we don't lose it if call hangs
+        pending_path = write_request_pending(kw, label=endpoint)
+
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
             read_closest = True
@@ -1020,14 +1043,28 @@ class AsyncUnify(_UniClient):
                 )
             except litellm.exceptions.APIError as e:
                 raise Exception(e.message)
-        # Emit cache event for external tracking
+
+        # Determine cache status and emit event
+        cache_status = "hit" if in_cache else "miss"
         _emit_cache_event(
             {
-                "cache_status": "hit" if in_cache else "miss",
+                "cache_status": cache_status,
                 "endpoint": endpoint,
                 "request_kw": kw,
             }
         )
+
+        # Finalize log file with response and cache status
+        try:
+            resp_body = (
+                chat_completion.model_dump(warnings=False)
+                if hasattr(chat_completion, "model_dump")
+                else chat_completion
+            )
+            append_response_and_finalize(pending_path, resp_body, cache_status, label=endpoint)
+        except Exception:
+            pass
+
         if (chat_completion is not None or read_closest) and cache in [
             True,
             "both",
