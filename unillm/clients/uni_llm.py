@@ -37,7 +37,7 @@ from ..cache_events import _emit_cache_event
 from ..helpers import _default
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
-from ..log import write_request_pending, append_response_and_finalize
+from ..logger import write_request_pending, append_response_and_finalize
 from ..types import Prompt
 from .shared_session import SHARED_SESSION
 
