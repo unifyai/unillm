@@ -52,8 +52,15 @@ class Settings(BaseSettings):
     # - UNILLM_OTEL=false (default): OTel tracing disabled
     # - UNILLM_OTEL=true: OTel tracing enabled, uses parent TracerProvider if available
     # - UNILLM_OTEL_ENDPOINT: OTLP endpoint for trace export (optional)
+    # - UNILLM_OTEL_LOG_DIR: Directory for file-based span export (optional)
+    #
+    # File-based span export:
+    # When UNILLM_OTEL_LOG_DIR is set, spans are written to JSONL files keyed
+    # by trace_id. This enables standalone trace logging without a parent
+    # TracerProvider (Unity) or external collector (Tempo/Jaeger).
     UNILLM_OTEL: bool = False
     UNILLM_OTEL_ENDPOINT: str = ""
+    UNILLM_OTEL_LOG_DIR: str = ""
 
     @field_validator("UNILLM_LOG", "UNILLM_OTEL", mode="before")
     @classmethod
