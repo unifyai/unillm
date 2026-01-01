@@ -1,8 +1,8 @@
 """
-Tests for LLM I/O logging functionality.
+Tests for LLM logging functionality.
 
-These tests verify that the io_logging module correctly writes request/response
-payloads to log files when UNILLM_IO_LOG is enabled.
+These tests verify that the log module correctly writes request/response
+payloads to log files when UNILLM_LOG is enabled.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from unillm.io_logging import (
+from unillm.log import (
     _serialize_kw,
     write_request_pending,
     append_response_and_finalize,
@@ -116,13 +116,13 @@ def test_serialize_kw_non_json_serializable():
 def test_write_request_pending_creates_file(tmp_path, monkeypatch):
     """Writing a pending request creates a timestamped file."""
     from unillm import settings
-    from unillm import io_logging
+    from unillm import log
 
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(io_logging, "_LOG_ENABLED", True)
-    monkeypatch.setattr(io_logging, "_LOG_DIR_CHECKED", False)
-    monkeypatch.setattr(io_logging, "_LOG_DIR", None)
+    monkeypatch.setattr(log, "_LOG_ENABLED", True)
+    monkeypatch.setattr(log, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(log, "_LOG_DIR", None)
 
     path = write_request_pending({"model": "gpt-4"}, label="test")
 
@@ -138,13 +138,13 @@ def test_write_request_pending_creates_file(tmp_path, monkeypatch):
 def test_append_response_and_finalize(tmp_path, monkeypatch):
     """Appending response and finalizing renames the file."""
     from unillm import settings
-    from unillm import io_logging
+    from unillm import log
 
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(io_logging, "_LOG_ENABLED", True)
-    monkeypatch.setattr(io_logging, "_LOG_DIR_CHECKED", False)
-    monkeypatch.setattr(io_logging, "_LOG_DIR", None)
+    monkeypatch.setattr(log, "_LOG_ENABLED", True)
+    monkeypatch.setattr(log, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(log, "_LOG_DIR", None)
 
     # Write pending request
     pending_path = write_request_pending({"model": "gpt-4"}, label="test")
@@ -174,13 +174,13 @@ def test_append_response_and_finalize(tmp_path, monkeypatch):
 def test_write_request_without_label(tmp_path, monkeypatch):
     """Writing without a label omits the label prefix."""
     from unillm import settings
-    from unillm import io_logging
+    from unillm import log
 
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(io_logging, "_LOG_ENABLED", True)
-    monkeypatch.setattr(io_logging, "_LOG_DIR_CHECKED", False)
-    monkeypatch.setattr(io_logging, "_LOG_DIR", None)
+    monkeypatch.setattr(log, "_LOG_ENABLED", True)
+    monkeypatch.setattr(log, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(log, "_LOG_DIR", None)
 
     path = write_request_pending({"data": 1})
 
@@ -193,13 +193,13 @@ def test_write_request_without_label(tmp_path, monkeypatch):
 def test_multiple_writes_unique_filenames(tmp_path, monkeypatch):
     """Multiple writes create unique files."""
     from unillm import settings
-    from unillm import io_logging
+    from unillm import log
 
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(io_logging, "_LOG_ENABLED", True)
-    monkeypatch.setattr(io_logging, "_LOG_DIR_CHECKED", False)
-    monkeypatch.setattr(io_logging, "_LOG_DIR", None)
+    monkeypatch.setattr(log, "_LOG_ENABLED", True)
+    monkeypatch.setattr(log, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(log, "_LOG_DIR", None)
 
     paths = []
     for i in range(3):
@@ -215,13 +215,13 @@ def test_multiple_writes_unique_filenames(tmp_path, monkeypatch):
 def test_logging_disabled_returns_none(tmp_path, monkeypatch):
     """When logging is disabled, write_request_pending returns None (no file)."""
     from unillm import settings
-    from unillm import io_logging
+    from unillm import log
 
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", False)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(io_logging, "_LOG_ENABLED", False)
-    monkeypatch.setattr(io_logging, "_LOG_DIR_CHECKED", False)
-    monkeypatch.setattr(io_logging, "_LOG_DIR", None)
+    monkeypatch.setattr(log, "_LOG_ENABLED", False)
+    monkeypatch.setattr(log, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(log, "_LOG_DIR", None)
 
     path = write_request_pending({"model": "gpt-4"}, label="test")
 
@@ -234,15 +234,15 @@ def test_logging_enabled_no_dir_returns_none_but_console_logs(monkeypatch, caplo
     """When logging is enabled but no directory set, returns None but still logs to console."""
     import logging
     from unillm import settings
-    from unillm import io_logging
+    from unillm import log
 
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", "")
-    monkeypatch.setattr(io_logging, "_LOG_ENABLED", True)
-    monkeypatch.setattr(io_logging, "_LOG_DIR_CHECKED", False)
-    monkeypatch.setattr(io_logging, "_LOG_DIR", None)
+    monkeypatch.setattr(log, "_LOG_ENABLED", True)
+    monkeypatch.setattr(log, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(log, "_LOG_DIR", None)
 
-    caplog.set_level(logging.DEBUG, logger="unillm_io")
+    caplog.set_level(logging.DEBUG, logger="unillm")
 
     path = write_request_pending({"model": "gpt-4"}, label="test")
 

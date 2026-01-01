@@ -33,7 +33,7 @@ from .settings import SETTINGS
 # Console logging setup
 # ---------------------------------------------------------------------------
 
-_LOGGER = logging.getLogger("unillm_io")
+_LOGGER = logging.getLogger("unillm")
 _LOG_ENABLED = SETTINGS.UNILLM_LOG
 _LOGGER.setLevel(logging.DEBUG if _LOG_ENABLED else logging.WARNING)
 
