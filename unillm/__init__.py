@@ -5,6 +5,7 @@ from .cache_events import (
     acapture_cache_events,
 )
 from .io_logging import (
+    configure_log_dir,
     write_request_pending,
     append_response_and_finalize,
 )

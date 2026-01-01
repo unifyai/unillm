@@ -38,14 +38,16 @@ class Settings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     # LLM I/O Logging
     # ─────────────────────────────────────────────────────────────────────────
-    # When enabled, writes request/response payloads to files for debugging.
-    # Directory: {UNILLM_LOG_DIR}/ (required when UNILLM_IO_LOG is True)
-    UNILLM_IO_LOG: bool = False
+    # Master switch for LLM I/O logging (console and file).
+    # - UNILLM_LOG=true (default): Console logging enabled via Python logger
+    # - UNILLM_LOG=true + UNILLM_LOG_DIR=/path: Console AND file logging
+    # - UNILLM_LOG=false: All logging disabled
+    UNILLM_LOG: bool = True
     UNILLM_LOG_DIR: str = ""
 
-    @field_validator("UNILLM_IO_LOG", mode="before")
+    @field_validator("UNILLM_LOG", mode="before")
     @classmethod
-    def parse_io_log(cls, v: Any) -> bool:
+    def parse_log(cls, v: Any) -> bool:
         return _parse_bool(v)
 
 
