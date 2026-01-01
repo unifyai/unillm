@@ -20,9 +20,14 @@ of the incomplete request.
 OpenTelemetry tracing is controlled by:
 - UNILLM_OTEL: Enable/disable OTel tracing (default: false)
 - UNILLM_OTEL_ENDPOINT: OTLP endpoint for trace export (optional)
+- UNILLM_OTEL_LOG_DIR: Directory for file-based span export (optional)
 
 When UNILLM_OTEL is enabled, LLM calls create OTel spans that can be
 correlated with parent spans (from Unity) and child spans (in Unify).
+
+File-based span export:
+When UNILLM_OTEL_LOG_DIR is set, spans are written to JSONL files keyed
+by trace_id: {UNILLM_OTEL_LOG_DIR}/{trace_id}.jsonl
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -52,12 +58,96 @@ _LOGGER.setLevel(logging.DEBUG if _LOG_ENABLED else logging.WARNING)
 
 _OTEL_ENABLED = SETTINGS.UNILLM_OTEL
 _OTEL_ENDPOINT = SETTINGS.UNILLM_OTEL_ENDPOINT
+_OTEL_LOG_DIR = SETTINGS.UNILLM_OTEL_LOG_DIR
 _OTEL_INITIALIZED = False
 _TRACER = None
 
 
+# ---------------------------------------------------------------------------
+# File-based Span Exporter
+# ---------------------------------------------------------------------------
+
+
+class FileSpanExporter:
+    """Exports spans to JSONL files, one file per trace_id.
+
+    This enables standalone trace logging without a parent TracerProvider
+    or external collector (Tempo/Jaeger).
+    """
+
+    def __init__(self, log_dir: Path, service_name: str = "unillm"):
+        self.log_dir = log_dir
+        self.service_name = service_name
+        self._lock = threading.Lock()
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+    def export(self, spans) -> int:
+        """Export a batch of spans to files."""
+        try:
+            for span in spans:
+                self._write_span(span)
+            return 0  # SUCCESS
+        except Exception as e:
+            _LOGGER.warning(f"FileSpanExporter failed to export spans: {e}")
+            return 1  # FAILURE
+
+    def _write_span(self, span) -> None:
+        """Write a single span to its trace file."""
+        ctx = span.get_span_context()
+        if ctx is None or not ctx.is_valid:
+            return
+
+        trace_id = f"{ctx.trace_id:032x}"
+        span_id = f"{ctx.span_id:016x}"
+
+        parent_span_id = None
+        if span.parent is not None:
+            parent_span_id = f"{span.parent.span_id:016x}"
+
+        span_data: dict[str, Any] = {
+            "trace_id": trace_id,
+            "span_id": span_id,
+            "parent_span_id": parent_span_id,
+            "name": span.name,
+            "service": self.service_name,
+            "start_time": (
+                datetime.fromtimestamp(span.start_time / 1e9, tz=timezone.utc).isoformat()
+                if span.start_time
+                else None
+            ),
+            "end_time": (
+                datetime.fromtimestamp(span.end_time / 1e9, tz=timezone.utc).isoformat()
+                if span.end_time
+                else None
+            ),
+            "duration_ms": (
+                (span.end_time - span.start_time) / 1e6
+                if span.end_time and span.start_time
+                else None
+            ),
+            "status": span.status.status_code.name if span.status else None,
+            "attributes": dict(span.attributes) if span.attributes else {},
+        }
+
+        trace_file = self.log_dir / f"{trace_id}.jsonl"
+        with self._lock:
+            with open(trace_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(span_data, default=str) + "\n")
+
+    def shutdown(self) -> None:
+        """Shutdown the exporter (no-op for file exporter)."""
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        """Force flush any buffered spans (no-op for file exporter)."""
+        return True
+
+
 def _setup_otel() -> None:
-    """Initialize OpenTelemetry if enabled and not already configured."""
+    """Initialize OpenTelemetry if enabled and not already configured.
+
+    When UNILLM_OTEL_LOG_DIR is set, spans are written to JSONL files
+    keyed by trace_id for standalone trace logging.
+    """
     global _OTEL_INITIALIZED, _TRACER
 
     if _OTEL_INITIALIZED or not _OTEL_ENABLED:
@@ -69,6 +159,7 @@ def _setup_otel() -> None:
         from opentelemetry import trace
         from opentelemetry.sdk.resources import SERVICE_NAME, Resource
         from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
         # Check if a TracerProvider already exists (parent set it up)
         existing = trace.get_tracer_provider()
@@ -100,6 +191,16 @@ def _setup_otel() -> None:
             except Exception as e:
                 _LOGGER.warning(f"Failed to configure OTLP exporter: {e}")
 
+        # Add file exporter if log directory configured
+        if _OTEL_LOG_DIR:
+            try:
+                log_dir = Path(_OTEL_LOG_DIR)
+                file_exporter = FileSpanExporter(log_dir, service_name="unillm")
+                provider.add_span_processor(SimpleSpanProcessor(file_exporter))
+                _LOGGER.debug(f"Configured file span exporter at {_OTEL_LOG_DIR}")
+            except Exception as e:
+                _LOGGER.warning(f"Failed to configure file span exporter: {e}")
+
         trace.set_tracer_provider(provider)
         _TRACER = trace.get_tracer("unillm")
         _LOGGER.debug("Initialized OTel TracerProvider for unillm")
@@ -121,6 +222,13 @@ def get_tracer():
 def is_otel_enabled() -> bool:
     """Check if OpenTelemetry tracing is enabled."""
     return _OTEL_ENABLED
+
+
+def get_otel_log_dir() -> Optional[Path]:
+    """Get the OTel span log directory, if configured."""
+    if not _OTEL_LOG_DIR:
+        return None
+    return Path(_OTEL_LOG_DIR)
 
 
 @contextmanager
