@@ -37,7 +37,12 @@ from ..cache_events import _emit_cache_event
 from ..helpers import _default
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
-from ..logger import write_request_pending, append_response_and_finalize
+from ..logger import (
+    write_request_pending,
+    append_response_and_finalize,
+    llm_span,
+    set_span_response,
+)
 from ..types import Prompt
 from .shared_session import SHARED_SESSION
 
@@ -806,36 +811,42 @@ class Unify(_UniClient):
         else:
             read_closest = False
 
-        chat_completion = None
-        in_cache = False
-        if cache in [True, "both", "read", "read-only"]:
-            chat_completion = _get_cache(
-                fn_name="chat.completions.create",
-                kw=kw,
-                raise_on_empty=cache == "read-only",
-                read_closest=read_closest,
-                delete_closest=read_closest,
-                backend=cache_backend,
-            )
-            in_cache = True if chat_completion is not None else False
-        if chat_completion is None:
-            try:
-                chat_completion = litellm.completion(
-                    shared_session=SHARED_SESSION,
-                    **kw,
+        # Wrap in OTel span
+        with llm_span(endpoint, self._model, provider=self._provider) as span:
+            chat_completion = None
+            in_cache = False
+            if cache in [True, "both", "read", "read-only"]:
+                chat_completion = _get_cache(
+                    fn_name="chat.completions.create",
+                    kw=kw,
+                    raise_on_empty=cache == "read-only",
+                    read_closest=read_closest,
+                    delete_closest=read_closest,
+                    backend=cache_backend,
                 )
-            except litellm.exceptions.APIError as e:
-                raise Exception(e.message)
+                in_cache = True if chat_completion is not None else False
+            if chat_completion is None:
+                try:
+                    chat_completion = litellm.completion(
+                        shared_session=SHARED_SESSION,
+                        **kw,
+                    )
+                except litellm.exceptions.APIError as e:
+                    raise Exception(e.message)
 
-        # Determine cache status and emit event
-        cache_status = "hit" if in_cache else "miss"
-        _emit_cache_event(
-            {
-                "cache_status": cache_status,
-                "endpoint": endpoint,
-                "request_kw": kw,
-            }
-        )
+            # Determine cache status and emit event
+            cache_status = "hit" if in_cache else "miss"
+
+            # Set span response attributes
+            set_span_response(span, cache_status, chat_completion)
+
+            _emit_cache_event(
+                {
+                    "cache_status": cache_status,
+                    "endpoint": endpoint,
+                    "request_kw": kw,
+                }
+            )
 
         # Finalize log file with response and cache status
         try:
@@ -1023,36 +1034,42 @@ class AsyncUnify(_UniClient):
         else:
             read_closest = False
 
-        chat_completion = None
-        in_cache = False
-        if cache in [True, "both", "read", "read-only"]:
-            chat_completion = _get_cache(
-                fn_name="chat.completions.create",
-                kw=kw,
-                raise_on_empty=cache == "read-only",
-                read_closest=read_closest,
-                delete_closest=read_closest,
-                backend=cache_backend,
-            )
-            in_cache = True if chat_completion is not None else False
-        if chat_completion is None:
-            try:
-                chat_completion = await litellm.acompletion(
-                    shared_session=SHARED_SESSION,
-                    **kw,
+        # Wrap in OTel span
+        with llm_span(endpoint, self._model, provider=self._provider) as span:
+            chat_completion = None
+            in_cache = False
+            if cache in [True, "both", "read", "read-only"]:
+                chat_completion = _get_cache(
+                    fn_name="chat.completions.create",
+                    kw=kw,
+                    raise_on_empty=cache == "read-only",
+                    read_closest=read_closest,
+                    delete_closest=read_closest,
+                    backend=cache_backend,
                 )
-            except litellm.exceptions.APIError as e:
-                raise Exception(e.message)
+                in_cache = True if chat_completion is not None else False
+            if chat_completion is None:
+                try:
+                    chat_completion = await litellm.acompletion(
+                        shared_session=SHARED_SESSION,
+                        **kw,
+                    )
+                except litellm.exceptions.APIError as e:
+                    raise Exception(e.message)
 
-        # Determine cache status and emit event
-        cache_status = "hit" if in_cache else "miss"
-        _emit_cache_event(
-            {
-                "cache_status": cache_status,
-                "endpoint": endpoint,
-                "request_kw": kw,
-            }
-        )
+            # Determine cache status and emit event
+            cache_status = "hit" if in_cache else "miss"
+
+            # Set span response attributes
+            set_span_response(span, cache_status, chat_completion)
+
+            _emit_cache_event(
+                {
+                    "cache_status": cache_status,
+                    "endpoint": endpoint,
+                    "request_kw": kw,
+                }
+            )
 
         # Finalize log file with response and cache status
         try:

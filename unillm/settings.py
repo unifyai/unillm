@@ -45,9 +45,19 @@ class Settings(BaseSettings):
     UNILLM_LOG: bool = True
     UNILLM_LOG_DIR: str = ""
 
-    @field_validator("UNILLM_LOG", mode="before")
+    # ─────────────────────────────────────────────────────────────────────────
+    # OpenTelemetry Tracing
+    # ─────────────────────────────────────────────────────────────────────────
+    # Master switch for OTel tracing.
+    # - UNILLM_OTEL=false (default): OTel tracing disabled
+    # - UNILLM_OTEL=true: OTel tracing enabled, uses parent TracerProvider if available
+    # - UNILLM_OTEL_ENDPOINT: OTLP endpoint for trace export (optional)
+    UNILLM_OTEL: bool = False
+    UNILLM_OTEL_ENDPOINT: str = ""
+
+    @field_validator("UNILLM_LOG", "UNILLM_OTEL", mode="before")
     @classmethod
-    def parse_log(cls, v: Any) -> bool:
+    def parse_bool_fields(cls, v: Any) -> bool:
         return _parse_bool(v)
 
 

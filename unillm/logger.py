@@ -1,8 +1,9 @@
 """
-LLM I/O Logging
-===============
+LLM I/O Logging and OpenTelemetry Tracing
+=========================================
 
-Provides console and file-based logging for LLM request/response payloads.
+Provides console and file-based logging for LLM request/response payloads,
+plus OpenTelemetry tracing for distributed observability.
 
 Logging is controlled by two environment variables:
 - UNILLM_LOG: Enable/disable all logging (default: true)
@@ -15,6 +16,13 @@ When UNILLM_LOG_DIR is set, structured files are written:
 
 If an LLM call hangs or crashes, the ``_pending.txt`` file remains as evidence
 of the incomplete request.
+
+OpenTelemetry tracing is controlled by:
+- UNILLM_OTEL: Enable/disable OTel tracing (default: false)
+- UNILLM_OTEL_ENDPOINT: OTLP endpoint for trace export (optional)
+
+When UNILLM_OTEL is enabled, LLM calls create OTel spans that can be
+correlated with parent spans (from Unity) and child spans (in Unify).
 """
 
 from __future__ import annotations
@@ -23,6 +31,7 @@ import json
 import logging
 import os
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -36,6 +45,160 @@ from .settings import SETTINGS
 _LOGGER = logging.getLogger("unillm")
 _LOG_ENABLED = SETTINGS.UNILLM_LOG
 _LOGGER.setLevel(logging.DEBUG if _LOG_ENABLED else logging.WARNING)
+
+# ---------------------------------------------------------------------------
+# OpenTelemetry setup
+# ---------------------------------------------------------------------------
+
+_OTEL_ENABLED = SETTINGS.UNILLM_OTEL
+_OTEL_ENDPOINT = SETTINGS.UNILLM_OTEL_ENDPOINT
+_OTEL_INITIALIZED = False
+_TRACER = None
+
+
+def _setup_otel() -> None:
+    """Initialize OpenTelemetry if enabled and not already configured."""
+    global _OTEL_INITIALIZED, _TRACER
+
+    if _OTEL_INITIALIZED or not _OTEL_ENABLED:
+        return
+
+    _OTEL_INITIALIZED = True
+
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+        from opentelemetry.sdk.trace import TracerProvider
+
+        # Check if a TracerProvider already exists (parent set it up)
+        existing = trace.get_tracer_provider()
+        if existing and not isinstance(existing, trace.NoOpTracerProvider):
+            # Parent (e.g., Unity) already configured OTel - use theirs
+            _TRACER = trace.get_tracer("unillm")
+            _LOGGER.debug("Using existing OTel TracerProvider from parent")
+            return
+
+        # We're the outermost layer - set up our own provider
+        resource = Resource.create({SERVICE_NAME: "unillm"})
+        provider = TracerProvider(resource=resource)
+
+        # Add OTLP exporter if endpoint configured
+        if _OTEL_ENDPOINT:
+            try:
+                from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+                    OTLPSpanExporter,
+                )
+                from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+                exporter = OTLPSpanExporter(endpoint=_OTEL_ENDPOINT, insecure=True)
+                provider.add_span_processor(BatchSpanProcessor(exporter))
+                _LOGGER.debug(f"Configured OTLP exporter at {_OTEL_ENDPOINT}")
+            except ImportError:
+                _LOGGER.warning(
+                    "OTLP exporter not available - install opentelemetry-exporter-otlp"
+                )
+            except Exception as e:
+                _LOGGER.warning(f"Failed to configure OTLP exporter: {e}")
+
+        trace.set_tracer_provider(provider)
+        _TRACER = trace.get_tracer("unillm")
+        _LOGGER.debug("Initialized OTel TracerProvider for unillm")
+
+    except ImportError:
+        _LOGGER.debug("OpenTelemetry not available - tracing disabled")
+    except Exception as e:
+        _LOGGER.warning(f"Failed to initialize OpenTelemetry: {e}")
+
+
+def get_tracer():
+    """Get the OpenTelemetry tracer, initializing if needed."""
+    global _TRACER
+    if _TRACER is None and _OTEL_ENABLED:
+        _setup_otel()
+    return _TRACER
+
+
+def is_otel_enabled() -> bool:
+    """Check if OpenTelemetry tracing is enabled."""
+    return _OTEL_ENABLED
+
+
+@contextmanager
+def llm_span(endpoint: str, model: str, **attributes):
+    """Create an OTel span for an LLM call.
+
+    Args:
+        endpoint: The endpoint being called (e.g., "gpt-4@openai")
+        model: The model name
+        **attributes: Additional span attributes
+
+    Yields:
+        The span (or None if OTel disabled)
+    """
+    tracer = get_tracer()
+    if tracer is None:
+        yield None
+        return
+
+    try:
+        from opentelemetry.trace import SpanKind, Status, StatusCode
+    except ImportError:
+        yield None
+        return
+
+    with tracer.start_as_current_span(
+        f"LLM {endpoint}",
+        kind=SpanKind.CLIENT,
+    ) as span:
+        span.set_attribute("llm.endpoint", endpoint)
+        span.set_attribute("llm.model", model)
+        for key, value in attributes.items():
+            if value is not None:
+                span.set_attribute(f"llm.{key}", str(value) if not isinstance(value, (int, float, bool)) else value)
+
+        try:
+            yield span
+        except Exception as e:
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.set_attribute("error.type", type(e).__name__)
+            span.set_attribute("error.message", str(e))
+            raise
+
+
+def set_span_response(span, cache_status: str, response: Any = None) -> None:
+    """Set response attributes on a span.
+
+    Args:
+        span: The OTel span (or None)
+        cache_status: "hit" or "miss"
+        response: The LLM response object (optional)
+    """
+    if span is None:
+        return
+
+    try:
+        from opentelemetry.trace import Status, StatusCode
+
+        span.set_attribute("llm.cache_status", cache_status)
+
+        if response is not None:
+            # Try to extract usage info
+            if hasattr(response, "usage") and response.usage:
+                usage = response.usage
+                if hasattr(usage, "prompt_tokens"):
+                    span.set_attribute("llm.usage.prompt_tokens", usage.prompt_tokens)
+                if hasattr(usage, "completion_tokens"):
+                    span.set_attribute("llm.usage.completion_tokens", usage.completion_tokens)
+                if hasattr(usage, "total_tokens"):
+                    span.set_attribute("llm.usage.total_tokens", usage.total_tokens)
+
+            # Try to extract model from response
+            if hasattr(response, "model"):
+                span.set_attribute("llm.response_model", response.model)
+
+        span.set_status(Status(StatusCode.OK))
+    except Exception:
+        pass  # Silent best-effort
 
 # ---------------------------------------------------------------------------
 # File-based trace logging
