@@ -4,6 +4,12 @@ from .cache_events import (
     capture_cache_events,
     acapture_cache_events,
 )
+from .caching import (
+    get_cache_stats,
+    set_cache_backend,
+    CacheStats,
+)
+from .helpers import get_seed, set_seed
 from .logger import (
     configure_log_dir,
     write_request_pending,

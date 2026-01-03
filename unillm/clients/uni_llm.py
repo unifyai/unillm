@@ -32,9 +32,9 @@ from pydantic import BaseModel
 from typing_extensions import Self
 from .provider_preprocessing import apply_provider_preprocessing
 
-from unify.utils._caching import _get_cache, _write_to_cache, is_caching_enabled
+from ..caching import _get_cache, _write_to_cache, is_caching_enabled
 from ..cache_events import _emit_cache_event
-from ..helpers import _default
+from ..helpers import _default, get_seed
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
 from ..logger import (
@@ -721,7 +721,7 @@ class _UniClient(_Client, abc.ABC):
             n=_default(n, self._n),
             presence_penalty=_default(presence_penalty, self._presence_penalty),
             response_format=_default(response_format, self._response_format),
-            seed=_default(_default(seed, self._seed), unify.get_seed()),
+            seed=_default(_default(seed, self._seed), get_seed()),
             stop=_default(stop, self._stop),
             stream=_default(stream, self._stream),
             stream_options=_default(stream_options, self._stream_options),
