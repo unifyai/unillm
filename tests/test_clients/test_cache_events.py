@@ -173,7 +173,18 @@ class TestAsyncCaptureContextManager:
 
 
 class TestCacheEventEmissionMocked:
-    """Tests for cache event emission during LLM requests using mocked LLM calls."""
+    """Tests for cache event emission during LLM requests using mocked LLM calls.
+
+    These tests mock all external dependencies including logging to avoid
+    creating log files that would pollute CI cache statistics.
+    """
+
+    @pytest.fixture(autouse=True)
+    def mock_logging(self):
+        """Mock logging functions to prevent log file creation in mocked tests."""
+        with patch("unillm.clients.uni_llm.write_request_pending", return_value=None):
+            with patch("unillm.clients.uni_llm.append_response_and_finalize"):
+                yield
 
     def test_sync_client_emits_cache_miss_on_llm_call(self):
         mock_response = MagicMock()
