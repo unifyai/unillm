@@ -2,13 +2,14 @@ import pytest
 from .helpers import new_llm_client
 
 
-CODEWORD = "ZEBRA_42_PHOENIX"
+# Use a value that looks like a raw ID that must be echoed verbatim
+TEST_ID = "xK7-pQ9-mR2"
 
-REVEAL_CODEWORD_TOOL = {
+GET_ID_TOOL = {
     "type": "function",
     "function": {
-        "name": "reveal_codeword",
-        "description": "Reveals the secret codeword. Must be called to obtain it.",
+        "name": "get_id",
+        "description": "Returns a reference ID.",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -24,28 +25,28 @@ def test_tool_call(model):
         messages=[
             {
                 "role": "user",
-                "content": "Call the reveal_codeword tool and tell me the exact codeword.",
+                "content": "Call get_id and tell me the exact ID returned, verbatim.",
             },
         ],
-        tools=[REVEAL_CODEWORD_TOOL],
+        tools=[GET_ID_TOOL],
         return_full_completion=True,
     )
 
-    assert response.choices[0].message.tool_calls[0].function.name == "reveal_codeword"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_id"
 
     # add the result of the tool call to the messages
     client.append_messages(
         [
             {
                 "role": "tool",
-                "content": CODEWORD,
+                "content": TEST_ID,
                 "tool_call_id": response.choices[0].message.tool_calls[0].id,
             },
         ],
     )
 
     response = client.generate()
-    assert CODEWORD in response
+    assert TEST_ID in response
 
 
 @pytest.mark.asyncio
@@ -55,25 +56,25 @@ async def test_tool_call_async(model):
         messages=[
             {
                 "role": "user",
-                "content": "Call the reveal_codeword tool and tell me the exact codeword.",
+                "content": "Call get_id and tell me the exact ID returned, verbatim.",
             },
         ],
-        tools=[REVEAL_CODEWORD_TOOL],
+        tools=[GET_ID_TOOL],
         return_full_completion=True,
     )
 
-    assert response.choices[0].message.tool_calls[0].function.name == "reveal_codeword"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_id"
 
     # add the result of the tool call to the messages
     client.append_messages(
         [
             {
                 "role": "tool",
-                "content": CODEWORD,
+                "content": TEST_ID,
                 "tool_call_id": response.choices[0].message.tool_calls[0].id,
             },
         ],
     )
 
     response = await client.generate()
-    assert CODEWORD in response
+    assert TEST_ID in response

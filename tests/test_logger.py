@@ -153,6 +153,8 @@ def test_write_request_pending_creates_file(tmp_path, monkeypatch):
     from unillm import settings
     from unillm import logger
 
+    # Clear env var so monkeypatch takes effect (env var takes precedence in _get_log_dir)
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
     monkeypatch.setattr(logger, "_LOG_ENABLED", True)
@@ -175,6 +177,8 @@ def test_append_response_and_finalize(tmp_path, monkeypatch):
     from unillm import settings
     from unillm import logger
 
+    # Clear env var so monkeypatch takes effect (env var takes precedence in _get_log_dir)
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
     monkeypatch.setattr(logger, "_LOG_ENABLED", True)
@@ -211,6 +215,8 @@ def test_write_request_without_label(tmp_path, monkeypatch):
     from unillm import settings
     from unillm import logger
 
+    # Clear env var so monkeypatch takes effect (env var takes precedence in _get_log_dir)
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
     monkeypatch.setattr(logger, "_LOG_ENABLED", True)
@@ -230,6 +236,8 @@ def test_multiple_writes_unique_filenames(tmp_path, monkeypatch):
     from unillm import settings
     from unillm import logger
 
+    # Clear env var so monkeypatch takes effect (env var takes precedence in _get_log_dir)
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
     monkeypatch.setattr(logger, "_LOG_ENABLED", True)
@@ -252,6 +260,8 @@ def test_logging_disabled_returns_none(tmp_path, monkeypatch):
     from unillm import settings
     from unillm import logger
 
+    # Clear env var so monkeypatch takes effect (env var takes precedence in _get_log_dir)
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", False)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
     monkeypatch.setattr(logger, "_LOG_ENABLED", False)
@@ -271,6 +281,8 @@ def test_logging_enabled_no_dir_returns_none_but_console_logs(monkeypatch, caplo
     from unillm import settings
     from unillm import logger
 
+    # Clear env var so monkeypatch takes effect (env var takes precedence in _get_log_dir)
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", "")
     monkeypatch.setattr(logger, "_LOG_ENABLED", True)
