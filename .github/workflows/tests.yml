@@ -108,7 +108,7 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: .cache.ndjson
-        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
 
@@ -319,7 +319,7 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: .cache.ndjson
-        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
 
@@ -335,13 +335,10 @@ jobs:
           --artifacts-dir cache-artifacts
 
     - name: Store consolidated cache
-      # continue-on-error handles the case where cache key already exists
-      # (e.g., from a previous partial run or concurrent workflow)
-      continue-on-error: true
       uses: actions/cache/save@v4
       with:
         path: .cache.ndjson
-        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   # Cache check job: verifies cache coverage
   cache-check:
