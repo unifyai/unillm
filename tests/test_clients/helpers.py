@@ -7,6 +7,7 @@ def new_llm_client(model: str, is_async: bool = False, **kwargs):
         return unillm.AsyncUnify(
             model,
             cache=SETTINGS.UNILLM_CACHE,
+            cache_backend=SETTINGS.UNILLM_CACHE_BACKEND,
             reasoning_effort="high",
             service_tier=SETTINGS.UNILLM_SERVICE_TIER,
             **kwargs,
@@ -14,6 +15,7 @@ def new_llm_client(model: str, is_async: bool = False, **kwargs):
     return unillm.Unify(
         model,
         cache=SETTINGS.UNILLM_CACHE,
+        cache_backend=SETTINGS.UNILLM_CACHE_BACKEND,
         reasoning_effort="high",
         service_tier=SETTINGS.UNILLM_SERVICE_TIER,
         **kwargs,
