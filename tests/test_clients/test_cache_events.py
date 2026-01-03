@@ -5,9 +5,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 import unillm
-from unillm import capture_cache_events, acapture_cache_events, CacheEvent
+from unillm import capture_cache_events, acapture_cache_events
 from unillm.cache_events import _emit_cache_event
-from .helpers import new_llm_client
 
 
 class TestCaptureContextManager:
@@ -25,7 +24,7 @@ class TestCaptureContextManager:
                     "cache_status": "hit",
                     "endpoint": "test@provider",
                     "request_kw": {"model": "test"},
-                }
+                },
             )
         assert len(events) == 1
         assert events[0]["cache_status"] == "hit"
@@ -37,14 +36,14 @@ class TestCaptureContextManager:
                     "cache_status": "miss",
                     "endpoint": "test@provider",
                     "request_kw": {},
-                }
+                },
             )
             _emit_cache_event(
                 {
                     "cache_status": "hit",
                     "endpoint": "test@provider",
                     "request_kw": {},
-                }
+                },
             )
         assert len(events) == 2
         assert events[0]["cache_status"] == "miss"
@@ -57,7 +56,7 @@ class TestCaptureContextManager:
                 "cache_status": "miss",
                 "endpoint": "before@provider",
                 "request_kw": {},
-            }
+            },
         )
 
         with capture_cache_events() as events:
@@ -66,7 +65,7 @@ class TestCaptureContextManager:
                     "cache_status": "hit",
                     "endpoint": "inside@provider",
                     "request_kw": {},
-                }
+                },
             )
 
         # Emit after context
@@ -75,7 +74,7 @@ class TestCaptureContextManager:
                 "cache_status": "miss",
                 "endpoint": "after@provider",
                 "request_kw": {},
-            }
+            },
         )
 
         # Only the inside event should be captured
@@ -89,7 +88,7 @@ class TestCaptureContextManager:
                     "cache_status": "miss",
                     "endpoint": "outer@provider",
                     "request_kw": {},
-                }
+                },
             )
 
             with capture_cache_events() as inner_events:
@@ -98,7 +97,7 @@ class TestCaptureContextManager:
                         "cache_status": "hit",
                         "endpoint": "inner@provider",
                         "request_kw": {},
-                    }
+                    },
                 )
 
             # After inner context, outer should receive events again
@@ -107,7 +106,7 @@ class TestCaptureContextManager:
                     "cache_status": "miss",
                     "endpoint": "outer-again@provider",
                     "request_kw": {},
-                }
+                },
             )
 
         # Inner only captured inner event
@@ -137,7 +136,7 @@ class TestAsyncCaptureContextManager:
                     "cache_status": "miss",
                     "endpoint": "test@provider",
                     "request_kw": {"model": "test"},
-                }
+                },
             )
         assert len(events) == 1
         assert events[0]["cache_status"] == "miss"
@@ -149,7 +148,7 @@ class TestAsyncCaptureContextManager:
                 "cache_status": "miss",
                 "endpoint": "before@provider",
                 "request_kw": {},
-            }
+            },
         )
 
         async with acapture_cache_events() as events:
@@ -158,7 +157,7 @@ class TestAsyncCaptureContextManager:
                     "cache_status": "hit",
                     "endpoint": "inside@provider",
                     "request_kw": {},
-                }
+                },
             )
 
         _emit_cache_event(
@@ -166,7 +165,7 @@ class TestAsyncCaptureContextManager:
                 "cache_status": "miss",
                 "endpoint": "after@provider",
                 "request_kw": {},
-            }
+            },
         )
 
         assert len(events) == 1
@@ -183,7 +182,8 @@ class TestCacheEventEmissionMocked:
         mock_response.model_dump.return_value = {}
 
         with patch(
-            "unillm.clients.uni_llm.litellm.completion", return_value=mock_response
+            "unillm.clients.uni_llm.litellm.completion",
+            return_value=mock_response,
         ):
             with patch("unillm.clients.uni_llm._get_cache", return_value=None):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
@@ -191,7 +191,7 @@ class TestCacheEventEmissionMocked:
                         client = unillm.Unify("gpt-4@openai", cache=True)
                         with capture_cache_events() as events:
                             client.generate(
-                                messages=[{"role": "user", "content": "Hi"}]
+                                messages=[{"role": "user", "content": "Hi"}],
                             )
 
         assert len(events) == 1
@@ -204,7 +204,8 @@ class TestCacheEventEmissionMocked:
         mock_cached_response.choices[0].message.content = "Cached response"
 
         with patch(
-            "unillm.clients.uni_llm._get_cache", return_value=mock_cached_response
+            "unillm.clients.uni_llm._get_cache",
+            return_value=mock_cached_response,
         ):
             with patch("unillm.clients.uni_llm._write_to_cache"):
                 client = unillm.Unify("gpt-4@openai", cache=True)
@@ -225,7 +226,8 @@ class TestCacheEventEmissionMocked:
             return mock_response
 
         with patch(
-            "unillm.clients.uni_llm.litellm.acompletion", side_effect=mock_acompletion
+            "unillm.clients.uni_llm.litellm.acompletion",
+            side_effect=mock_acompletion,
         ):
             with patch("unillm.clients.uni_llm._get_cache", return_value=None):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
@@ -233,7 +235,7 @@ class TestCacheEventEmissionMocked:
                         client = unillm.AsyncUnify("gpt-4@openai", cache=True)
                         async with acapture_cache_events() as events:
                             await client.generate(
-                                messages=[{"role": "user", "content": "Hi"}]
+                                messages=[{"role": "user", "content": "Hi"}],
                             )
 
         assert len(events) == 1
@@ -247,7 +249,8 @@ class TestCacheEventEmissionMocked:
         mock_cached_response.choices[0].message.content = "Cached response"
 
         with patch(
-            "unillm.clients.uni_llm._get_cache", return_value=mock_cached_response
+            "unillm.clients.uni_llm._get_cache",
+            return_value=mock_cached_response,
         ):
             with patch("unillm.clients.uni_llm._write_to_cache"):
                 client = unillm.AsyncUnify("gpt-4@openai", cache=True)
@@ -264,17 +267,20 @@ class TestCacheEventEmissionMocked:
         mock_response.model_dump.return_value = {}
 
         with patch(
-            "unillm.clients.uni_llm.litellm.completion", return_value=mock_response
+            "unillm.clients.uni_llm.litellm.completion",
+            return_value=mock_response,
         ):
             with patch("unillm.clients.uni_llm._get_cache", return_value=None):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
                     with patch("unillm.clients.uni_llm.unify.log_query"):
                         client = unillm.Unify(
-                            "gpt-4@openai", cache=True, temperature=0.5
+                            "gpt-4@openai",
+                            cache=True,
+                            temperature=0.5,
                         )
                         with capture_cache_events() as events:
                             client.generate(
-                                messages=[{"role": "user", "content": "Test"}]
+                                messages=[{"role": "user", "content": "Test"}],
                             )
 
         event = events[0]
@@ -290,7 +296,8 @@ class TestCacheEventEmissionMocked:
         mock_response.model_dump.return_value = {}
 
         with patch(
-            "unillm.clients.uni_llm.litellm.completion", return_value=mock_response
+            "unillm.clients.uni_llm.litellm.completion",
+            return_value=mock_response,
         ):
             with patch("unillm.clients.uni_llm._get_cache", return_value=None):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
@@ -298,7 +305,7 @@ class TestCacheEventEmissionMocked:
                         client = unillm.Unify("gpt-4@openai", cache=True)
                         # No capture context - should not error
                         response = client.generate(
-                            messages=[{"role": "user", "content": "Hi"}]
+                            messages=[{"role": "user", "content": "Hi"}],
                         )
 
         # Just verify it completed without error
@@ -307,7 +314,7 @@ class TestCacheEventEmissionMocked:
 
 # Integration tests - only run when API keys are available
 _HAS_API_KEYS = bool(
-    os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"),
 )
 
 
@@ -338,7 +345,7 @@ class TestCacheEventEmissionIntegration:
         """Second identical request should be a cache hit."""
         client = unillm.Unify("gpt-4o@openai", cache=True)
         messages = [
-            {"role": "user", "content": "What is 7+7? Reply with just the number."}
+            {"role": "user", "content": "What is 7+7? Reply with just the number."},
         ]
 
         # First request
@@ -362,7 +369,7 @@ class TestCacheEventEmissionIntegration:
         """Async: Second identical request should be a cache hit."""
         client = unillm.AsyncUnify("gpt-4o@openai", cache=True)
         messages = [
-            {"role": "user", "content": "What is 8+8? Reply with just the number."}
+            {"role": "user", "content": "What is 8+8? Reply with just the number."},
         ]
 
         # First request

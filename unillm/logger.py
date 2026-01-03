@@ -111,7 +111,10 @@ class FileSpanExporter:
             "name": span.name,
             "service": self.service_name,
             "start_time": (
-                datetime.fromtimestamp(span.start_time / 1e9, tz=timezone.utc).isoformat()
+                datetime.fromtimestamp(
+                    span.start_time / 1e9,
+                    tz=timezone.utc,
+                ).isoformat()
                 if span.start_time
                 else None
             ),
@@ -189,7 +192,7 @@ def _setup_otel() -> None:
                 _LOGGER.debug(f"Configured OTLP exporter at {_OTEL_ENDPOINT}")
             except ImportError:
                 _LOGGER.warning(
-                    "OTLP exporter not available - install opentelemetry-exporter-otlp"
+                    "OTLP exporter not available - install opentelemetry-exporter-otlp",
                 )
             except Exception as e:
                 _LOGGER.warning(f"Failed to configure OTLP exporter: {e}")
@@ -265,7 +268,10 @@ def llm_span(endpoint: str, model: str, **attributes):
         span.set_attribute("llm.model", model)
         for key, value in attributes.items():
             if value is not None:
-                span.set_attribute(f"llm.{key}", str(value) if not isinstance(value, (int, float, bool)) else value)
+                span.set_attribute(
+                    f"llm.{key}",
+                    str(value) if not isinstance(value, (int, float, bool)) else value,
+                )
 
         try:
             yield span
@@ -299,7 +305,10 @@ def set_span_response(span, cache_status: str, response: Any = None) -> None:
                 if hasattr(usage, "prompt_tokens"):
                     span.set_attribute("llm.usage.prompt_tokens", usage.prompt_tokens)
                 if hasattr(usage, "completion_tokens"):
-                    span.set_attribute("llm.usage.completion_tokens", usage.completion_tokens)
+                    span.set_attribute(
+                        "llm.usage.completion_tokens",
+                        usage.completion_tokens,
+                    )
                 if hasattr(usage, "total_tokens"):
                     span.set_attribute("llm.usage.total_tokens", usage.total_tokens)
 
@@ -310,6 +319,7 @@ def set_span_response(span, cache_status: str, response: Any = None) -> None:
         span.set_status(Status(StatusCode.OK))
     except Exception:
         pass  # Silent best-effort
+
 
 # ---------------------------------------------------------------------------
 # File-based trace logging
@@ -442,7 +452,7 @@ def write_request_pending(
 
     # Console log (always when enabled)
     _LOGGER.debug(
-        f"🔄 {label_prefix}LLM request ➡️\n{_truncate_for_console(body_str)}"
+        f"🔄 {label_prefix}LLM request ➡️\n{_truncate_for_console(body_str)}",
     )
 
     # File log (only if directory set)
@@ -494,7 +504,7 @@ def append_response_and_finalize(
     # Console log (always when enabled)
     _LOGGER.debug(
         f"🔄 {label_prefix}LLM response ⬅️ [cache: {cache_status}]\n"
-        f"{_truncate_for_console(body_str)}"
+        f"{_truncate_for_console(body_str)}",
     )
 
     # File log (only if we have a pending path)

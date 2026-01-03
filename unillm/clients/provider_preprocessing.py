@@ -12,6 +12,11 @@ CONCURRENT_USER_MESSAGES_EXPLANATION = (
     "way instead."
 )
 
+THINKING_PREFILL_EXPLANATION = (
+    "The conversation history up to this point is expressed below in JSON format "
+    "due to schema constraints:\n"
+)
+
 
 def _move_system_messages_to_front(
     messages: List[Dict[str, Any]],
@@ -20,6 +25,91 @@ def _move_system_messages_to_front(
     system = [m for m in messages if m.get("role") == "system"]
     non_system = [m for m in messages if m.get("role") != "system"]
     return system + non_system
+
+
+def _find_first_real_assistant_index(messages: List[Dict[str, Any]]) -> Optional[int]:
+    """
+    Find the index of the first assistant message with thinking_blocks (real response).
+    Returns None if no real assistant responses exist.
+    """
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "assistant" and msg.get("thinking_blocks"):
+            return i
+    return None
+
+
+def _has_prefilled_assistant_before_real(messages: List[Dict[str, Any]]) -> bool:
+    """
+    Check if there are prefilled assistant messages (without thinking_blocks)
+    that appear before any real assistant response (with thinking_blocks).
+    """
+    first_real_idx = _find_first_real_assistant_index(messages)
+
+    # Check messages up to (but not including) first real response
+    check_until = first_real_idx if first_real_idx is not None else len(messages)
+
+    for i in range(check_until):
+        msg = messages[i]
+        if msg.get("role") == "assistant" and not msg.get("thinking_blocks"):
+            return True
+    return False
+
+
+def _convert_prefill_to_system_message(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Convert prefilled messages to a system message for Anthropic thinking mode.
+
+    When thinking mode is enabled, Anthropic requires assistant messages to have
+    thinking_blocks. For prefilled/synthetic assistant messages, we convert them
+    to a JSON representation in the system message.
+
+    Only messages BEFORE the first real assistant response (one with thinking_blocks)
+    are converted. Messages from the first real response onwards are kept intact.
+    """
+    first_real_idx = _find_first_real_assistant_index(messages)
+
+    # Determine which messages to convert vs keep
+    if first_real_idx is not None:
+        to_convert = messages[:first_real_idx]
+        to_keep = messages[first_real_idx:]
+    else:
+        to_convert = messages
+        to_keep = []
+
+    # Extract existing system message content from the portion to convert
+    system_content = ""
+    non_system_to_convert = []
+    for msg in to_convert:
+        if msg.get("role") == "system":
+            if system_content:
+                system_content += "\n\n"
+            system_content += msg.get("content", "")
+        else:
+            non_system_to_convert.append(msg)
+
+    # Build result
+    result = []
+
+    # Add system message with converted content (if any non-system messages to convert)
+    if non_system_to_convert:
+        if system_content:
+            system_content += "\n\n"
+        system_content += THINKING_PREFILL_EXPLANATION
+        system_content += json.dumps(non_system_to_convert, indent=4)
+
+    if system_content:
+        result.append({"role": "system", "content": system_content})
+
+    # Add continuation prompt if we converted everything (no real messages to keep)
+    if not to_keep:
+        result.append({"role": "user", "content": "[continue]"})
+    else:
+        # Keep real messages intact
+        result.extend(to_keep)
+
+    return result
 
 
 def _combine_adjacent_user_messages(
@@ -100,7 +190,20 @@ def apply_provider_preprocessing(
             },
         )
 
+    # Handle prefilled assistant messages with thinking mode enabled.
+    # Anthropic requires thinking_blocks on assistant messages when thinking is enabled.
+    # Convert only prefilled messages (before first real response) to system message.
+    if kw.get("reasoning_effort") is not None and _has_prefilled_assistant_before_real(
+        messages,
+    ):
+        messages = _convert_prefill_to_system_message(messages)
+
     kw["messages"] = messages
+
+    # Anthropic requires tools=[] (not None) when messages contain tool-related content.
+    # This allows tool availability to change turn-by-turn while preserving history.
+    if kw.get("tools") is None:
+        kw["tools"] = []
 
     # Disable thinking mode if tool choice is required
     if kw.get("reasoning_effort") is not None and kw.get("tool_choice") == "required":
