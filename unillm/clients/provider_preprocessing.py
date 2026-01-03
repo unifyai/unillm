@@ -102,6 +102,11 @@ def apply_provider_preprocessing(
 
     kw["messages"] = messages
 
+    # Anthropic requires tools=[] (not None) when messages contain tool-related content.
+    # This allows tool availability to change turn-by-turn while preserving history.
+    if kw.get("tools") is None:
+        kw["tools"] = []
+
     # Disable thinking mode if tool choice is required
     if kw.get("reasoning_effort") is not None and kw.get("tool_choice") == "required":
         del kw["reasoning_effort"]
