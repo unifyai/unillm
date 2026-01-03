@@ -386,17 +386,20 @@ jobs:
         echo "  Hit Rate: ${HIT_RATE}%"
         echo ""
 
-        # Report status (don't fail on misses - cache is self-healing)
+        # Require 100% cache coverage - fail CI on misses
         if [ $TOTAL_MISSES -gt 0 ]; then
-          echo "⚠️  Cache misses detected - cache will be updated for next run"
-          echo "## ⚠️ LLM Cache: ${HIT_RATE}% coverage" >> $GITHUB_STEP_SUMMARY
+          echo "❌ Cache coverage is not 100% - $TOTAL_MISSES cache misses detected"
+          echo ""
+          echo "Re-run CI to populate cache, then merge once 100% coverage is achieved."
+          echo "## ❌ LLM Cache: ${HIT_RATE}% coverage" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**$TOTAL_HITS** hits, **$TOTAL_MISSES** misses" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "_Cache will be updated for the next run._" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "✅ 100% cache coverage"
-          echo "## ✅ LLM Cache: 100% coverage" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**$TOTAL_HITS** cache hits, **0** misses" >> $GITHUB_STEP_SUMMARY
+          echo "_Re-run CI to populate cache, then merge once 100% coverage is achieved._" >> $GITHUB_STEP_SUMMARY
+          exit 1
         fi
+
+        echo "✅ 100% cache coverage"
+        echo "## ✅ LLM Cache: 100% coverage" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**$TOTAL_HITS** cache hits, **0** misses" >> $GITHUB_STEP_SUMMARY
