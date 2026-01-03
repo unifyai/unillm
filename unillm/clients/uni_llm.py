@@ -688,6 +688,7 @@ class _UniClient(_Client, abc.ABC):
                 ] + messages
             if user_message is not None:
                 messages += [{"role": "user", "content": user_message}]
+            self._messages = list(messages)  # Copy to avoid mutating user's list
         else:
             messages = list()
             if system_message is not None:
@@ -845,7 +846,7 @@ class Unify(_UniClient):
                     "cache_status": cache_status,
                     "endpoint": endpoint,
                     "request_kw": kw,
-                }
+                },
             )
 
         # Finalize log file with response and cache status
@@ -855,7 +856,12 @@ class Unify(_UniClient):
                 if hasattr(chat_completion, "model_dump")
                 else chat_completion
             )
-            append_response_and_finalize(pending_path, resp_body, cache_status, label=endpoint)
+            append_response_and_finalize(
+                pending_path,
+                resp_body,
+                cache_status,
+                label=endpoint,
+            )
         except Exception:
             pass
 
@@ -1068,7 +1074,7 @@ class AsyncUnify(_UniClient):
                     "cache_status": cache_status,
                     "endpoint": endpoint,
                     "request_kw": kw,
-                }
+                },
             )
 
         # Finalize log file with response and cache status
@@ -1078,7 +1084,12 @@ class AsyncUnify(_UniClient):
                 if hasattr(chat_completion, "model_dump")
                 else chat_completion
             )
-            append_response_and_finalize(pending_path, resp_body, cache_status, label=endpoint)
+            append_response_and_finalize(
+                pending_path,
+                resp_body,
+                cache_status,
+                label=endpoint,
+            )
         except Exception:
             pass
 
