@@ -2,7 +2,6 @@ from .helpers import new_llm_client
 from unillm.clients.provider_preprocessing import (
     apply_provider_preprocessing,
     _has_prefilled_assistant_before_real,
-    _convert_prefill_to_system_message,
 )
 
 
@@ -101,26 +100,46 @@ class TestPreprocessingPrefillRefinement:
     def test_has_prefilled_assistant_before_real_detection(self):
         """Test the detection function for prefilled messages before real ones."""
         # Only prefilled
-        assert _has_prefilled_assistant_before_real([
-            {"role": "assistant", "content": "prefilled"},
-        ]) is True
+        assert (
+            _has_prefilled_assistant_before_real(
+                [
+                    {"role": "assistant", "content": "prefilled"},
+                ],
+            )
+            is True
+        )
 
         # Only real
-        assert _has_prefilled_assistant_before_real([
-            {"role": "assistant", "content": "real", "thinking_blocks": [{}]},
-        ]) is False
+        assert (
+            _has_prefilled_assistant_before_real(
+                [
+                    {"role": "assistant", "content": "real", "thinking_blocks": [{}]},
+                ],
+            )
+            is False
+        )
 
         # Prefilled before real
-        assert _has_prefilled_assistant_before_real([
-            {"role": "assistant", "content": "prefilled"},
-            {"role": "assistant", "content": "real", "thinking_blocks": [{}]},
-        ]) is True
+        assert (
+            _has_prefilled_assistant_before_real(
+                [
+                    {"role": "assistant", "content": "prefilled"},
+                    {"role": "assistant", "content": "real", "thinking_blocks": [{}]},
+                ],
+            )
+            is True
+        )
 
         # Real before prefilled (prefilled is AFTER real, so not "before real")
-        assert _has_prefilled_assistant_before_real([
-            {"role": "assistant", "content": "real", "thinking_blocks": [{}]},
-            {"role": "assistant", "content": "prefilled"},
-        ]) is False
+        assert (
+            _has_prefilled_assistant_before_real(
+                [
+                    {"role": "assistant", "content": "real", "thinking_blocks": [{}]},
+                    {"role": "assistant", "content": "prefilled"},
+                ],
+            )
+            is False
+        )
 
 
 def test_prefill_assistant_message(model):

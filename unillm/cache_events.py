@@ -45,7 +45,8 @@ class CacheEvent(TypedDict):
 
 # Context variable for the current event sink (thread-safe and async-safe)
 _cache_event_sink: ContextVar[List[CacheEvent] | None] = ContextVar(
-    "cache_event_sink", default=None
+    "cache_event_sink",
+    default=None,
 )
 
 
