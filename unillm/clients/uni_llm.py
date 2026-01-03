@@ -688,6 +688,7 @@ class _UniClient(_Client, abc.ABC):
                 ] + messages
             if user_message is not None:
                 messages += [{"role": "user", "content": user_message}]
+            self._messages = list(messages)  # Copy to avoid mutating user's list
         else:
             messages = list()
             if system_message is not None:
