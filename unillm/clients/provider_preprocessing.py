@@ -12,6 +12,11 @@ CONCURRENT_USER_MESSAGES_EXPLANATION = (
     "way instead."
 )
 
+THINKING_PREFILL_EXPLANATION = (
+    "The conversation history up to this point is expressed below in JSON format "
+    "due to schema constraints:\n"
+)
+
 
 def _move_system_messages_to_front(
     messages: List[Dict[str, Any]],
@@ -20,6 +25,48 @@ def _move_system_messages_to_front(
     system = [m for m in messages if m.get("role") == "system"]
     non_system = [m for m in messages if m.get("role") != "system"]
     return system + non_system
+
+
+def _has_prefilled_assistant(messages: List[Dict[str, Any]]) -> bool:
+    """Check if there are assistant messages without thinking_blocks (prefilled)."""
+    for msg in messages:
+        if msg.get("role") == "assistant" and not msg.get("thinking_blocks"):
+            return True
+    return False
+
+
+def _convert_prefill_to_system_message(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Convert prefilled messages to a system message for Anthropic thinking mode.
+
+    When thinking mode is enabled, Anthropic requires assistant messages to have
+    thinking_blocks. For prefilled/synthetic assistant messages, we convert the
+    conversation to a JSON representation in the system message.
+    """
+    # Extract existing system message content
+    system_content = ""
+    non_system = []
+    for msg in messages:
+        if msg.get("role") == "system":
+            if system_content:
+                system_content += "\n\n"
+            system_content += msg.get("content", "")
+        else:
+            non_system.append(msg)
+
+    # Serialize the conversation as JSON
+    if system_content:
+        system_content += "\n\n"
+    system_content += THINKING_PREFILL_EXPLANATION
+    system_content += json.dumps(non_system, indent=4)
+
+    # Return: system message + continuation user message
+    return [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": "[continue]"},
+    ]
 
 
 def _combine_adjacent_user_messages(
@@ -99,6 +146,12 @@ def apply_provider_preprocessing(
                 "content": CONCURRENT_USER_MESSAGES_EXPLANATION,
             },
         )
+
+    # Handle prefilled assistant messages with thinking mode enabled.
+    # Anthropic requires thinking_blocks on assistant messages when thinking is enabled.
+    # Convert prefilled messages to JSON in system message to work around this.
+    if kw.get("reasoning_effort") is not None and _has_prefilled_assistant(messages):
+        messages = _convert_prefill_to_system_message(messages)
 
     kw["messages"] = messages
 
