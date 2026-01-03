@@ -9,8 +9,6 @@ These tests verify that:
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -533,7 +531,11 @@ class TestTraceHierarchy:
 
         # Verify hierarchy
         # All same trace
-        assert unity_s.context.trace_id == unillm_s.context.trace_id == unify_s.context.trace_id
+        assert (
+            unity_s.context.trace_id
+            == unillm_s.context.trace_id
+            == unify_s.context.trace_id
+        )
 
         # unillm is child of unity
         assert unillm_s.parent.span_id == unity_s.context.span_id

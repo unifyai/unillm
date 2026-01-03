@@ -193,7 +193,9 @@ def apply_provider_preprocessing(
     # Handle prefilled assistant messages with thinking mode enabled.
     # Anthropic requires thinking_blocks on assistant messages when thinking is enabled.
     # Convert only prefilled messages (before first real response) to system message.
-    if kw.get("reasoning_effort") is not None and _has_prefilled_assistant_before_real(messages):
+    if kw.get("reasoning_effort") is not None and _has_prefilled_assistant_before_real(
+        messages,
+    ):
         messages = _convert_prefill_to_system_message(messages)
 
     kw["messages"] = messages
