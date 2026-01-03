@@ -323,29 +323,54 @@ class TestCacheEventEmissionIntegration:
     """Integration tests for cache events with real LLM calls."""
 
     def test_real_sync_client_emits_cache_event(self):
-        client = unillm.Unify("gpt-4o@openai", cache=True)
+        from ..settings import SETTINGS
+
+        client = unillm.Unify(
+            SETTINGS.UNILLM_DEFAULT_MODEL,
+            cache=SETTINGS.UNILLM_CACHE,
+            cache_backend=SETTINGS.UNILLM_CACHE_BACKEND,
+        )
         with capture_cache_events() as events:
-            client.generate(messages=[{"role": "user", "content": "Say 'hello'"}])
+            client.generate(
+                messages=[{"role": "user", "content": "Say 'hello' [cache_events]"}],
+            )
 
         assert len(events) == 1
         assert events[0]["cache_status"] in ("hit", "miss")
-        assert events[0]["endpoint"] == "gpt-4o@openai"
+        assert events[0]["endpoint"] == SETTINGS.UNILLM_DEFAULT_MODEL
 
     @pytest.mark.asyncio
     async def test_real_async_client_emits_cache_event(self):
-        client = unillm.AsyncUnify("gpt-4o@openai", cache=True)
+        from ..settings import SETTINGS
+
+        client = unillm.AsyncUnify(
+            SETTINGS.UNILLM_DEFAULT_MODEL,
+            cache=SETTINGS.UNILLM_CACHE,
+            cache_backend=SETTINGS.UNILLM_CACHE_BACKEND,
+        )
         async with acapture_cache_events() as events:
-            await client.generate(messages=[{"role": "user", "content": "Say 'hello'"}])
+            await client.generate(
+                messages=[{"role": "user", "content": "Say 'hello' [cache_events]"}],
+            )
 
         assert len(events) == 1
         assert events[0]["cache_status"] in ("hit", "miss")
-        assert events[0]["endpoint"] == "gpt-4o@openai"
+        assert events[0]["endpoint"] == SETTINGS.UNILLM_DEFAULT_MODEL
 
     def test_cache_miss_then_hit_sequence(self):
         """Second identical request should be a cache hit."""
-        client = unillm.Unify("gpt-4o@openai", cache=True)
+        from ..settings import SETTINGS
+
+        client = unillm.Unify(
+            SETTINGS.UNILLM_DEFAULT_MODEL,
+            cache=SETTINGS.UNILLM_CACHE,
+            cache_backend=SETTINGS.UNILLM_CACHE_BACKEND,
+        )
         messages = [
-            {"role": "user", "content": "What is 7+7? Reply with just the number."},
+            {
+                "role": "user",
+                "content": "What is 7+7? Reply with just the number. [cache_events]",
+            },
         ]
 
         # First request
@@ -367,9 +392,18 @@ class TestCacheEventEmissionIntegration:
     @pytest.mark.asyncio
     async def test_async_cache_miss_then_hit_sequence(self):
         """Async: Second identical request should be a cache hit."""
-        client = unillm.AsyncUnify("gpt-4o@openai", cache=True)
+        from ..settings import SETTINGS
+
+        client = unillm.AsyncUnify(
+            SETTINGS.UNILLM_DEFAULT_MODEL,
+            cache=SETTINGS.UNILLM_CACHE,
+            cache_backend=SETTINGS.UNILLM_CACHE_BACKEND,
+        )
         messages = [
-            {"role": "user", "content": "What is 8+8? Reply with just the number."},
+            {
+                "role": "user",
+                "content": "What is 8+8? Reply with just the number. [cache_events]",
+            },
         ]
 
         # First request
