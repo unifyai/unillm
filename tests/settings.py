@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     # Cache
     UNILLM_CACHE: bool = False
+    UNILLM_CACHE_BACKEND: str = "local_separate"
     UNILLM_SERVICE_TIER: str = "priority"
     UNILLM_DEFAULT_MODEL: str = "gpt-5.2@openai"
 
