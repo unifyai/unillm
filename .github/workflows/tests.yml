@@ -21,7 +21,7 @@ jobs:
     - name: Update unify branch to match current branch
       run: |
         TARGET_BRANCH=${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        sed -i "s|branch = \"main\"|branch = \"$TARGET_BRANCH\"|" pyproject.toml
+        sed -i "s|branch = \"staging\"|branch = \"$TARGET_BRANCH\"|" pyproject.toml
     - name: Install deps
       run: uv sync --group dev
     - name: Run black check
@@ -119,7 +119,7 @@ jobs:
     - name: Update unify branch to match current branch
       run: |
         TARGET_BRANCH=${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        sed -i "s|branch = \"main\"|branch = \"$TARGET_BRANCH\"|" pyproject.toml
+        sed -i "s|branch = \"staging\"|branch = \"$TARGET_BRANCH\"|" pyproject.toml
 
     - name: Install unillm deps
       run: uv sync --group dev
