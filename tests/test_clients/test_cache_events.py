@@ -198,12 +198,16 @@ class TestCacheEventEmissionMocked:
         ):
             with patch("unillm.clients.uni_llm._get_cache", return_value=None):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
-                    with patch("unillm.clients.uni_llm.unify.log_query"):
-                        client = unillm.Unify("gpt-4@openai", cache=True)
-                        with capture_cache_events() as events:
-                            client.generate(
-                                messages=[{"role": "user", "content": "Hi"}],
-                            )
+                    with patch(
+                        "unillm.clients.uni_llm.compute_cost_from_response",
+                        return_value=0.001,
+                    ):
+                        with patch("unillm.clients.uni_llm.unify.deduct_credits"):
+                            client = unillm.Unify("gpt-4@openai", cache=True)
+                            with capture_cache_events() as events:
+                                client.generate(
+                                    messages=[{"role": "user", "content": "Hi"}],
+                                )
 
         assert len(events) == 1
         assert events[0]["cache_status"] == "miss"
@@ -242,12 +246,16 @@ class TestCacheEventEmissionMocked:
         ):
             with patch("unillm.clients.uni_llm._get_cache", return_value=None):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
-                    with patch("unillm.clients.uni_llm.asyncio.create_task"):
-                        client = unillm.AsyncUnify("gpt-4@openai", cache=True)
-                        async with acapture_cache_events() as events:
-                            await client.generate(
-                                messages=[{"role": "user", "content": "Hi"}],
-                            )
+                    with patch(
+                        "unillm.clients.uni_llm.compute_cost_from_response",
+                        return_value=0.001,
+                    ):
+                        with patch("unillm.clients.uni_llm.asyncio.create_task"):
+                            client = unillm.AsyncUnify("gpt-4@openai", cache=True)
+                            async with acapture_cache_events() as events:
+                                await client.generate(
+                                    messages=[{"role": "user", "content": "Hi"}],
+                                )
 
         assert len(events) == 1
         assert events[0]["cache_status"] == "miss"
@@ -283,16 +291,20 @@ class TestCacheEventEmissionMocked:
         ):
             with patch("unillm.clients.uni_llm._get_cache", return_value=None):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
-                    with patch("unillm.clients.uni_llm.unify.log_query"):
-                        client = unillm.Unify(
-                            "gpt-4@openai",
-                            cache=True,
-                            temperature=0.5,
-                        )
-                        with capture_cache_events() as events:
-                            client.generate(
-                                messages=[{"role": "user", "content": "Test"}],
+                    with patch(
+                        "unillm.clients.uni_llm.compute_cost_from_response",
+                        return_value=0.001,
+                    ):
+                        with patch("unillm.clients.uni_llm.unify.deduct_credits"):
+                            client = unillm.Unify(
+                                "gpt-4@openai",
+                                cache=True,
+                                temperature=0.5,
                             )
+                            with capture_cache_events() as events:
+                                client.generate(
+                                    messages=[{"role": "user", "content": "Test"}],
+                                )
 
         event = events[0]
         assert "model" in event["request_kw"]
@@ -312,12 +324,16 @@ class TestCacheEventEmissionMocked:
         ):
             with patch("unillm.clients.uni_llm._get_cache", return_value=None):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
-                    with patch("unillm.clients.uni_llm.unify.log_query"):
-                        client = unillm.Unify("gpt-4@openai", cache=True)
-                        # No capture context - should not error
-                        response = client.generate(
-                            messages=[{"role": "user", "content": "Hi"}],
-                        )
+                    with patch(
+                        "unillm.clients.uni_llm.compute_cost_from_response",
+                        return_value=0.001,
+                    ):
+                        with patch("unillm.clients.uni_llm.unify.deduct_credits"):
+                            client = unillm.Unify("gpt-4@openai", cache=True)
+                            # No capture context - should not error
+                            response = client.generate(
+                                messages=[{"role": "user", "content": "Hi"}],
+                            )
 
         # Just verify it completed without error
         assert response is not None
