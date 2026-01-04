@@ -21,6 +21,7 @@ import litellm
 # local
 import unify
 from openai._types import Headers
+from ..costs import compute_cost_from_response
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionMessageParam,
@@ -32,9 +33,9 @@ from pydantic import BaseModel
 from typing_extensions import Self
 from .provider_preprocessing import apply_provider_preprocessing
 
-from unify.utils._caching import _get_cache, _write_to_cache, is_caching_enabled
+from ..caching import _get_cache, _write_to_cache, is_caching_enabled
 from ..cache_events import _emit_cache_event
-from ..helpers import _default
+from ..helpers import _default, get_seed
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
 from ..logger import (
@@ -721,7 +722,7 @@ class _UniClient(_Client, abc.ABC):
             n=_default(n, self._n),
             presence_penalty=_default(presence_penalty, self._presence_penalty),
             response_format=_default(response_format, self._response_format),
-            seed=_default(_default(seed, self._seed), unify.get_seed()),
+            seed=_default(_default(seed, self._seed), get_seed()),
             stop=_default(stop, self._stop),
             stream=_default(stream, self._stream),
             stream_options=_default(stream_options, self._stream_options),
@@ -773,9 +774,17 @@ class Unify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
+
+        # Track usage from the stream for cost deduction
+        usage_info = None
+
         try:
             chat_completion = litellm.completion(shared_session=SHARED_SESSION, **kw)
             for chunk in chat_completion:
+                # Capture usage if present in the chunk (final chunk with include_usage)
+                if hasattr(chunk, "usage") and chunk.usage is not None:
+                    usage_info = chunk.usage
+
                 if return_full_completion:
                     content = chunk
                 else:
@@ -784,6 +793,17 @@ class Unify(_UniClient):
                     yield content
         except litellm.exceptions.APIError as e:
             raise Exception(e.message)
+        finally:
+            # Deduct credits based on usage after streaming completes
+            if usage_info is not None:
+                prompt_tokens = getattr(usage_info, "prompt_tokens", 0) or 0
+                completion_tokens = getattr(usage_info, "completion_tokens", 0) or 0
+                if prompt_tokens > 0 or completion_tokens > 0:
+                    from ..costs import compute_cost
+
+                    cost = compute_cost(endpoint, prompt_tokens, completion_tokens)
+                    if cost > 0:
+                        unify.deduct_credits(cost)
 
     def _generate_non_stream(
         self,
@@ -878,18 +898,9 @@ class Unify(_UniClient):
                     backend=cache_backend,
                 )
         if not in_cache:
-            response_format = kw.get("response_format")
-            if response_format is not None:
-                try:
-                    kw["response_format"] = response_format.model_json_schema()
-                except:
-                    pass
-            unify.log_query(
-                endpoint=f"{endpoint}",
-                query_body=kw,
-                response_body=chat_completion.model_dump(warnings=False),
-                consume_credits=True,
-            )
+            cost = compute_cost_from_response(endpoint, chat_completion)
+            if cost is not None and cost > 0:
+                unify.deduct_credits(cost)
         if return_full_completion:
             return chat_completion
         content = chat_completion.choices[0].message.content
@@ -1000,18 +1011,40 @@ class AsyncUnify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
+
+        # Track usage from the stream for cost deduction
+        usage_info = None
+
         try:
             async_stream = await litellm.acompletion(
                 shared_session=SHARED_SESSION,
                 **kw,
             )
             async for chunk in async_stream:  # type: ignore[union-attr]
+                # Capture usage if present in the chunk (final chunk with include_usage)
+                if hasattr(chunk, "usage") and chunk.usage is not None:
+                    usage_info = chunk.usage
+
                 if return_full_completion:
                     yield chunk
                 else:
                     yield chunk.choices[0].delta.content or ""
         except litellm.exceptions.APIError as e:
             raise Exception(e.message)
+        finally:
+            # Deduct credits based on usage after streaming completes
+            if usage_info is not None:
+                prompt_tokens = getattr(usage_info, "prompt_tokens", 0) or 0
+                completion_tokens = getattr(usage_info, "completion_tokens", 0) or 0
+                if prompt_tokens > 0 or completion_tokens > 0:
+                    from ..costs import compute_cost
+
+                    cost = compute_cost(endpoint, prompt_tokens, completion_tokens)
+                    if cost > 0:
+                        asyncio.create_task(
+                            asyncio.to_thread(unify.deduct_credits, cost),
+                            name="unillm_deduct_credits_stream",
+                        )
 
     async def _generate_non_stream(
         self,
@@ -1106,22 +1139,12 @@ class AsyncUnify(_UniClient):
                     backend=cache_backend,
                 )
         if not in_cache:
-            response_format = kw.get("response_format")
-            if response_format is not None:
-                try:
-                    kw["response_format"] = response_format.model_json_schema()
-                except:
-                    pass
-            asyncio.create_task(
-                asyncio.to_thread(
-                    unify.log_query,
-                    endpoint=f"{endpoint}",
-                    query_body=kw,
-                    response_body=chat_completion.model_dump(warnings=False),
-                    consume_credits=True,
-                ),
-                name="unillm_log_query",
-            )
+            cost = compute_cost_from_response(endpoint, chat_completion)
+            if cost is not None and cost > 0:
+                asyncio.create_task(
+                    asyncio.to_thread(unify.deduct_credits, cost),
+                    name="unillm_deduct_credits",
+                )
         if return_full_completion:
             return chat_completion
         content = chat_completion.choices[0].message.content

@@ -10,7 +10,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.12'
     - name: Configure git for private repos
       run: |
         git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
@@ -18,6 +18,10 @@ jobs:
         GH_TOKEN: ${{ secrets.UNIFY_CLONE_TOKEN }}
     - name: Install uv
       uses: astral-sh/setup-uv@v4
+    - name: Update unify branch to match current branch
+      run: |
+        TARGET_BRANCH=${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        sed -i "s|branch = \"staging\"|branch = \"$TARGET_BRANCH\"|" pyproject.toml
     - name: Install deps
       run: uv sync --group dev
     - name: Run black check
@@ -47,7 +51,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: unifyai/orchestra
-        ref: staging
+        ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
         path: orchestra
         token: ${{ secrets.ORCHESTRA_CLONE_TOKEN }}
         fetch-depth: 1
@@ -64,7 +68,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.12'
 
     - name: Configure git for private repos
       run: |
@@ -111,6 +115,11 @@ jobs:
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
+
+    - name: Update unify branch to match current branch
+      run: |
+        TARGET_BRANCH=${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        sed -i "s|branch = \"staging\"|branch = \"$TARGET_BRANCH\"|" pyproject.toml
 
     - name: Install unillm deps
       run: uv sync --group dev
