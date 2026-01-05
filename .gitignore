@@ -11,3 +11,7 @@ __pycache__/
 
 .vscode/
 unillm.egg-info/
+
+# Ignore log contents but keep the README
+logs/*
+!logs/README.md
