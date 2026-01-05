@@ -1,4 +1,6 @@
 # Load .env BEFORE importing unillm/unify - settings are evaluated at import time
+import os
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -11,6 +13,58 @@ import atexit
 import warnings
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+
+# ---------------------------------------------------------------------------
+# Log directory configuration
+# ---------------------------------------------------------------------------
+
+
+def _get_log_subdir() -> str:
+    """Generate a datetime-prefixed subdirectory name for log isolation."""
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    # Use a simple identifier (PID) for this repo
+    return f"{timestamp}_unillmpid{os.getpid()}"
+
+
+def pytest_sessionstart(session):
+    """Configure all file-based logging directories for trace correlation."""
+    root_path = Path(session.config.rootpath)
+    subdir = _get_log_subdir()
+
+    # Unillm LLM I/O file logging (raw request/response traces)
+    unillm_log_dir = root_path / "logs" / "unillm" / subdir
+    unillm_log_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from unillm import configure_log_dir as configure_unillm_log_dir
+
+        configure_unillm_log_dir(str(unillm_log_dir))
+    except ImportError:
+        os.environ["UNILLM_LOG_DIR"] = str(unillm_log_dir)
+
+    # Unify SDK file logging (HTTP request traces)
+    unify_log_dir = root_path / "logs" / "unify" / subdir
+    unify_log_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from unify.utils.http import configure_log_dir as configure_unify_log_dir
+
+        configure_unify_log_dir(str(unify_log_dir))
+    except ImportError:
+        os.environ["UNIFY_LOG_DIR"] = str(unify_log_dir)
+
+    # Orchestra log directory (for local orchestra server, if running)
+    # This sets the env var so that if a local orchestra is started, it knows where to log
+    orchestra_log_dir = root_path / "logs" / "orchestra" / subdir
+    orchestra_log_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["ORCHESTRA_LOG_DIR"] = str(orchestra_log_dir)
+
+    # Cross-repo OTEL traces (all services write to the same directory)
+    otel_log_dir = root_path / "logs" / "all" / subdir
+    otel_log_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["UNILLM_OTEL_LOG_DIR"] = str(otel_log_dir)
+    os.environ["UNIFY_OTEL_LOG_DIR"] = str(otel_log_dir)
+    os.environ["ORCHESTRA_OTEL_LOG_DIR"] = str(otel_log_dir)
+
 
 # TODO: Won't be needed once LiteLLM handles their type annotations correctly...
 
