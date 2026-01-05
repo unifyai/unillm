@@ -6,12 +6,29 @@ import litellm
 import unify
 
 
+def _normalize_model_name(model: str) -> str:
+    """
+    Normalize model name for LiteLLM lookup.
+
+    Strips the @provider suffix used by unify/unillm (e.g., 'gpt-5.2@openai' -> 'gpt-5.2').
+
+    Args:
+        model: The model identifier, possibly with @provider suffix.
+
+    Returns:
+        The model name without provider suffix.
+    """
+    if "@" in model:
+        return model.split("@")[0]
+    return model
+
+
 def _get_model_info(model: str) -> dict:
     """
     Get model pricing info from LiteLLM.
 
     Args:
-        model: The model identifier.
+        model: The model identifier (may include @provider suffix which will be stripped).
 
     Returns:
         The model info dict from LiteLLM.
@@ -19,8 +36,9 @@ def _get_model_info(model: str) -> dict:
     Raises:
         ValueError: If the model is not found in LiteLLM's pricing data.
     """
+    normalized = _normalize_model_name(model)
     try:
-        return litellm.get_model_info(model)
+        return litellm.get_model_info(normalized)
     except Exception as e:
         raise ValueError(f"Could not find pricing info for model '{model}': {e}")
 

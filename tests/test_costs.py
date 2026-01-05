@@ -5,11 +5,115 @@ from unittest.mock import patch
 import pytest
 
 from unillm.costs import (
+    _normalize_model_name,
     compute_cost,
     compute_cost_from_response,
     compute_full_cost_from_usage,
     deduct_credits_for_usage,
 )
+
+
+class TestNormalizeModelName:
+    """Tests for the _normalize_model_name function."""
+
+    def test_strips_provider_suffix(self):
+        """Test that @provider suffix is stripped."""
+        assert _normalize_model_name("gpt-5.2@openai") == "gpt-5.2"
+        assert _normalize_model_name("gpt-4o@openai") == "gpt-4o"
+        assert (
+            _normalize_model_name("claude-3-5-sonnet@anthropic") == "claude-3-5-sonnet"
+        )
+
+    def test_preserves_model_without_suffix(self):
+        """Test that models without @provider are unchanged."""
+        assert _normalize_model_name("gpt-5.2") == "gpt-5.2"
+        assert _normalize_model_name("gpt-4o") == "gpt-4o"
+        assert (
+            _normalize_model_name("claude-3-5-sonnet-20241022")
+            == "claude-3-5-sonnet-20241022"
+        )
+
+    def test_handles_empty_string(self):
+        """Test that empty string is handled."""
+        assert _normalize_model_name("") == ""
+
+    def test_handles_multiple_at_symbols(self):
+        """Test that only first @ is used for splitting."""
+        # Edge case: if model name somehow has multiple @, only split on first
+        assert _normalize_model_name("model@provider@extra") == "model"
+
+
+class TestComputeCostWithProviderSuffix:
+    """Tests for cost computation with @provider suffix (unify/unillm format)."""
+
+    def test_compute_cost_with_openai_suffix(self):
+        """Test that gpt-5.2@openai works like gpt-5.2."""
+        cost_with_suffix = compute_cost(
+            "gpt-5.2@openai",
+            prompt_tokens=1000,
+            completion_tokens=500,
+        )
+        cost_without_suffix = compute_cost(
+            "gpt-5.2",
+            prompt_tokens=1000,
+            completion_tokens=500,
+        )
+
+        assert cost_with_suffix == cost_without_suffix
+        assert cost_with_suffix > 0
+
+    def test_compute_cost_with_anthropic_suffix(self):
+        """Test that claude model with @anthropic suffix works."""
+        cost_with_suffix = compute_cost(
+            "claude-3-5-sonnet-20241022@anthropic",
+            prompt_tokens=1000,
+            completion_tokens=500,
+        )
+        cost_without_suffix = compute_cost(
+            "claude-3-5-sonnet-20241022",
+            prompt_tokens=1000,
+            completion_tokens=500,
+        )
+
+        assert cost_with_suffix == cost_without_suffix
+        assert cost_with_suffix > 0
+
+    def test_compute_cost_from_response_with_suffix(self):
+        """Test compute_cost_from_response with @provider suffix."""
+        response = {
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+            },
+        }
+        cost = compute_cost_from_response("gpt-5.2@openai", response)
+
+        assert cost is not None
+        assert cost > 0
+
+    def test_compute_full_cost_with_suffix(self):
+        """Test compute_full_cost_from_usage with @provider suffix."""
+        usage = {
+            "prompt_tokens": 1000,
+            "completion_tokens": 500,
+        }
+        cost = compute_full_cost_from_usage("gpt-5.2@openai", usage)
+
+        assert cost > 0
+
+    @patch("unillm.costs.unify.deduct_credits")
+    def test_deduct_credits_with_suffix(self, mock_deduct):
+        """Test deduct_credits_for_usage with @provider suffix."""
+        response = {
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+            },
+        }
+        cost = deduct_credits_for_usage("gpt-5.2@openai", response)
+
+        assert cost > 0
+        mock_deduct.assert_called_once()
 
 
 class TestComputeCost:
@@ -116,6 +220,29 @@ class TestComputeCostFromResponse:
             },
         }
         cost = compute_cost_from_response("gpt-4o", response)
+        assert cost is None
+
+    def test_from_response_unknown_model_returns_none(self):
+        """Test that unknown models return None instead of raising."""
+        response = {
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+            },
+        }
+        # Should return None, not raise ValueError
+        cost = compute_cost_from_response("non-existent-model-xyz-12345", response)
+        assert cost is None
+
+    def test_from_response_unknown_model_with_suffix_returns_none(self):
+        """Test that unknown models with @provider suffix return None."""
+        response = {
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+            },
+        }
+        cost = compute_cost_from_response("non-existent-model@openai", response)
         assert cost is None
 
 
