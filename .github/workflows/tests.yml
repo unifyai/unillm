@@ -18,10 +18,15 @@ jobs:
         GH_TOKEN: ${{ secrets.UNIFY_CLONE_TOKEN }}
     - name: Install uv
       uses: astral-sh/setup-uv@v4
-    - name: Update unify branch to match current branch
+    - name: Configure unify for CI
       run: |
+        # Local development uses editable local path (../unify).
+        # CI doesn't have the sibling directory, so replace with git URL.
+        # Branch selection: main→main, all others→staging
         TARGET_BRANCH=${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        sed -i "s|branch = \"staging\"|branch = \"$TARGET_BRANCH\"|" pyproject.toml
+        echo "Configuring unify to use $TARGET_BRANCH branch"
+        sed -i 's|unifyai = { path = "../unify", editable = true }|unifyai = { git = "https://github.com/unifyai/unify.git", branch = "'"$TARGET_BRANCH"'" }|' pyproject.toml
+        uv lock --upgrade-package unifyai
     - name: Install deps
       run: uv sync --group dev
     - name: Run black check
@@ -116,10 +121,15 @@ jobs:
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
 
-    - name: Update unify branch to match current branch
+    - name: Configure unify for CI
       run: |
+        # Local development uses editable local path (../unify).
+        # CI doesn't have the sibling directory, so replace with git URL.
+        # Branch selection: main→main, all others→staging
         TARGET_BRANCH=${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        sed -i "s|branch = \"staging\"|branch = \"$TARGET_BRANCH\"|" pyproject.toml
+        echo "Configuring unify to use $TARGET_BRANCH branch"
+        sed -i 's|unifyai = { path = "../unify", editable = true }|unifyai = { git = "https://github.com/unifyai/unify.git", branch = "'"$TARGET_BRANCH"'" }|' pyproject.toml
+        uv lock --upgrade-package unifyai
 
     - name: Install unillm deps
       run: uv sync --group dev
