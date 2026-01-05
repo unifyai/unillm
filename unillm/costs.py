@@ -91,7 +91,11 @@ def compute_cost_from_response(
     if prompt_tokens == 0 and completion_tokens == 0:
         return None
 
-    return compute_cost(model, prompt_tokens, completion_tokens)
+    try:
+        return compute_cost(model, prompt_tokens, completion_tokens)
+    except ValueError:
+        # Model not in LiteLLM's pricing database - skip cost tracking
+        return None
 
 
 def _extract_usage_from_response(response: Union[dict, object]) -> Optional[dict]:
