@@ -7,28 +7,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+
+    - name: Clone unify repo
+      uses: actions/checkout@v4
+      with:
+        repository: unifyai/unify
+        ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        path: unify
+        token: ${{ secrets.UNIFY_CLONE_TOKEN }}
+        fetch-depth: 1
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
-    - name: Configure git for private repos
-      run: |
-        git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-      env:
-        GH_TOKEN: ${{ secrets.UNIFY_CLONE_TOKEN }}
+
     - name: Install uv
       uses: astral-sh/setup-uv@v4
-    - name: Configure unify for CI
+
+    - name: Configure unify path for CI
       run: |
-        # Local development uses editable local path (../unify).
-        # CI doesn't have the sibling directory, so replace with git URL.
-        # Branch selection: main→main, all others→staging
-        TARGET_BRANCH=${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        echo "Configuring unify to use $TARGET_BRANCH branch"
-        sed -i 's|unifyai = { path = "../unify", editable = true }|unifyai = { git = "https://github.com/unifyai/unify.git", branch = "'"$TARGET_BRANCH"'" }|' pyproject.toml
-        uv lock --upgrade-package unifyai
+        # Local development uses sibling path (../unify).
+        # CI clones unify into the workspace, so update path accordingly.
+        sed -i 's|path = "../unify"|path = "./unify"|g' pyproject.toml
+
     - name: Install deps
       run: uv sync --group dev
+
     - name: Run black check
       run: uv run black --check .
 
@@ -61,6 +66,15 @@ jobs:
         token: ${{ secrets.ORCHESTRA_CLONE_TOKEN }}
         fetch-depth: 1
 
+    - name: Clone unify repo
+      uses: actions/checkout@v4
+      with:
+        repository: unifyai/unify
+        ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        path: unify
+        token: ${{ secrets.UNIFY_CLONE_TOKEN }}
+        fetch-depth: 1
+
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
       with:
@@ -74,13 +88,6 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
-
-    - name: Configure git for private repos
-      run: |
-        # Allow uv/pip to clone private GitHub repos
-        git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-      env:
-        GH_TOKEN: ${{ secrets.UNIFY_CLONE_TOKEN }}
 
     - name: Install uv
       uses: astral-sh/setup-uv@v4
@@ -121,15 +128,11 @@ jobs:
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
 
-    - name: Configure unify for CI
+    - name: Configure unify path for CI
       run: |
-        # Local development uses editable local path (../unify).
-        # CI doesn't have the sibling directory, so replace with git URL.
-        # Branch selection: main→main, all others→staging
-        TARGET_BRANCH=${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        echo "Configuring unify to use $TARGET_BRANCH branch"
-        sed -i 's|unifyai = { path = "../unify", editable = true }|unifyai = { git = "https://github.com/unifyai/unify.git", branch = "'"$TARGET_BRANCH"'" }|' pyproject.toml
-        uv lock --upgrade-package unifyai
+        # Local development uses sibling path (../unify).
+        # CI clones unify into the workspace, so update path accordingly.
+        sed -i 's|path = "../unify"|path = "./unify"|g' pyproject.toml
 
     - name: Install unillm deps
       run: uv sync --group dev
