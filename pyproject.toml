@@ -29,4 +29,4 @@ dev = [
 include = ["unillm", "unillm.*"]
 
 [tool.uv.sources]
-unifyai = { git = "https://github.com/unifyai/unify.git", branch = "staging"}
+unifyai = { path = "../unify", editable = true }
