@@ -9,6 +9,9 @@ from dotenv import load_dotenv
 _repo_root = Path(__file__).resolve().parent.parent
 load_dotenv(_repo_root / ".env", override=True)
 
+# Set UNILLM_CACHE_DIR to repo root so cache location is consistent regardless of cwd
+os.environ.setdefault("UNILLM_CACHE_DIR", str(_repo_root))
+
 import atexit
 import warnings
 
