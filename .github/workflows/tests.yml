@@ -43,7 +43,6 @@ jobs:
     env:
       # Local orchestra configuration
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
-      ORCHESTRA_PREFIX: unillm
       # Logging directories (matches unity/unify repo structure)
       LOGS_DIR: ${{ github.workspace }}/logs
       # Orchestra GCP configuration (set by google-github-actions/auth step)
@@ -235,10 +234,10 @@ jobs:
       if: failure()
       run: |
         echo "=== Orchestra Server Logs ==="
-        if [ -f /tmp/unillm-local-server.log ]; then
-          cat /tmp/unillm-local-server.log
+        if [ -f /tmp/orchestra-local-server.log ]; then
+          cat /tmp/orchestra-local-server.log
           # Copy server log to logs/orchestra/ for artifact upload
-          cp /tmp/unillm-local-server.log "$LOGS_DIR/orchestra/server.log"
+          cp /tmp/orchestra-local-server.log "$LOGS_DIR/orchestra/server.log"
         else
           echo "No orchestra log file found"
         fi
@@ -260,8 +259,8 @@ jobs:
         echo "=== Preparing logs for upload ==="
 
         # Copy orchestra server log (always, not just on failure)
-        if [ -f /tmp/unillm-local-server.log ]; then
-          cp /tmp/unillm-local-server.log "$LOGS_DIR/orchestra/server.log"
+        if [ -f /tmp/orchestra-local-server.log ]; then
+          cp /tmp/orchestra-local-server.log "$LOGS_DIR/orchestra/server.log"
           echo "✓ Copied orchestra server log"
         fi
 
