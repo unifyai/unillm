@@ -208,6 +208,43 @@ def test_append_response_and_finalize(tmp_path, monkeypatch):
     assert "[cache: hit]" in content
 
 
+def test_append_response_and_finalize_with_none_response(tmp_path, monkeypatch):
+    """Finalization works when response is None (exception during LLM call)."""
+    from unillm import settings
+    from unillm import logger
+
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(logger, "_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+    # Write pending request
+    pending_path = write_request_pending({"model": "gpt-4"}, label="test")
+    assert pending_path is not None
+
+    # Finalize with None response (simulates exception during LLM call)
+    append_response_and_finalize(
+        pending_path,
+        None,
+        "error",
+        label="test",
+    )
+
+    # Pending file should be gone
+    assert not pending_path.exists()
+
+    # Should have an _error file now
+    error_files = list(tmp_path.glob("*_error.txt"))
+    assert len(error_files) == 1
+
+    content = error_files[0].read_text()
+    assert "LLM request ➡️" in content
+    assert "LLM response ⬅️" in content
+    assert "[cache: error]" in content
+
+
 def test_write_request_without_label(tmp_path, monkeypatch):
     """Writing without a label omits the label prefix."""
     from unillm import settings
