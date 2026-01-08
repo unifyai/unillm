@@ -832,58 +832,63 @@ class Unify(_UniClient):
         else:
             read_closest = False
 
-        # Wrap in OTel span
-        with llm_span(endpoint, self._model, provider=self._provider) as span:
-            chat_completion = None
-            in_cache = False
-            if cache in [True, "both", "read", "read-only"]:
-                chat_completion = _get_cache(
-                    fn_name="chat.completions.create",
-                    kw=kw,
-                    raise_on_empty=cache == "read-only",
-                    read_closest=read_closest,
-                    delete_closest=read_closest,
-                    backend=cache_backend,
-                )
-                in_cache = True if chat_completion is not None else False
-            if chat_completion is None:
-                try:
-                    chat_completion = litellm.completion(
-                        shared_session=SHARED_SESSION,
-                        **kw,
-                    )
-                except litellm.exceptions.APIError as e:
-                    raise Exception(e.message)
+        # Initialize before try block so finally can access them
+        chat_completion = None
+        cache_status = "error"
+        in_cache = False
 
-            # Determine cache status and emit event
-            cache_status = "hit" if in_cache else "miss"
-
-            # Set span response attributes
-            set_span_response(span, cache_status, chat_completion)
-
-            _emit_cache_event(
-                {
-                    "cache_status": cache_status,
-                    "endpoint": endpoint,
-                    "request_kw": kw,
-                },
-            )
-
-        # Finalize log file with response and cache status
+        # Wrap in OTel span with try/finally to guarantee log finalization
         try:
-            resp_body = (
-                chat_completion.model_dump(warnings=False)
-                if hasattr(chat_completion, "model_dump")
-                else chat_completion
-            )
-            append_response_and_finalize(
-                pending_path,
-                resp_body,
-                cache_status,
-                label=endpoint,
-            )
-        except Exception:
-            pass
+            with llm_span(endpoint, self._model, provider=self._provider) as span:
+                if cache in [True, "both", "read", "read-only"]:
+                    chat_completion = _get_cache(
+                        fn_name="chat.completions.create",
+                        kw=kw,
+                        raise_on_empty=cache == "read-only",
+                        read_closest=read_closest,
+                        delete_closest=read_closest,
+                        backend=cache_backend,
+                    )
+                    in_cache = True if chat_completion is not None else False
+                if chat_completion is None:
+                    try:
+                        chat_completion = litellm.completion(
+                            shared_session=SHARED_SESSION,
+                            **kw,
+                        )
+                    except litellm.exceptions.APIError as e:
+                        raise Exception(e.message)
+
+                # Determine cache status and emit event
+                cache_status = "hit" if in_cache else "miss"
+
+                # Set span response attributes
+                set_span_response(span, cache_status, chat_completion)
+
+                _emit_cache_event(
+                    {
+                        "cache_status": cache_status,
+                        "endpoint": endpoint,
+                        "request_kw": kw,
+                    },
+                )
+        finally:
+            # Finalize log file with response and cache status (always runs)
+            try:
+                resp_body = (
+                    chat_completion.model_dump(warnings=False)
+                    if chat_completion is not None
+                    and hasattr(chat_completion, "model_dump")
+                    else chat_completion
+                )
+                append_response_and_finalize(
+                    pending_path,
+                    resp_body,
+                    cache_status,
+                    label=endpoint,
+                )
+            except Exception:
+                pass
 
         if (chat_completion is not None or read_closest) and cache in [
             True,
@@ -1073,58 +1078,63 @@ class AsyncUnify(_UniClient):
         else:
             read_closest = False
 
-        # Wrap in OTel span
-        with llm_span(endpoint, self._model, provider=self._provider) as span:
-            chat_completion = None
-            in_cache = False
-            if cache in [True, "both", "read", "read-only"]:
-                chat_completion = _get_cache(
-                    fn_name="chat.completions.create",
-                    kw=kw,
-                    raise_on_empty=cache == "read-only",
-                    read_closest=read_closest,
-                    delete_closest=read_closest,
-                    backend=cache_backend,
-                )
-                in_cache = True if chat_completion is not None else False
-            if chat_completion is None:
-                try:
-                    chat_completion = await litellm.acompletion(
-                        shared_session=SHARED_SESSION,
-                        **kw,
-                    )
-                except litellm.exceptions.APIError as e:
-                    raise Exception(e.message)
+        # Initialize before try block so finally can access them
+        chat_completion = None
+        cache_status = "error"
+        in_cache = False
 
-            # Determine cache status and emit event
-            cache_status = "hit" if in_cache else "miss"
-
-            # Set span response attributes
-            set_span_response(span, cache_status, chat_completion)
-
-            _emit_cache_event(
-                {
-                    "cache_status": cache_status,
-                    "endpoint": endpoint,
-                    "request_kw": kw,
-                },
-            )
-
-        # Finalize log file with response and cache status
+        # Wrap in OTel span with try/finally to guarantee log finalization
         try:
-            resp_body = (
-                chat_completion.model_dump(warnings=False)
-                if hasattr(chat_completion, "model_dump")
-                else chat_completion
-            )
-            append_response_and_finalize(
-                pending_path,
-                resp_body,
-                cache_status,
-                label=endpoint,
-            )
-        except Exception:
-            pass
+            with llm_span(endpoint, self._model, provider=self._provider) as span:
+                if cache in [True, "both", "read", "read-only"]:
+                    chat_completion = _get_cache(
+                        fn_name="chat.completions.create",
+                        kw=kw,
+                        raise_on_empty=cache == "read-only",
+                        read_closest=read_closest,
+                        delete_closest=read_closest,
+                        backend=cache_backend,
+                    )
+                    in_cache = True if chat_completion is not None else False
+                if chat_completion is None:
+                    try:
+                        chat_completion = await litellm.acompletion(
+                            shared_session=SHARED_SESSION,
+                            **kw,
+                        )
+                    except litellm.exceptions.APIError as e:
+                        raise Exception(e.message)
+
+                # Determine cache status and emit event
+                cache_status = "hit" if in_cache else "miss"
+
+                # Set span response attributes
+                set_span_response(span, cache_status, chat_completion)
+
+                _emit_cache_event(
+                    {
+                        "cache_status": cache_status,
+                        "endpoint": endpoint,
+                        "request_kw": kw,
+                    },
+                )
+        finally:
+            # Finalize log file with response and cache status (always runs)
+            try:
+                resp_body = (
+                    chat_completion.model_dump(warnings=False)
+                    if chat_completion is not None
+                    and hasattr(chat_completion, "model_dump")
+                    else chat_completion
+                )
+                append_response_and_finalize(
+                    pending_path,
+                    resp_body,
+                    cache_status,
+                    label=endpoint,
+                )
+            except Exception:
+                pass
 
         if (chat_completion is not None or read_closest) and cache in [
             True,
