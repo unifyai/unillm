@@ -16,9 +16,13 @@ def _load_ndjson_cache(filehandler: TextIO):
                 "value": item["value"],
                 "res_types": item["res_types"],
             }
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            # JSONDecodeError: malformed JSON
+            # KeyError: missing required fields (key, value, res_types)
+            # TypeError: item is not subscriptable (e.g., JSON array instead of object)
             warnings.warn(
-                f"Cache file {filehandler.name} contains invalid cache entry, skipping line {line_number}: {line[:40]}...",
+                f"Cache file {filehandler.name} contains invalid cache entry, "
+                f"skipping line {line_number}: {line[:40]}... ({type(e).__name__}: {e})",
             )
 
     return cache

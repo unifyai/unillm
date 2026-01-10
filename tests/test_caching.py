@@ -273,3 +273,69 @@ class TestIsCachingEnabled:
     def test_caching_disabled_by_default(self):
         # The global CACHING_ENABLED is False by default
         assert is_caching_enabled() is False
+
+
+class TestMalformedCacheEntries:
+    """Tests for handling malformed cache entries gracefully."""
+
+    def test_missing_key_field_is_skipped(self):
+        """Cache entry with missing 'key' field should be skipped, not crash."""
+        with _CacheHandler() as handler:
+            # Manually write a malformed entry (valid JSON but missing "key")
+            with open(handler.test_path, "w") as f:
+                f.write('{"value": "test", "res_types": null}\n')
+
+            # This should NOT raise - malformed entries should be skipped
+            LocalCache.initialize_cache()
+
+            # Cache should be empty (malformed entry skipped)
+            assert LocalCache.list_keys() == []
+
+    def test_missing_value_field_is_skipped(self):
+        """Cache entry with missing 'value' field should be skipped."""
+        with _CacheHandler() as handler:
+            with open(handler.test_path, "w") as f:
+                f.write('{"key": "test_key", "res_types": null}\n')
+
+            LocalCache.initialize_cache()
+            assert not LocalCache.has_key("test_key")
+
+    def test_missing_res_types_field_is_skipped(self):
+        """Cache entry with missing 'res_types' field should be skipped."""
+        with _CacheHandler() as handler:
+            with open(handler.test_path, "w") as f:
+                f.write('{"key": "test_key", "value": "test"}\n')
+
+            LocalCache.initialize_cache()
+            assert not LocalCache.has_key("test_key")
+
+    def test_valid_entries_after_malformed_are_loaded(self):
+        """Valid entries after a malformed one should still be loaded."""
+        with _CacheHandler() as handler:
+            with open(handler.test_path, "w") as f:
+                # Malformed entry (missing key)
+                f.write('{"value": "bad", "res_types": null}\n')
+                # Valid entry
+                f.write(
+                    '{"key": "good_key", "value": "\\"good_value\\"", "res_types": null}\n',
+                )
+
+            LocalCache.initialize_cache()
+
+            # Malformed entry skipped, valid entry loaded
+            assert LocalCache.has_key("good_key")
+            value, _ = LocalCache.retrieve_entry("good_key")
+            assert value == "good_value"
+
+    def test_get_cache_handles_malformed_gracefully(self):
+        """_get_cache should not crash when cache has malformed entries."""
+        with _CacheHandler() as handler:
+            with open(handler.test_path, "w") as f:
+                f.write('{"value": "bad"}\n')  # Missing key and res_types
+
+            # Should return None (cache miss), not raise an exception
+            result = _get_cache(
+                fn_name="test_fn",
+                kw={"arg": "value"},
+            )
+            assert result is None
