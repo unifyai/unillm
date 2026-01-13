@@ -13,7 +13,7 @@ Usage:
     from unillm import set_llm_event_hook, LLMEvent
 
     def my_hook(event: LLMEvent) -> None:
-        print(f"LLM call to {event.endpoint}: {event.cache_status}")
+        print(f"LLM call: {event.request.get('model')}")
 
     set_llm_event_hook(my_hook)
 
@@ -34,30 +34,21 @@ from typing import Any, Callable, Generator, AsyncGenerator, Optional
 class LLMEvent:
     """Event emitted after LLM requests complete.
 
-    A single event is emitted per LLM call, containing both request and response
-    information. This provides a complete picture of the LLM interaction.
+    A single event is emitted per LLM call, containing the full request and
+    response data. This mirrors what gets logged to logs/unillm/ files.
 
     Attributes:
-        endpoint: The endpoint string (e.g., "gpt-4o@openai").
-        model: The model name extracted from the endpoint.
-        provider: The provider name extracted from the endpoint.
-        request_kw: The full request kwargs sent to the LLM (model, messages, tools, etc.).
-        response: The ChatCompletion response object (None for streaming).
-        cache_status: "hit", "miss", or "error" (None for streaming).
-        error: The exception if the LLM call failed.
-        stream: Whether this was a streaming request.
+        request: The full request dict sent to the LLM (model, messages, tools, etc.).
+        response: The full response dict from the LLM (serialized ChatCompletion).
+            None for streaming requests or errors.
         provider_cost: The raw cost charged by the LLM provider (in USD).
+            None for cache hits, streaming, or errors.
         billed_cost: The cost charged to the user (provider_cost × margin, in USD).
+            None for cache hits, streaming, or errors.
     """
 
-    endpoint: str
-    model: str
-    provider: str
-    request_kw: dict[str, Any]
-    response: Optional[Any] = None
-    cache_status: Optional[str] = None
-    error: Optional[Exception] = None
-    stream: bool = False
+    request: dict[str, Any]
+    response: Optional[dict[str, Any]] = None
     provider_cost: Optional[float] = None
     billed_cost: Optional[float] = None
 
@@ -73,8 +64,7 @@ def set_llm_event_hook(hook: Callable[[LLMEvent], None] | None) -> None:
     """Set a hook to receive LLM completion events.
 
     The hook will be called once per LLM call, after the request completes.
-    The event contains both request information (messages, tools, etc.) and
-    response information (cache status, response object, errors, etc.).
+    The event contains the full request and response dicts, plus cost info.
 
     The hook is stored in a ContextVar, so it's automatically inherited by
     child tasks/threads but isolated from unrelated code paths.
@@ -84,7 +74,8 @@ def set_llm_event_hook(hook: Callable[[LLMEvent], None] | None) -> None:
 
     Example:
         def my_logger(event: LLMEvent) -> None:
-            print(f"LLM call to {event.endpoint}: {event.cache_status}")
+            model = event.request.get("model", "unknown")
+            print(f"LLM call to {model}, cost: ${event.billed_cost or 0:.4f}")
 
         set_llm_event_hook(my_logger)
     """
