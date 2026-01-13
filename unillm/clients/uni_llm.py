@@ -776,18 +776,6 @@ class Unify(_UniClient):
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
 
-        # Emit LLM request event (before streaming starts)
-        _emit_llm_event(
-            LLMEvent(
-                phase="request",
-                endpoint=endpoint,
-                model=self._model,
-                provider=self._provider,
-                request_kw=kw,
-                stream=True,
-            ),
-        )
-
         # Track usage from the stream for cost deduction
         usage_info = None
         llm_error: Exception | None = None
@@ -823,10 +811,9 @@ class Unify(_UniClient):
                     if cost > 0:
                         unify.deduct_credits(cost)
 
-            # Emit LLM response event (after streaming completes)
+            # Emit LLM event (after streaming completes)
             _emit_llm_event(
                 LLMEvent(
-                    phase="response",
                     endpoint=endpoint,
                     model=self._model,
                     provider=self._provider,
@@ -858,18 +845,6 @@ class Unify(_UniClient):
 
         # Write request to log file (before LLM call) so we don't lose it if call hangs
         pending_path = write_request_pending(kw, label=endpoint)
-
-        # Emit LLM request event (before LLM call)
-        _emit_llm_event(
-            LLMEvent(
-                phase="request",
-                endpoint=endpoint,
-                model=self._model,
-                provider=self._provider,
-                request_kw=kw,
-                stream=False,
-            ),
-        )
 
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
@@ -942,10 +917,9 @@ class Unify(_UniClient):
             except Exception:
                 pass
 
-            # Emit LLM response event (after LLM call, always runs)
+            # Emit LLM event (after LLM call, always runs)
             _emit_llm_event(
                 LLMEvent(
-                    phase="response",
                     endpoint=endpoint,
                     model=self._model,
                     provider=self._provider,
@@ -1084,18 +1058,6 @@ class AsyncUnify(_UniClient):
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
 
-        # Emit LLM request event (before streaming starts)
-        _emit_llm_event(
-            LLMEvent(
-                phase="request",
-                endpoint=endpoint,
-                model=self._model,
-                provider=self._provider,
-                request_kw=kw,
-                stream=True,
-            ),
-        )
-
         # Track usage from the stream for cost deduction
         usage_info = None
         llm_error: Exception | None = None
@@ -1135,10 +1097,9 @@ class AsyncUnify(_UniClient):
                             name="unillm_deduct_credits_stream",
                         )
 
-            # Emit LLM response event (after streaming completes)
+            # Emit LLM event (after streaming completes)
             _emit_llm_event(
                 LLMEvent(
-                    phase="response",
                     endpoint=endpoint,
                     model=self._model,
                     provider=self._provider,
@@ -1170,18 +1131,6 @@ class AsyncUnify(_UniClient):
 
         # Write request to log file (before LLM call) so we don't lose it if call hangs
         pending_path = write_request_pending(kw, label=endpoint)
-
-        # Emit LLM request event (before LLM call)
-        _emit_llm_event(
-            LLMEvent(
-                phase="request",
-                endpoint=endpoint,
-                model=self._model,
-                provider=self._provider,
-                request_kw=kw,
-                stream=False,
-            ),
-        )
 
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
@@ -1254,10 +1203,9 @@ class AsyncUnify(_UniClient):
             except Exception:
                 pass
 
-            # Emit LLM response event (after LLM call, always runs)
+            # Emit LLM event (after LLM call, always runs)
             _emit_llm_event(
                 LLMEvent(
-                    phase="response",
                     endpoint=endpoint,
                     model=self._model,
                     provider=self._provider,
