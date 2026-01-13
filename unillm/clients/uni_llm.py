@@ -35,6 +35,7 @@ from .provider_preprocessing import apply_provider_preprocessing
 
 from ..caching import _get_cache, _write_to_cache, is_caching_enabled
 from ..cache_events import _emit_cache_event
+from ..llm_events import _emit_llm_event, LLMEvent
 from ..helpers import _default, get_seed
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
@@ -775,8 +776,21 @@ class Unify(_UniClient):
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
 
+        # Emit LLM request event (before streaming starts)
+        _emit_llm_event(
+            LLMEvent(
+                phase="request",
+                endpoint=endpoint,
+                model=self._model,
+                provider=self._provider,
+                request_kw=kw,
+                stream=True,
+            ),
+        )
+
         # Track usage from the stream for cost deduction
         usage_info = None
+        llm_error: Exception | None = None
 
         try:
             chat_completion = litellm.completion(shared_session=SHARED_SESSION, **kw)
@@ -792,7 +806,11 @@ class Unify(_UniClient):
                 if content is not None:
                     yield content
         except litellm.exceptions.APIError as e:
-            raise Exception(e.message)
+            llm_error = Exception(e.message)
+            raise llm_error
+        except Exception as e:
+            llm_error = e
+            raise
         finally:
             # Deduct credits based on usage after streaming completes
             if usage_info is not None:
@@ -804,6 +822,21 @@ class Unify(_UniClient):
                     cost = compute_cost(endpoint, prompt_tokens, completion_tokens)
                     if cost > 0:
                         unify.deduct_credits(cost)
+
+            # Emit LLM response event (after streaming completes)
+            _emit_llm_event(
+                LLMEvent(
+                    phase="response",
+                    endpoint=endpoint,
+                    model=self._model,
+                    provider=self._provider,
+                    request_kw=kw,
+                    response=None,  # No single response object for streams
+                    cache_status=None,  # Streaming doesn't use cache
+                    error=llm_error,
+                    stream=True,
+                ),
+            )
 
     def _generate_non_stream(
         self,
@@ -826,6 +859,18 @@ class Unify(_UniClient):
         # Write request to log file (before LLM call) so we don't lose it if call hangs
         pending_path = write_request_pending(kw, label=endpoint)
 
+        # Emit LLM request event (before LLM call)
+        _emit_llm_event(
+            LLMEvent(
+                phase="request",
+                endpoint=endpoint,
+                model=self._model,
+                provider=self._provider,
+                request_kw=kw,
+                stream=False,
+            ),
+        )
+
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
             read_closest = True
@@ -836,6 +881,7 @@ class Unify(_UniClient):
         chat_completion = None
         cache_status = "error"
         in_cache = False
+        llm_error: Exception | None = None
 
         # Wrap in OTel span with try/finally to guarantee log finalization
         try:
@@ -857,7 +903,8 @@ class Unify(_UniClient):
                             **kw,
                         )
                     except litellm.exceptions.APIError as e:
-                        raise Exception(e.message)
+                        llm_error = Exception(e.message)
+                        raise llm_error
 
                 # Determine cache status and emit event
                 cache_status = "hit" if in_cache else "miss"
@@ -872,6 +919,11 @@ class Unify(_UniClient):
                         "request_kw": kw,
                     },
                 )
+        except Exception as e:
+            # Capture the error for the response event
+            if llm_error is None:
+                llm_error = e
+            raise
         finally:
             # Finalize log file with response and cache status (always runs)
             try:
@@ -889,6 +941,21 @@ class Unify(_UniClient):
                 )
             except Exception:
                 pass
+
+            # Emit LLM response event (after LLM call, always runs)
+            _emit_llm_event(
+                LLMEvent(
+                    phase="response",
+                    endpoint=endpoint,
+                    model=self._model,
+                    provider=self._provider,
+                    request_kw=kw,
+                    response=chat_completion,
+                    cache_status=cache_status,
+                    error=llm_error,
+                    stream=False,
+                ),
+            )
 
         if (chat_completion is not None or read_closest) and cache in [
             True,
@@ -1017,8 +1084,21 @@ class AsyncUnify(_UniClient):
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
 
+        # Emit LLM request event (before streaming starts)
+        _emit_llm_event(
+            LLMEvent(
+                phase="request",
+                endpoint=endpoint,
+                model=self._model,
+                provider=self._provider,
+                request_kw=kw,
+                stream=True,
+            ),
+        )
+
         # Track usage from the stream for cost deduction
         usage_info = None
+        llm_error: Exception | None = None
 
         try:
             async_stream = await litellm.acompletion(
@@ -1035,7 +1115,11 @@ class AsyncUnify(_UniClient):
                 else:
                     yield chunk.choices[0].delta.content or ""
         except litellm.exceptions.APIError as e:
-            raise Exception(e.message)
+            llm_error = Exception(e.message)
+            raise llm_error
+        except Exception as e:
+            llm_error = e
+            raise
         finally:
             # Deduct credits based on usage after streaming completes
             if usage_info is not None:
@@ -1050,6 +1134,21 @@ class AsyncUnify(_UniClient):
                             asyncio.to_thread(unify.deduct_credits, cost),
                             name="unillm_deduct_credits_stream",
                         )
+
+            # Emit LLM response event (after streaming completes)
+            _emit_llm_event(
+                LLMEvent(
+                    phase="response",
+                    endpoint=endpoint,
+                    model=self._model,
+                    provider=self._provider,
+                    request_kw=kw,
+                    response=None,  # No single response object for streams
+                    cache_status=None,  # Streaming doesn't use cache
+                    error=llm_error,
+                    stream=True,
+                ),
+            )
 
     async def _generate_non_stream(
         self,
@@ -1072,6 +1171,18 @@ class AsyncUnify(_UniClient):
         # Write request to log file (before LLM call) so we don't lose it if call hangs
         pending_path = write_request_pending(kw, label=endpoint)
 
+        # Emit LLM request event (before LLM call)
+        _emit_llm_event(
+            LLMEvent(
+                phase="request",
+                endpoint=endpoint,
+                model=self._model,
+                provider=self._provider,
+                request_kw=kw,
+                stream=False,
+            ),
+        )
+
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
             read_closest = True
@@ -1082,6 +1193,7 @@ class AsyncUnify(_UniClient):
         chat_completion = None
         cache_status = "error"
         in_cache = False
+        llm_error: Exception | None = None
 
         # Wrap in OTel span with try/finally to guarantee log finalization
         try:
@@ -1103,7 +1215,8 @@ class AsyncUnify(_UniClient):
                             **kw,
                         )
                     except litellm.exceptions.APIError as e:
-                        raise Exception(e.message)
+                        llm_error = Exception(e.message)
+                        raise llm_error
 
                 # Determine cache status and emit event
                 cache_status = "hit" if in_cache else "miss"
@@ -1118,6 +1231,11 @@ class AsyncUnify(_UniClient):
                         "request_kw": kw,
                     },
                 )
+        except Exception as e:
+            # Capture the error for the response event
+            if llm_error is None:
+                llm_error = e
+            raise
         finally:
             # Finalize log file with response and cache status (always runs)
             try:
@@ -1135,6 +1253,21 @@ class AsyncUnify(_UniClient):
                 )
             except Exception:
                 pass
+
+            # Emit LLM response event (after LLM call, always runs)
+            _emit_llm_event(
+                LLMEvent(
+                    phase="response",
+                    endpoint=endpoint,
+                    model=self._model,
+                    provider=self._provider,
+                    request_kw=kw,
+                    response=chat_completion,
+                    cache_status=cache_status,
+                    error=llm_error,
+                    stream=False,
+                ),
+            )
 
         if (chat_completion is not None or read_closest) and cache in [
             True,
