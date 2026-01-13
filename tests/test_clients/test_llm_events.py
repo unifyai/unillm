@@ -70,6 +70,53 @@ class TestLLMEventDataclass:
         )
         assert event.stream is True
 
+    def test_event_with_costs(self):
+        event = LLMEvent(
+            endpoint="gpt-4@openai",
+            model="gpt-4",
+            provider="openai",
+            request_kw={},
+            provider_cost=0.001,
+            billed_cost=0.005,
+        )
+        assert event.provider_cost == 0.001
+        assert event.billed_cost == 0.005
+
+    def test_event_costs_default_to_none(self):
+        event = LLMEvent(
+            endpoint="gpt-4@openai",
+            model="gpt-4",
+            provider="openai",
+            request_kw={},
+        )
+        assert event.provider_cost is None
+        assert event.billed_cost is None
+
+
+class TestCostMargin:
+    """Tests for the cost margin configuration."""
+
+    def test_default_margin_is_5(self):
+        from unillm.costs import get_cost_margin
+
+        # Clear env var if set
+        with patch.dict(os.environ, {}, clear=True):
+            # Remove UNILLM_COST_MARGIN if it exists
+            os.environ.pop("UNILLM_COST_MARGIN", None)
+            assert get_cost_margin() == 5.0
+
+    def test_margin_from_env_var(self):
+        from unillm.costs import get_cost_margin
+
+        with patch.dict(os.environ, {"UNILLM_COST_MARGIN": "3.5"}):
+            assert get_cost_margin() == 3.5
+
+    def test_invalid_margin_falls_back_to_default(self):
+        from unillm.costs import get_cost_margin
+
+        with patch.dict(os.environ, {"UNILLM_COST_MARGIN": "not_a_number"}):
+            assert get_cost_margin() == 5.0
+
 
 class TestSetLLMEventHook:
     """Tests for set_llm_event_hook and get_llm_event_hook."""
@@ -593,6 +640,202 @@ class TestStreamingLLMEvents:
 
         event = captured[0]
         assert event.stream is True
+
+
+class TestLLMEventCosts:
+    """Tests for cost information in LLM events."""
+
+    @pytest.fixture(autouse=True)
+    def mock_logging(self):
+        """Mock logging functions to prevent log file creation."""
+        with patch("unillm.clients.uni_llm.write_request_pending", return_value=None):
+            with patch("unillm.clients.uni_llm.append_response_and_finalize"):
+                yield
+
+    @pytest.fixture(autouse=True)
+    def clear_hook(self):
+        """Clear hook before and after each test."""
+        set_llm_event_hook(None)
+        yield
+        set_llm_event_hook(None)
+
+    def test_sync_client_includes_costs_in_event(self):
+        """Non-streaming events should include provider_cost and billed_cost."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Hello"
+        mock_response.model_dump.return_value = {}
+        mock_response.usage = MagicMock()
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+
+        captured = []
+
+        def capture_hook(event: LLMEvent) -> None:
+            captured.append(event)
+
+        with patch(
+            "unillm.clients.uni_llm.litellm.completion",
+            return_value=mock_response,
+        ):
+            with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+                with patch("unillm.clients.uni_llm._write_to_cache"):
+                    with patch(
+                        "unillm.clients.uni_llm.compute_cost_from_response",
+                        return_value=0.001,
+                    ):
+                        with patch("unillm.clients.uni_llm.unify.deduct_credits"):
+                            client = unillm.Unify("gpt-4@openai", cache=True)
+                            with llm_event_hook_scope(capture_hook):
+                                client.generate(
+                                    messages=[{"role": "user", "content": "Hi"}],
+                                )
+
+        assert len(captured) == 1
+        event = captured[0]
+
+        # Provider cost should be set
+        assert event.provider_cost == 0.001
+
+        # Billed cost should be provider_cost * margin (default 5)
+        assert event.billed_cost == 0.005
+
+    def test_costs_with_custom_margin(self):
+        """Billed cost should respect UNILLM_COST_MARGIN env var."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Hello"
+        mock_response.model_dump.return_value = {}
+        mock_response.usage = MagicMock()
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+
+        captured = []
+
+        def capture_hook(event: LLMEvent) -> None:
+            captured.append(event)
+
+        with patch.dict(os.environ, {"UNILLM_COST_MARGIN": "3"}):
+            with patch(
+                "unillm.clients.uni_llm.litellm.completion",
+                return_value=mock_response,
+            ):
+                with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+                    with patch("unillm.clients.uni_llm._write_to_cache"):
+                        with patch(
+                            "unillm.clients.uni_llm.compute_cost_from_response",
+                            return_value=0.001,
+                        ):
+                            with patch("unillm.clients.uni_llm.unify.deduct_credits"):
+                                client = unillm.Unify("gpt-4@openai", cache=True)
+                                with llm_event_hook_scope(capture_hook):
+                                    client.generate(
+                                        messages=[{"role": "user", "content": "Hi"}],
+                                    )
+
+        assert len(captured) == 1
+        event = captured[0]
+
+        # Provider cost should be set
+        assert event.provider_cost == 0.001
+
+        # Billed cost should be provider_cost * 3 (custom margin)
+        assert event.billed_cost == 0.003
+
+    def test_cache_hit_has_no_costs(self):
+        """Cache hits should not incur costs."""
+        mock_cached_response = MagicMock()
+        mock_cached_response.choices = [MagicMock()]
+        mock_cached_response.choices[0].message.content = "Cached response"
+
+        captured = []
+
+        def capture_hook(event: LLMEvent) -> None:
+            captured.append(event)
+
+        with patch(
+            "unillm.clients.uni_llm._get_cache",
+            return_value=mock_cached_response,
+        ):
+            with patch("unillm.clients.uni_llm._write_to_cache"):
+                client = unillm.Unify("gpt-4@openai", cache=True)
+                with llm_event_hook_scope(capture_hook):
+                    client.generate(messages=[{"role": "user", "content": "Hi"}])
+
+        assert len(captured) == 1
+        event = captured[0]
+        assert event.cache_status == "hit"
+        # Cache hits are free - no costs
+        assert event.provider_cost is None
+        assert event.billed_cost is None
+
+    def test_error_has_no_costs(self):
+        """Errors should not have costs (nothing was computed)."""
+        captured = []
+
+        def capture_hook(event: LLMEvent) -> None:
+            captured.append(event)
+
+        with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+            with patch(
+                "unillm.clients.uni_llm.litellm.completion",
+                side_effect=Exception("API Error"),
+            ):
+                client = unillm.Unify("gpt-4@openai", cache=True)
+                with llm_event_hook_scope(capture_hook):
+                    with pytest.raises(Exception, match="API Error"):
+                        client.generate(
+                            messages=[{"role": "user", "content": "Hi"}],
+                        )
+
+        assert len(captured) == 1
+        event = captured[0]
+        assert event.error is not None
+        # No costs on error
+        assert event.provider_cost is None
+        assert event.billed_cost is None
+
+    @pytest.mark.asyncio
+    async def test_async_client_includes_costs_in_event(self):
+        """Async non-streaming events should include costs."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Hello"
+        mock_response.model_dump.return_value = {}
+        mock_response.usage = MagicMock()
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+
+        async def mock_acompletion(*args, **kwargs):
+            return mock_response
+
+        captured = []
+
+        def capture_hook(event: LLMEvent) -> None:
+            captured.append(event)
+
+        with patch(
+            "unillm.clients.uni_llm.litellm.acompletion",
+            side_effect=mock_acompletion,
+        ):
+            with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+                with patch("unillm.clients.uni_llm._write_to_cache"):
+                    with patch(
+                        "unillm.clients.uni_llm.compute_cost_from_response",
+                        return_value=0.002,
+                    ):
+                        with patch("unillm.clients.uni_llm.asyncio.create_task"):
+                            client = unillm.AsyncUnify("gpt-4@openai", cache=True)
+                            async with allm_event_hook_scope(capture_hook):
+                                await client.generate(
+                                    messages=[{"role": "user", "content": "Hi"}],
+                                )
+
+        assert len(captured) == 1
+        event = captured[0]
+
+        assert event.provider_cost == 0.002
+        assert event.billed_cost == 0.01  # 0.002 * 5
 
 
 # Integration tests - only run when API keys are available

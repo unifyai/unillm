@@ -1,9 +1,32 @@
 """Cost computation using LiteLLM's pricing data."""
 
+import os
 from typing import Optional, Union
 
 import litellm
 import unify
+
+# Cost margin multiplier for billing users. Defaults to 5x to cover costs + profit.
+# Configurable via UNILLM_COST_MARGIN environment variable.
+_DEFAULT_COST_MARGIN = 5.0
+
+
+def get_cost_margin() -> float:
+    """Get the cost margin multiplier from environment or use default.
+
+    The margin is applied to provider costs to determine what users are billed.
+    Configurable via the UNILLM_COST_MARGIN environment variable.
+
+    Returns:
+        The cost margin multiplier (default: 5.0).
+    """
+    margin_str = os.environ.get("UNILLM_COST_MARGIN")
+    if margin_str is not None:
+        try:
+            return float(margin_str)
+        except ValueError:
+            pass
+    return _DEFAULT_COST_MARGIN
 
 
 def _normalize_model_name(model: str) -> str:
