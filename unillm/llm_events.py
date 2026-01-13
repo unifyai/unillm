@@ -46,6 +46,8 @@ class LLMEvent:
         cache_status: "hit", "miss", or "error" (None for streaming).
         error: The exception if the LLM call failed.
         stream: Whether this was a streaming request.
+        provider_cost: The raw cost charged by the LLM provider (in USD).
+        billed_cost: The cost charged to the user (provider_cost × margin, in USD).
     """
 
     endpoint: str
@@ -56,6 +58,8 @@ class LLMEvent:
     cache_status: Optional[str] = None
     error: Optional[Exception] = None
     stream: bool = False
+    provider_cost: Optional[float] = None
+    billed_cost: Optional[float] = None
 
 
 # Context variable for the current event hook (thread-safe and async-safe)

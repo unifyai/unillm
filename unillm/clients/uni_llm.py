@@ -779,6 +779,8 @@ class Unify(_UniClient):
         # Track usage from the stream for cost deduction
         usage_info = None
         llm_error: Exception | None = None
+        provider_cost: float | None = None
+        billed_cost: float | None = None
 
         try:
             chat_completion = litellm.completion(shared_session=SHARED_SESSION, **kw)
@@ -805,11 +807,16 @@ class Unify(_UniClient):
                 prompt_tokens = getattr(usage_info, "prompt_tokens", 0) or 0
                 completion_tokens = getattr(usage_info, "completion_tokens", 0) or 0
                 if prompt_tokens > 0 or completion_tokens > 0:
-                    from ..costs import compute_cost
+                    from ..costs import compute_cost, get_cost_margin
 
-                    cost = compute_cost(endpoint, prompt_tokens, completion_tokens)
-                    if cost > 0:
-                        unify.deduct_credits(cost)
+                    provider_cost = compute_cost(
+                        endpoint,
+                        prompt_tokens,
+                        completion_tokens,
+                    )
+                    if provider_cost > 0:
+                        billed_cost = provider_cost * get_cost_margin()
+                        unify.deduct_credits(billed_cost)
 
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
@@ -822,6 +829,8 @@ class Unify(_UniClient):
                     cache_status=None,  # Streaming doesn't use cache
                     error=llm_error,
                     stream=True,
+                    provider_cost=provider_cost,
+                    billed_cost=billed_cost,
                 ),
             )
 
@@ -857,6 +866,8 @@ class Unify(_UniClient):
         cache_status = "error"
         in_cache = False
         llm_error: Exception | None = None
+        provider_cost: float | None = None
+        billed_cost: float | None = None
 
         # Wrap in OTel span with try/finally to guarantee log finalization
         try:
@@ -917,6 +928,14 @@ class Unify(_UniClient):
             except Exception:
                 pass
 
+            # Compute costs for event (only for cache misses - cache hits are free)
+            if not in_cache and chat_completion is not None:
+                from ..costs import get_cost_margin
+
+                provider_cost = compute_cost_from_response(endpoint, chat_completion)
+                if provider_cost is not None and provider_cost > 0:
+                    billed_cost = provider_cost * get_cost_margin()
+
             # Emit LLM event (after LLM call, always runs)
             _emit_llm_event(
                 LLMEvent(
@@ -928,6 +947,8 @@ class Unify(_UniClient):
                     cache_status=cache_status,
                     error=llm_error,
                     stream=False,
+                    provider_cost=provider_cost,
+                    billed_cost=billed_cost,
                 ),
             )
 
@@ -943,10 +964,9 @@ class Unify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if not in_cache:
-            cost = compute_cost_from_response(endpoint, chat_completion)
-            if cost is not None and cost > 0:
-                unify.deduct_credits(cost)
+        # Deduct credits for cache misses (use already-computed billed_cost)
+        if billed_cost is not None and billed_cost > 0:
+            unify.deduct_credits(billed_cost)
         if return_full_completion:
             return chat_completion
         content = chat_completion.choices[0].message.content
@@ -1061,6 +1081,8 @@ class AsyncUnify(_UniClient):
         # Track usage from the stream for cost deduction
         usage_info = None
         llm_error: Exception | None = None
+        provider_cost: float | None = None
+        billed_cost: float | None = None
 
         try:
             async_stream = await litellm.acompletion(
@@ -1088,12 +1110,17 @@ class AsyncUnify(_UniClient):
                 prompt_tokens = getattr(usage_info, "prompt_tokens", 0) or 0
                 completion_tokens = getattr(usage_info, "completion_tokens", 0) or 0
                 if prompt_tokens > 0 or completion_tokens > 0:
-                    from ..costs import compute_cost
+                    from ..costs import compute_cost, get_cost_margin
 
-                    cost = compute_cost(endpoint, prompt_tokens, completion_tokens)
-                    if cost > 0:
+                    provider_cost = compute_cost(
+                        endpoint,
+                        prompt_tokens,
+                        completion_tokens,
+                    )
+                    if provider_cost > 0:
+                        billed_cost = provider_cost * get_cost_margin()
                         asyncio.create_task(
-                            asyncio.to_thread(unify.deduct_credits, cost),
+                            asyncio.to_thread(unify.deduct_credits, billed_cost),
                             name="unillm_deduct_credits_stream",
                         )
 
@@ -1108,6 +1135,8 @@ class AsyncUnify(_UniClient):
                     cache_status=None,  # Streaming doesn't use cache
                     error=llm_error,
                     stream=True,
+                    provider_cost=provider_cost,
+                    billed_cost=billed_cost,
                 ),
             )
 
@@ -1143,6 +1172,8 @@ class AsyncUnify(_UniClient):
         cache_status = "error"
         in_cache = False
         llm_error: Exception | None = None
+        provider_cost: float | None = None
+        billed_cost: float | None = None
 
         # Wrap in OTel span with try/finally to guarantee log finalization
         try:
@@ -1203,6 +1234,14 @@ class AsyncUnify(_UniClient):
             except Exception:
                 pass
 
+            # Compute costs for event (only for cache misses - cache hits are free)
+            if not in_cache and chat_completion is not None:
+                from ..costs import get_cost_margin
+
+                provider_cost = compute_cost_from_response(endpoint, chat_completion)
+                if provider_cost is not None and provider_cost > 0:
+                    billed_cost = provider_cost * get_cost_margin()
+
             # Emit LLM event (after LLM call, always runs)
             _emit_llm_event(
                 LLMEvent(
@@ -1214,6 +1253,8 @@ class AsyncUnify(_UniClient):
                     cache_status=cache_status,
                     error=llm_error,
                     stream=False,
+                    provider_cost=provider_cost,
+                    billed_cost=billed_cost,
                 ),
             )
 
@@ -1229,13 +1270,12 @@ class AsyncUnify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if not in_cache:
-            cost = compute_cost_from_response(endpoint, chat_completion)
-            if cost is not None and cost > 0:
-                asyncio.create_task(
-                    asyncio.to_thread(unify.deduct_credits, cost),
-                    name="unillm_deduct_credits",
-                )
+        # Deduct credits for cache misses (use already-computed billed_cost)
+        if billed_cost is not None and billed_cost > 0:
+            asyncio.create_task(
+                asyncio.to_thread(unify.deduct_credits, billed_cost),
+                name="unillm_deduct_credits",
+            )
         if return_full_completion:
             return chat_completion
         content = chat_completion.choices[0].message.content
