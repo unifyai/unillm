@@ -2,7 +2,7 @@
 LLM Event Hooks
 ===============
 
-Provides a hook mechanism for external integrations to receive LLM request/response
+Provides a hook mechanism for external integrations to receive LLM completion
 events. This allows downstream consumers (like Unity's EventBus) to capture and
 log all LLM activity without coupling unillm to specific logging implementations.
 
@@ -13,13 +13,13 @@ Usage:
     from unillm import set_llm_event_hook, LLMEvent
 
     def my_hook(event: LLMEvent) -> None:
-        print(f"LLM {event.phase}: {event.endpoint}")
+        print(f"LLM call to {event.endpoint}: {event.cache_status}")
 
     set_llm_event_hook(my_hook)
 
-    # Now all LLM calls will trigger the hook
+    # Now all LLM calls will trigger the hook (once per call, after completion)
     client = AsyncUnify("gpt-4o@openai")
-    await client.generate(messages=[...])  # Hook called twice: request + response
+    await client.generate(messages=[...])  # Hook called once with full event
 """
 
 from __future__ import annotations
@@ -32,21 +32,22 @@ from typing import Any, Callable, Generator, AsyncGenerator, Optional
 
 @dataclass
 class LLMEvent:
-    """Event emitted before and after LLM requests.
+    """Event emitted after LLM requests complete.
+
+    A single event is emitted per LLM call, containing both request and response
+    information. This provides a complete picture of the LLM interaction.
 
     Attributes:
-        phase: Event phase - "request" (before call) or "response" (after call).
         endpoint: The endpoint string (e.g., "gpt-4o@openai").
         model: The model name extracted from the endpoint.
         provider: The provider name extracted from the endpoint.
         request_kw: The full request kwargs sent to the LLM (model, messages, tools, etc.).
-        response: The ChatCompletion response object (only on "response" phase).
-        cache_status: "hit" or "miss" (only on "response" phase for non-streaming).
-        error: The exception if the LLM call failed (only on "response" phase).
-        stream: Whether this is a streaming request.
+        response: The ChatCompletion response object (None for streaming).
+        cache_status: "hit", "miss", or "error" (None for streaming).
+        error: The exception if the LLM call failed.
+        stream: Whether this was a streaming request.
     """
 
-    phase: str  # "request" or "response"
     endpoint: str
     model: str
     provider: str
@@ -65,11 +66,11 @@ _llm_event_hook: ContextVar[Callable[[LLMEvent], None] | None] = ContextVar(
 
 
 def set_llm_event_hook(hook: Callable[[LLMEvent], None] | None) -> None:
-    """Set a hook to receive LLM request/response events.
+    """Set a hook to receive LLM completion events.
 
-    The hook will be called twice per LLM call:
-    1. Before the request (phase="request")
-    2. After the response (phase="response")
+    The hook will be called once per LLM call, after the request completes.
+    The event contains both request information (messages, tools, etc.) and
+    response information (cache status, response object, errors, etc.).
 
     The hook is stored in a ContextVar, so it's automatically inherited by
     child tasks/threads but isolated from unrelated code paths.
@@ -79,8 +80,7 @@ def set_llm_event_hook(hook: Callable[[LLMEvent], None] | None) -> None:
 
     Example:
         def my_logger(event: LLMEvent) -> None:
-            if event.phase == "response":
-                print(f"LLM call to {event.endpoint}: {event.cache_status}")
+            print(f"LLM call to {event.endpoint}: {event.cache_status}")
 
         set_llm_event_hook(my_logger)
     """

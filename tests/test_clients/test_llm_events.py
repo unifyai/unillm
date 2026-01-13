@@ -18,15 +18,13 @@ from unillm.llm_events import _emit_llm_event
 class TestLLMEventDataclass:
     """Tests for the LLMEvent dataclass."""
 
-    def test_create_request_event(self):
+    def test_create_event(self):
         event = LLMEvent(
-            phase="request",
             endpoint="gpt-4@openai",
             model="gpt-4",
             provider="openai",
             request_kw={"messages": [{"role": "user", "content": "Hi"}]},
         )
-        assert event.phase == "request"
         assert event.endpoint == "gpt-4@openai"
         assert event.model == "gpt-4"
         assert event.provider == "openai"
@@ -35,10 +33,9 @@ class TestLLMEventDataclass:
         assert event.error is None
         assert event.stream is False
 
-    def test_create_response_event(self):
+    def test_create_event_with_response(self):
         mock_response = MagicMock()
         event = LLMEvent(
-            phase="response",
             endpoint="claude-4@anthropic",
             model="claude-4",
             provider="anthropic",
@@ -47,14 +44,12 @@ class TestLLMEventDataclass:
             cache_status="miss",
             stream=False,
         )
-        assert event.phase == "response"
         assert event.response is mock_response
         assert event.cache_status == "miss"
 
     def test_create_error_event(self):
         error = Exception("API error")
         event = LLMEvent(
-            phase="response",
             endpoint="gpt-4@openai",
             model="gpt-4",
             provider="openai",
@@ -67,7 +62,6 @@ class TestLLMEventDataclass:
 
     def test_streaming_event(self):
         event = LLMEvent(
-            phase="request",
             endpoint="gpt-4@openai",
             model="gpt-4",
             provider="openai",
@@ -116,7 +110,6 @@ class TestEmitLLMEvent:
         set_llm_event_hook(capture_hook)
         try:
             event = LLMEvent(
-                phase="request",
                 endpoint="test@provider",
                 model="test",
                 provider="provider",
@@ -133,7 +126,6 @@ class TestEmitLLMEvent:
         set_llm_event_hook(None)
         # Should not raise
         event = LLMEvent(
-            phase="request",
             endpoint="test@provider",
             model="test",
             provider="provider",
@@ -148,7 +140,6 @@ class TestEmitLLMEvent:
         set_llm_event_hook(bad_hook)
         try:
             event = LLMEvent(
-                phase="request",
                 endpoint="test@provider",
                 model="test",
                 provider="provider",
@@ -172,7 +163,6 @@ class TestLLMEventHookScope:
         with llm_event_hook_scope(capture_hook):
             _emit_llm_event(
                 LLMEvent(
-                    phase="request",
                     endpoint="test@provider",
                     model="test",
                     provider="provider",
@@ -197,7 +187,6 @@ class TestLLMEventHookScope:
             # Emit to original
             _emit_llm_event(
                 LLMEvent(
-                    phase="request",
                     endpoint="before@provider",
                     model="test",
                     provider="provider",
@@ -208,7 +197,6 @@ class TestLLMEventHookScope:
             with llm_event_hook_scope(scoped_hook):
                 _emit_llm_event(
                     LLMEvent(
-                        phase="request",
                         endpoint="inside@provider",
                         model="test",
                         provider="provider",
@@ -219,7 +207,6 @@ class TestLLMEventHookScope:
             # After scope, emit should go back to original
             _emit_llm_event(
                 LLMEvent(
-                    phase="request",
                     endpoint="after@provider",
                     model="test",
                     provider="provider",
@@ -246,7 +233,6 @@ class TestLLMEventHookScope:
         with llm_event_hook_scope(capture_hook):
             _emit_llm_event(
                 LLMEvent(
-                    phase="request",
                     endpoint="test@provider",
                     model="test",
                     provider="provider",
@@ -270,7 +256,6 @@ class TestAsyncLLMEventHookScope:
         async with allm_event_hook_scope(capture_hook):
             _emit_llm_event(
                 LLMEvent(
-                    phase="request",
                     endpoint="test@provider",
                     model="test",
                     provider="provider",
@@ -291,7 +276,6 @@ class TestAsyncLLMEventHookScope:
         async with allm_event_hook_scope(capture_hook):
             _emit_llm_event(
                 LLMEvent(
-                    phase="request",
                     endpoint="inside@provider",
                     model="test",
                     provider="provider",
@@ -320,7 +304,7 @@ class TestLLMEventEmissionMocked:
         yield
         set_llm_event_hook(None)
 
-    def test_sync_client_emits_request_and_response_events(self):
+    def test_sync_client_emits_event(self):
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Hello"
@@ -348,23 +332,18 @@ class TestLLMEventEmissionMocked:
                                     messages=[{"role": "user", "content": "Hi"}],
                                 )
 
-        # Should have both request and response events
-        assert len(captured) == 2
+        # Should have one event per LLM call
+        assert len(captured) == 1
 
-        request_event = captured[0]
-        assert request_event.phase == "request"
-        assert request_event.endpoint == "gpt-4@openai"
-        assert request_event.model == "gpt-4"
-        assert request_event.provider == "openai"
-        assert request_event.stream is False
-        assert "messages" in request_event.request_kw
-
-        response_event = captured[1]
-        assert response_event.phase == "response"
-        assert response_event.endpoint == "gpt-4@openai"
-        assert response_event.cache_status == "miss"
-        assert response_event.error is None
-        assert response_event.response is mock_response
+        event = captured[0]
+        assert event.endpoint == "gpt-4@openai"
+        assert event.model == "gpt-4"
+        assert event.provider == "openai"
+        assert event.stream is False
+        assert "messages" in event.request_kw
+        assert event.cache_status == "miss"
+        assert event.error is None
+        assert event.response is mock_response
 
     def test_sync_client_emits_cache_hit_status(self):
         mock_cached_response = MagicMock()
@@ -385,9 +364,8 @@ class TestLLMEventEmissionMocked:
                 with llm_event_hook_scope(capture_hook):
                     client.generate(messages=[{"role": "user", "content": "Hi"}])
 
-        assert len(captured) == 2
-        response_event = captured[1]
-        assert response_event.cache_status == "hit"
+        assert len(captured) == 1
+        assert captured[0].cache_status == "hit"
 
     def test_sync_client_captures_error(self):
         captured = []
@@ -407,17 +385,16 @@ class TestLLMEventEmissionMocked:
                             messages=[{"role": "user", "content": "Hi"}],
                         )
 
-        # Should still have both request and response events
-        assert len(captured) == 2
+        # Should still emit event even on error
+        assert len(captured) == 1
 
-        response_event = captured[1]
-        assert response_event.phase == "response"
-        assert response_event.error is not None
-        assert "API Error" in str(response_event.error)
-        assert response_event.cache_status == "error"
+        event = captured[0]
+        assert event.error is not None
+        assert "API Error" in str(event.error)
+        assert event.cache_status == "error"
 
     @pytest.mark.asyncio
-    async def test_async_client_emits_request_and_response_events(self):
+    async def test_async_client_emits_event(self):
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Hello"
@@ -448,17 +425,13 @@ class TestLLMEventEmissionMocked:
                                     messages=[{"role": "user", "content": "Hi"}],
                                 )
 
-        # Should have both request and response events
-        assert len(captured) == 2
+        # Should have one event per LLM call
+        assert len(captured) == 1
 
-        request_event = captured[0]
-        assert request_event.phase == "request"
-        assert request_event.endpoint == "gpt-4@openai"
-
-        response_event = captured[1]
-        assert response_event.phase == "response"
-        assert response_event.cache_status == "miss"
-        assert response_event.error is None
+        event = captured[0]
+        assert event.endpoint == "gpt-4@openai"
+        assert event.cache_status == "miss"
+        assert event.error is None
 
     @pytest.mark.asyncio
     async def test_async_client_captures_error(self):
@@ -482,10 +455,9 @@ class TestLLMEventEmissionMocked:
                             messages=[{"role": "user", "content": "Hi"}],
                         )
 
-        assert len(captured) == 2
-        response_event = captured[1]
-        assert response_event.error is not None
-        assert response_event.cache_status == "error"
+        assert len(captured) == 1
+        assert captured[0].error is not None
+        assert captured[0].cache_status == "error"
 
     def test_request_kw_contains_messages_and_model(self):
         mock_response = MagicMock()
@@ -519,10 +491,10 @@ class TestLLMEventEmissionMocked:
                                     messages=[{"role": "user", "content": "Test"}],
                                 )
 
-        request_event = captured[0]
-        assert "model" in request_event.request_kw
-        assert "messages" in request_event.request_kw
-        assert request_event.request_kw.get("temperature") == 0.7
+        event = captured[0]
+        assert "model" in event.request_kw
+        assert "messages" in event.request_kw
+        assert event.request_kw.get("temperature") == 0.7
 
 
 class TestStreamingLLMEvents:
@@ -542,7 +514,7 @@ class TestStreamingLLMEvents:
         yield
         set_llm_event_hook(None)
 
-    def test_sync_streaming_emits_events(self):
+    def test_sync_streaming_emits_event(self):
         # Create mock chunks
         mock_chunk1 = MagicMock()
         mock_chunk1.choices = [MagicMock()]
@@ -571,21 +543,16 @@ class TestStreamingLLMEvents:
                 # Consume the generator
                 list(client.generate(messages=[{"role": "user", "content": "Hi"}]))
 
-        # Should have request and response events
-        assert len(captured) == 2
+        # Should have one event per LLM call (after streaming completes)
+        assert len(captured) == 1
 
-        request_event = captured[0]
-        assert request_event.phase == "request"
-        assert request_event.stream is True
-
-        response_event = captured[1]
-        assert response_event.phase == "response"
-        assert response_event.stream is True
-        assert response_event.cache_status is None  # Streaming doesn't use cache
-        assert response_event.response is None  # No single response for streams
+        event = captured[0]
+        assert event.stream is True
+        assert event.cache_status is None  # Streaming doesn't use cache
+        assert event.response is None  # No single response for streams
 
     @pytest.mark.asyncio
-    async def test_async_streaming_emits_events(self):
+    async def test_async_streaming_emits_event(self):
         mock_chunk1 = MagicMock()
         mock_chunk1.choices = [MagicMock()]
         mock_chunk1.choices[0].delta.content = "Hello"
@@ -622,15 +589,10 @@ class TestStreamingLLMEvents:
                 async for chunk in gen:
                     result.append(chunk)
 
-        assert len(captured) == 2
+        assert len(captured) == 1
 
-        request_event = captured[0]
-        assert request_event.phase == "request"
-        assert request_event.stream is True
-
-        response_event = captured[1]
-        assert response_event.phase == "response"
-        assert response_event.stream is True
+        event = captured[0]
+        assert event.stream is True
 
 
 # Integration tests - only run when API keys are available
@@ -650,7 +612,7 @@ class TestLLMEventEmissionIntegration:
         yield
         set_llm_event_hook(None)
 
-    def test_real_sync_client_emits_events(self):
+    def test_real_sync_client_emits_event(self):
         from ..settings import SETTINGS
 
         captured = []
@@ -668,14 +630,12 @@ class TestLLMEventEmissionIntegration:
                 messages=[{"role": "user", "content": "Say 'hello' [llm_events]"}],
             )
 
-        assert len(captured) == 2
-        assert captured[0].phase == "request"
+        assert len(captured) == 1
         assert captured[0].endpoint == SETTINGS.UNILLM_DEFAULT_MODEL
-        assert captured[1].phase == "response"
-        assert captured[1].cache_status in ("hit", "miss")
+        assert captured[0].cache_status in ("hit", "miss")
 
     @pytest.mark.asyncio
-    async def test_real_async_client_emits_events(self):
+    async def test_real_async_client_emits_event(self):
         from ..settings import SETTINGS
 
         captured = []
@@ -693,7 +653,5 @@ class TestLLMEventEmissionIntegration:
                 messages=[{"role": "user", "content": "Say 'hello' [llm_events]"}],
             )
 
-        assert len(captured) == 2
-        assert captured[0].phase == "request"
-        assert captured[1].phase == "response"
-        assert captured[1].cache_status in ("hit", "miss")
+        assert len(captured) == 1
+        assert captured[0].cache_status in ("hit", "miss")
