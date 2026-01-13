@@ -821,14 +821,8 @@ class Unify(_UniClient):
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
                 LLMEvent(
-                    endpoint=endpoint,
-                    model=self._model,
-                    provider=self._provider,
-                    request_kw=kw,
-                    response=None,  # No single response object for streams
-                    cache_status=None,  # Streaming doesn't use cache
-                    error=llm_error,
-                    stream=True,
+                    request=kw,
+                    response=None,  # No single response for streams
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
                 ),
@@ -937,16 +931,11 @@ class Unify(_UniClient):
                     billed_cost = provider_cost * get_cost_margin()
 
             # Emit LLM event (after LLM call, always runs)
+            # resp_body is already serialized above for logging
             _emit_llm_event(
                 LLMEvent(
-                    endpoint=endpoint,
-                    model=self._model,
-                    provider=self._provider,
-                    request_kw=kw,
-                    response=chat_completion,
-                    cache_status=cache_status,
-                    error=llm_error,
-                    stream=False,
+                    request=kw,
+                    response=resp_body,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
                 ),
@@ -1127,14 +1116,8 @@ class AsyncUnify(_UniClient):
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
                 LLMEvent(
-                    endpoint=endpoint,
-                    model=self._model,
-                    provider=self._provider,
-                    request_kw=kw,
-                    response=None,  # No single response object for streams
-                    cache_status=None,  # Streaming doesn't use cache
-                    error=llm_error,
-                    stream=True,
+                    request=kw,
+                    response=None,  # No single response for streams
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
                 ),
@@ -1243,16 +1226,11 @@ class AsyncUnify(_UniClient):
                     billed_cost = provider_cost * get_cost_margin()
 
             # Emit LLM event (after LLM call, always runs)
+            # resp_body is already serialized above for logging
             _emit_llm_event(
                 LLMEvent(
-                    endpoint=endpoint,
-                    model=self._model,
-                    provider=self._provider,
-                    request_kw=kw,
-                    response=chat_completion,
-                    cache_status=cache_status,
-                    error=llm_error,
-                    stream=False,
+                    request=kw,
+                    response=resp_body,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
                 ),

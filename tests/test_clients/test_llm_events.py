@@ -18,64 +18,29 @@ from unillm.llm_events import _emit_llm_event
 class TestLLMEventDataclass:
     """Tests for the LLMEvent dataclass."""
 
-    def test_create_event(self):
+    def test_create_event_minimal(self):
         event = LLMEvent(
-            endpoint="gpt-4@openai",
-            model="gpt-4",
-            provider="openai",
-            request_kw={"messages": [{"role": "user", "content": "Hi"}]},
+            request={
+                "model": "gpt-4@openai",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
         )
-        assert event.endpoint == "gpt-4@openai"
-        assert event.model == "gpt-4"
-        assert event.provider == "openai"
+        assert event.request["model"] == "gpt-4@openai"
         assert event.response is None
-        assert event.cache_status is None
-        assert event.error is None
-        assert event.stream is False
+        assert event.provider_cost is None
+        assert event.billed_cost is None
 
     def test_create_event_with_response(self):
-        mock_response = MagicMock()
         event = LLMEvent(
-            endpoint="claude-4@anthropic",
-            model="claude-4",
-            provider="anthropic",
-            request_kw={"messages": []},
-            response=mock_response,
-            cache_status="miss",
-            stream=False,
+            request={"model": "gpt-4@openai", "messages": []},
+            response={"id": "chatcmpl-123", "model": "gpt-4", "choices": []},
         )
-        assert event.response is mock_response
-        assert event.cache_status == "miss"
+        assert event.response is not None
+        assert event.response["id"] == "chatcmpl-123"
 
-    def test_create_error_event(self):
-        error = Exception("API error")
+    def test_create_event_with_costs(self):
         event = LLMEvent(
-            endpoint="gpt-4@openai",
-            model="gpt-4",
-            provider="openai",
-            request_kw={},
-            error=error,
-            cache_status="error",
-        )
-        assert event.error is error
-        assert event.cache_status == "error"
-
-    def test_streaming_event(self):
-        event = LLMEvent(
-            endpoint="gpt-4@openai",
-            model="gpt-4",
-            provider="openai",
-            request_kw={},
-            stream=True,
-        )
-        assert event.stream is True
-
-    def test_event_with_costs(self):
-        event = LLMEvent(
-            endpoint="gpt-4@openai",
-            model="gpt-4",
-            provider="openai",
-            request_kw={},
+            request={"model": "gpt-4@openai"},
             provider_cost=0.001,
             billed_cost=0.005,
         )
@@ -83,12 +48,7 @@ class TestLLMEventDataclass:
         assert event.billed_cost == 0.005
 
     def test_event_costs_default_to_none(self):
-        event = LLMEvent(
-            endpoint="gpt-4@openai",
-            model="gpt-4",
-            provider="openai",
-            request_kw={},
-        )
+        event = LLMEvent(request={"model": "gpt-4@openai"})
         assert event.provider_cost is None
         assert event.billed_cost is None
 
@@ -156,12 +116,7 @@ class TestEmitLLMEvent:
 
         set_llm_event_hook(capture_hook)
         try:
-            event = LLMEvent(
-                endpoint="test@provider",
-                model="test",
-                provider="provider",
-                request_kw={},
-            )
+            event = LLMEvent(request={"model": "test@provider"})
             _emit_llm_event(event)
 
             assert len(captured) == 1
@@ -172,12 +127,7 @@ class TestEmitLLMEvent:
     def test_emit_without_hook_is_silent(self):
         set_llm_event_hook(None)
         # Should not raise
-        event = LLMEvent(
-            endpoint="test@provider",
-            model="test",
-            provider="provider",
-            request_kw={},
-        )
+        event = LLMEvent(request={"model": "test@provider"})
         _emit_llm_event(event)
 
     def test_hook_exception_is_swallowed(self):
@@ -186,12 +136,7 @@ class TestEmitLLMEvent:
 
         set_llm_event_hook(bad_hook)
         try:
-            event = LLMEvent(
-                endpoint="test@provider",
-                model="test",
-                provider="provider",
-                request_kw={},
-            )
+            event = LLMEvent(request={"model": "test@provider"})
             # Should not raise even though hook raises
             _emit_llm_event(event)
         finally:
@@ -208,14 +153,7 @@ class TestLLMEventHookScope:
             captured.append(event)
 
         with llm_event_hook_scope(capture_hook):
-            _emit_llm_event(
-                LLMEvent(
-                    endpoint="test@provider",
-                    model="test",
-                    provider="provider",
-                    request_kw={},
-                ),
-            )
+            _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
 
         assert len(captured) == 1
 
@@ -232,41 +170,20 @@ class TestLLMEventHookScope:
         set_llm_event_hook(original_hook)
         try:
             # Emit to original
-            _emit_llm_event(
-                LLMEvent(
-                    endpoint="before@provider",
-                    model="test",
-                    provider="provider",
-                    request_kw={},
-                ),
-            )
+            _emit_llm_event(LLMEvent(request={"model": "before@provider"}))
 
             with llm_event_hook_scope(scoped_hook):
-                _emit_llm_event(
-                    LLMEvent(
-                        endpoint="inside@provider",
-                        model="test",
-                        provider="provider",
-                        request_kw={},
-                    ),
-                )
+                _emit_llm_event(LLMEvent(request={"model": "inside@provider"}))
 
             # After scope, emit should go back to original
-            _emit_llm_event(
-                LLMEvent(
-                    endpoint="after@provider",
-                    model="test",
-                    provider="provider",
-                    request_kw={},
-                ),
-            )
+            _emit_llm_event(LLMEvent(request={"model": "after@provider"}))
 
             assert len(original_captured) == 2
-            assert original_captured[0].endpoint == "before@provider"
-            assert original_captured[1].endpoint == "after@provider"
+            assert original_captured[0].request["model"] == "before@provider"
+            assert original_captured[1].request["model"] == "after@provider"
 
             assert len(scoped_captured) == 1
-            assert scoped_captured[0].endpoint == "inside@provider"
+            assert scoped_captured[0].request["model"] == "inside@provider"
         finally:
             set_llm_event_hook(None)
 
@@ -278,14 +195,7 @@ class TestLLMEventHookScope:
             captured.append(event)
 
         with llm_event_hook_scope(capture_hook):
-            _emit_llm_event(
-                LLMEvent(
-                    endpoint="test@provider",
-                    model="test",
-                    provider="provider",
-                    request_kw={},
-                ),
-            )
+            _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
 
         assert get_llm_event_hook() is None
 
@@ -301,14 +211,7 @@ class TestAsyncLLMEventHookScope:
             captured.append(event)
 
         async with allm_event_hook_scope(capture_hook):
-            _emit_llm_event(
-                LLMEvent(
-                    endpoint="test@provider",
-                    model="test",
-                    provider="provider",
-                    request_kw={},
-                ),
-            )
+            _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
 
         assert len(captured) == 1
 
@@ -321,14 +224,7 @@ class TestAsyncLLMEventHookScope:
             captured.append(event)
 
         async with allm_event_hook_scope(capture_hook):
-            _emit_llm_event(
-                LLMEvent(
-                    endpoint="inside@provider",
-                    model="test",
-                    provider="provider",
-                    request_kw={},
-                ),
-            )
+            _emit_llm_event(LLMEvent(request={"model": "inside@provider"}))
 
         assert get_llm_event_hook() is None
         assert len(captured) == 1
@@ -355,7 +251,7 @@ class TestLLMEventEmissionMocked:
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Hello"
-        mock_response.model_dump.return_value = {}
+        mock_response.model_dump.return_value = {"id": "test", "choices": []}
 
         captured = []
 
@@ -383,19 +279,18 @@ class TestLLMEventEmissionMocked:
         assert len(captured) == 1
 
         event = captured[0]
-        assert event.endpoint == "gpt-4@openai"
-        assert event.model == "gpt-4"
-        assert event.provider == "openai"
-        assert event.stream is False
-        assert "messages" in event.request_kw
-        assert event.cache_status == "miss"
-        assert event.error is None
-        assert event.response is mock_response
+        # Request should contain the full request data
+        assert "model" in event.request
+        assert "messages" in event.request
+        # Response should be the serialized dict
+        assert event.response is not None
+        assert event.response["id"] == "test"
 
-    def test_sync_client_emits_cache_hit_status(self):
+    def test_sync_client_emits_cache_hit_with_no_costs(self):
         mock_cached_response = MagicMock()
         mock_cached_response.choices = [MagicMock()]
         mock_cached_response.choices[0].message.content = "Cached response"
+        mock_cached_response.model_dump.return_value = {"id": "cached", "choices": []}
 
         captured = []
 
@@ -412,9 +307,11 @@ class TestLLMEventEmissionMocked:
                     client.generate(messages=[{"role": "user", "content": "Hi"}])
 
         assert len(captured) == 1
-        assert captured[0].cache_status == "hit"
+        # Cache hits don't compute costs
+        assert captured[0].provider_cost is None
+        assert captured[0].billed_cost is None
 
-    def test_sync_client_captures_error(self):
+    def test_sync_client_captures_error_with_no_response(self):
         captured = []
 
         def capture_hook(event: LLMEvent) -> None:
@@ -436,16 +333,18 @@ class TestLLMEventEmissionMocked:
         assert len(captured) == 1
 
         event = captured[0]
-        assert event.error is not None
-        assert "API Error" in str(event.error)
-        assert event.cache_status == "error"
+        # Error means no valid response
+        assert event.response is None
+        # No costs on error
+        assert event.provider_cost is None
+        assert event.billed_cost is None
 
     @pytest.mark.asyncio
     async def test_async_client_emits_event(self):
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Hello"
-        mock_response.model_dump.return_value = {}
+        mock_response.model_dump.return_value = {"id": "async-test", "choices": []}
 
         async def mock_acompletion(*args, **kwargs):
             return mock_response
@@ -476,9 +375,9 @@ class TestLLMEventEmissionMocked:
         assert len(captured) == 1
 
         event = captured[0]
-        assert event.endpoint == "gpt-4@openai"
-        assert event.cache_status == "miss"
-        assert event.error is None
+        assert "model" in event.request
+        assert event.response is not None
+        assert event.response["id"] == "async-test"
 
     @pytest.mark.asyncio
     async def test_async_client_captures_error(self):
@@ -503,10 +402,10 @@ class TestLLMEventEmissionMocked:
                         )
 
         assert len(captured) == 1
-        assert captured[0].error is not None
-        assert captured[0].cache_status == "error"
+        assert captured[0].response is None
+        assert captured[0].provider_cost is None
 
-    def test_request_kw_contains_messages_and_model(self):
+    def test_request_contains_full_kwargs(self):
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Hello"
@@ -539,9 +438,10 @@ class TestLLMEventEmissionMocked:
                                 )
 
         event = captured[0]
-        assert "model" in event.request_kw
-        assert "messages" in event.request_kw
-        assert event.request_kw.get("temperature") == 0.7
+        # Request should contain full kwargs
+        assert "model" in event.request
+        assert "messages" in event.request
+        assert event.request.get("temperature") == 0.7
 
 
 class TestStreamingLLMEvents:
@@ -561,7 +461,7 @@ class TestStreamingLLMEvents:
         yield
         set_llm_event_hook(None)
 
-    def test_sync_streaming_emits_event(self):
+    def test_sync_streaming_emits_event_with_no_response(self):
         # Create mock chunks
         mock_chunk1 = MagicMock()
         mock_chunk1.choices = [MagicMock()]
@@ -594,9 +494,10 @@ class TestStreamingLLMEvents:
         assert len(captured) == 1
 
         event = captured[0]
-        assert event.stream is True
-        assert event.cache_status is None  # Streaming doesn't use cache
-        assert event.response is None  # No single response for streams
+        # Streaming has no single response
+        assert event.response is None
+        # Request still captured
+        assert "messages" in event.request
 
     @pytest.mark.asyncio
     async def test_async_streaming_emits_event(self):
@@ -637,9 +538,7 @@ class TestStreamingLLMEvents:
                     result.append(chunk)
 
         assert len(captured) == 1
-
-        event = captured[0]
-        assert event.stream is True
+        assert captured[0].response is None
 
 
 class TestLLMEventCosts:
@@ -747,6 +646,7 @@ class TestLLMEventCosts:
         mock_cached_response = MagicMock()
         mock_cached_response.choices = [MagicMock()]
         mock_cached_response.choices[0].message.content = "Cached response"
+        mock_cached_response.model_dump.return_value = {}
 
         captured = []
 
@@ -764,7 +664,6 @@ class TestLLMEventCosts:
 
         assert len(captured) == 1
         event = captured[0]
-        assert event.cache_status == "hit"
         # Cache hits are free - no costs
         assert event.provider_cost is None
         assert event.billed_cost is None
@@ -790,7 +689,6 @@ class TestLLMEventCosts:
 
         assert len(captured) == 1
         event = captured[0]
-        assert event.error is not None
         # No costs on error
         assert event.provider_cost is None
         assert event.billed_cost is None
@@ -874,8 +772,11 @@ class TestLLMEventEmissionIntegration:
             )
 
         assert len(captured) == 1
-        assert captured[0].endpoint == SETTINGS.UNILLM_DEFAULT_MODEL
-        assert captured[0].cache_status in ("hit", "miss")
+        # Request should have the model (note: model name only, not endpoint)
+        model_name = SETTINGS.UNILLM_DEFAULT_MODEL.split("@")[0]
+        assert captured[0].request.get("model") == model_name
+        # Response should be a dict (serialized)
+        assert isinstance(captured[0].response, dict)
 
     @pytest.mark.asyncio
     async def test_real_async_client_emits_event(self):
@@ -897,4 +798,4 @@ class TestLLMEventEmissionIntegration:
             )
 
         assert len(captured) == 1
-        assert captured[0].cache_status in ("hit", "miss")
+        assert isinstance(captured[0].response, dict)
