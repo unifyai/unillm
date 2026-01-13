@@ -1,3 +1,11 @@
+# Suppress LiteLLM's LoggingWorker "Task exception was never retrieved" errors.
+# These occur when pytest-asyncio creates new event loops between tests, while
+# LiteLLM's global singleton worker holds a queue bound to the old loop.
+# This is a known LiteLLM issue; suppressing asyncio ERROR logs is the cleanest fix.
+import logging
+
+logging.getLogger("asyncio").setLevel(logging.CRITICAL)
+
 from .clients.uni_llm import Unify, AsyncUnify
 from .cache_events import (
     CacheEvent,
