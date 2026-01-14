@@ -804,7 +804,7 @@ class Unify(_UniClient):
                     from ..costs import compute_cost, get_cost_margin
 
                     provider_cost = compute_cost(
-                        endpoint,
+                        kw["model"],
                         prompt_tokens,
                         completion_tokens,
                     )
@@ -920,7 +920,7 @@ class Unify(_UniClient):
             if not in_cache and chat_completion is not None:
                 from ..costs import get_cost_margin
 
-                provider_cost = compute_cost_from_response(endpoint, chat_completion)
+                provider_cost = compute_cost_from_response(kw["model"], chat_completion)
                 if provider_cost is not None and provider_cost > 0:
                     billed_cost = provider_cost * get_cost_margin()
 
@@ -1096,7 +1096,7 @@ class AsyncUnify(_UniClient):
                     from ..costs import compute_cost, get_cost_margin
 
                     provider_cost = compute_cost(
-                        endpoint,
+                        kw["model"],
                         prompt_tokens,
                         completion_tokens,
                     )
@@ -1215,7 +1215,7 @@ class AsyncUnify(_UniClient):
             if not in_cache and chat_completion is not None:
                 from ..costs import get_cost_margin
 
-                provider_cost = compute_cost_from_response(endpoint, chat_completion)
+                provider_cost = compute_cost_from_response(kw["model"], chat_completion)
                 if provider_cost is not None and provider_cost > 0:
                     billed_cost = provider_cost * get_cost_margin()
 
