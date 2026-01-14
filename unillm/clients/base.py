@@ -30,12 +30,7 @@ class _Client(ABC):
         self,
         *,
         system_message: Optional[str],
-        messages: Optional[
-            Union[
-                List[ChatCompletionMessageParam],
-                Dict[str, List[ChatCompletionMessageParam]],
-            ]
-        ],
+        messages: Optional[List[ChatCompletionMessageParam]],
         frequency_penalty: Optional[float],
         logit_bias: Optional[Dict[str, int]],
         logprobs: Optional[bool],
@@ -167,12 +162,7 @@ class _Client(ABC):
     @property
     def messages(
         self,
-    ) -> Optional[
-        Union[
-            List[ChatCompletionMessageParam],
-            Dict[str, List[ChatCompletionMessageParam]],
-        ]
-    ]:
+    ) -> Optional[List[ChatCompletionMessageParam]]:
         """
         Get the default messages, if set.
 
@@ -448,10 +438,7 @@ class _Client(ABC):
 
     def set_messages(
         self,
-        value: Union[
-            List[ChatCompletionMessageParam],
-            Dict[str, List[ChatCompletionMessageParam]],
-        ],
+        value: List[ChatCompletionMessageParam],
     ) -> Self:
         """
         Set the default messages.
@@ -465,16 +452,13 @@ class _Client(ABC):
         if value is None:
             value = []
         self._messages = value
-        if isinstance(value, list) and value and value[0]["role"] == "system":
+        if value and value[0]["role"] == "system":
             self.set_system_message(value[0]["content"])
         return self
 
     def append_messages(
         self,
-        value: Union[
-            List[ChatCompletionMessageParam],
-            Dict[str, List[ChatCompletionMessageParam]],
-        ],
+        value: List[ChatCompletionMessageParam],
     ) -> Self:
         """
         Append to the default messages.
@@ -1143,12 +1127,7 @@ class _Client(ABC):
     @abstractmethod
     def _generate(
         self,
-        messages: Optional[
-            Union[
-                List[ChatCompletionMessageParam],
-                Dict[str, List[ChatCompletionMessageParam]],
-            ]
-        ],
+        messages: Optional[List[ChatCompletionMessageParam]],
         *,
         frequency_penalty: Optional[float],
         logit_bias: Optional[Dict[str, int]],

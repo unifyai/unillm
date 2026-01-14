@@ -512,12 +512,7 @@ class _UniClient(_Client, abc.ABC):
         self,
         user_message: Optional[str] = None,
         system_message: Optional[str] = None,
-        messages: Optional[
-            Union[
-                List[ChatCompletionMessageParam],
-                Dict[str, List[ChatCompletionMessageParam]],
-            ]
-        ] = None,
+        messages: Optional[List[ChatCompletionMessageParam]] = None,
         *,
         frequency_penalty: Optional[float] = None,
         logit_bias: Optional[Dict[str, int]] = None,
@@ -557,10 +552,9 @@ class _UniClient(_Client, abc.ABC):
             system_message: An optional string containing the system message. This
             always appears at the beginning of the list of messages.
 
-            messages: A list of messages comprising the conversation so far, or
-            optionally a dictionary of such messages, with clients as the keys in the
-            case of multi-llm clients. This will be appended to the system_message if it
-            is not None, and any user_message will be appended if it is not None.
+            messages: A list of messages comprising the conversation so far. This will
+            be appended to the system_message if it is not None, and any user_message
+            will be appended if it is not None.
 
             frequency_penalty: Number between -2.0 and 2.0. Positive values penalize new
             tokens based on their existing frequency in the text so far, decreasing the
