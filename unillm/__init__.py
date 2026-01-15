@@ -28,6 +28,8 @@ from .llm_events import (
     LLMEvent,
     set_llm_event_hook,
     get_llm_event_hook,
+    set_global_llm_event_hook,
+    get_global_llm_event_hook,
     llm_event_hook_scope,
     allm_event_hook_scope,
 )

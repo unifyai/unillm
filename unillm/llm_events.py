@@ -53,11 +53,51 @@ class LLMEvent:
     billed_cost: Optional[float] = None
 
 
-# Context variable for the current event hook (thread-safe and async-safe)
+# Context variable for the current event hook (context-local, for scoped captures)
 _llm_event_hook: ContextVar[Callable[[LLMEvent], None] | None] = ContextVar(
     "llm_event_hook",
     default=None,
 )
+
+# Module-level global hook (process-wide fallback when no context-specific hook is set)
+_global_llm_event_hook: Callable[[LLMEvent], None] | None = None
+
+
+def set_global_llm_event_hook(hook: Callable[[LLMEvent], None] | None) -> None:
+    """Set a process-global hook that applies to all threads and async contexts.
+
+    Unlike set_llm_event_hook() which uses a ContextVar (context-local), this
+    sets a module-level global that will be used as a fallback when no
+    context-specific hook is set.
+
+    This is the preferred way to install a hook at application startup that
+    should capture all LLM calls across all threads. The hook will be called
+    for any LLM call where no context-specific hook has been set.
+
+    If both a context-specific hook (via set_llm_event_hook or llm_event_hook_scope)
+    and a global hook are set, the context-specific hook takes precedence.
+
+    Args:
+        hook: A callable that receives an LLMEvent. Pass None to clear the hook.
+
+    Example:
+        def my_logger(event: LLMEvent) -> None:
+            print(f"LLM call to {event.request.get('model')}")
+
+        # Install once at startup - works across all threads
+        set_global_llm_event_hook(my_logger)
+    """
+    global _global_llm_event_hook
+    _global_llm_event_hook = hook
+
+
+def get_global_llm_event_hook() -> Callable[[LLMEvent], None] | None:
+    """Get the currently active global LLM event hook, if any.
+
+    Returns:
+        The current global hook callable, or None if no global hook is set.
+    """
+    return _global_llm_event_hook
 
 
 def set_llm_event_hook(hook: Callable[[LLMEvent], None] | None) -> None:
@@ -157,13 +197,24 @@ def _emit_llm_event(event: LLMEvent) -> None:
     This is an internal function called by the LLM clients. If no hook is
     set, the event is silently dropped.
 
+    The hook resolution order is:
+    1. Context-specific hook (set via set_llm_event_hook or llm_event_hook_scope)
+    2. Global hook (set via set_global_llm_event_hook)
+
+    This ensures scoped captures in tests take precedence, while the global
+    hook catches all other LLM calls across threads.
+
     The hook is called synchronously but wrapped in a try/except to ensure
     hook failures never break LLM calls.
 
     Args:
         event: The LLM event to emit.
     """
+    # First try context-specific hook (for scoped captures in tests)
     hook = _llm_event_hook.get()
+    # Fall back to global hook if no context-specific hook
+    if hook is None:
+        hook = _global_llm_event_hook
     if hook is not None:
         try:
             hook(event)

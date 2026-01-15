@@ -736,6 +736,130 @@ class TestLLMEventCosts:
         assert event.billed_cost == 0.01  # 0.002 * 5
 
 
+# ---------------------------------------------------------------------------
+#  Cross-thread global hook tests
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalLLMEventHook:
+    """Tests for set_global_llm_event_hook - process-wide hook that works across threads."""
+
+    @pytest.fixture(autouse=True)
+    def clear_hooks(self):
+        """Clear both context and global hooks before and after each test."""
+        set_llm_event_hook(None)
+        # Clear global hook (will exist after implementation)
+        try:
+            from unillm import set_global_llm_event_hook
+
+            set_global_llm_event_hook(None)
+        except ImportError:
+            pass
+        yield
+        set_llm_event_hook(None)
+        try:
+            from unillm import set_global_llm_event_hook
+
+            set_global_llm_event_hook(None)
+        except ImportError:
+            pass
+
+    def test_global_hook_called_from_different_thread(self):
+        """Global hook should be called even when LLM call happens in a different thread.
+
+        This is the key test for the production use case: hook is installed at startup
+        in one thread, but LLM calls may happen from worker threads.
+        """
+        import concurrent.futures
+
+        from unillm import set_global_llm_event_hook
+
+        captured = []
+
+        def capture_hook(event: LLMEvent) -> None:
+            captured.append(event)
+
+        # Set global hook in main thread
+        set_global_llm_event_hook(capture_hook)
+
+        # Emit event from a different thread
+        def emit_in_thread():
+            _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(emit_in_thread)
+            future.result()  # Wait for completion
+
+        # Global hook should have caught the event
+        assert len(captured) == 1
+        assert captured[0].request["model"] == "test@provider"
+
+    def test_global_hook_called_from_thread_where_hook_was_not_set(self):
+        """Global hook should work when hook is set in thread A but event emitted in thread B.
+
+        This mimics the production scenario where:
+        - unity.init() sets the hook (in a worker thread via asyncio.to_thread)
+        - LLM calls happen from the main async context (different thread)
+        """
+        import concurrent.futures
+
+        from unillm import set_global_llm_event_hook
+
+        captured = []
+
+        def capture_hook(event: LLMEvent) -> None:
+            captured.append(event)
+
+        # Set hook from a worker thread (mimicking asyncio.to_thread behavior)
+        def set_hook_in_thread():
+            set_global_llm_event_hook(capture_hook)
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            executor.submit(set_hook_in_thread).result()
+
+        # Now emit event from main thread (hook was set in different thread)
+        _emit_llm_event(LLMEvent(request={"model": "main-thread@provider"}))
+
+        assert len(captured) == 1
+        assert captured[0].request["model"] == "main-thread@provider"
+
+    def test_context_hook_takes_precedence_over_global_hook(self):
+        """Context-specific hook should take precedence over global hook.
+
+        This preserves the existing scoped capture behavior for tests.
+        """
+        from unillm import set_global_llm_event_hook
+
+        global_captured = []
+        context_captured = []
+
+        def global_hook(event: LLMEvent) -> None:
+            global_captured.append(event)
+
+        def context_hook(event: LLMEvent) -> None:
+            context_captured.append(event)
+
+        set_global_llm_event_hook(global_hook)
+
+        # Without context hook, global should catch it
+        _emit_llm_event(LLMEvent(request={"model": "global-only@provider"}))
+        assert len(global_captured) == 1
+        assert len(context_captured) == 0
+
+        # With context hook, context should catch it (not global)
+        with llm_event_hook_scope(context_hook):
+            _emit_llm_event(LLMEvent(request={"model": "context-scoped@provider"}))
+
+        assert len(global_captured) == 1  # Still just the first event
+        assert len(context_captured) == 1
+        assert context_captured[0].request["model"] == "context-scoped@provider"
+
+        # After context exits, global should catch again
+        _emit_llm_event(LLMEvent(request={"model": "back-to-global@provider"}))
+        assert len(global_captured) == 2
+        assert global_captured[1].request["model"] == "back-to-global@provider"
+
+
 # Integration tests - only run when API keys are available
 _HAS_API_KEYS = bool(
     os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"),
