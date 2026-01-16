@@ -907,6 +907,8 @@ class Unify(_UniClient):
                     and hasattr(chat_completion, "model_dump")
                     else chat_completion
                 )
+                if llm_error is not None:
+                    resp_body = {"response": resp_body, "error": str(llm_error)}
                 append_response_and_finalize(
                     pending_path,
                     resp_body,
@@ -1202,6 +1204,8 @@ class AsyncUnify(_UniClient):
                     and hasattr(chat_completion, "model_dump")
                     else chat_completion
                 )
+                if llm_error is not None:
+                    resp_body = {"response": resp_body, "error": str(llm_error)}
                 append_response_and_finalize(
                     pending_path,
                     resp_body,
