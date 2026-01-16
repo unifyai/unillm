@@ -14,12 +14,33 @@ Or add to your project's dependencies pointing to this repo.
 
 ## Configuration
 
+### API Keys
+
 Set API keys for the providers you want to use:
 
 ```bash
 export OPENAI_API_KEY=<your-key>
 export ANTHROPIC_API_KEY=<your-key>
 # ... other provider keys
+```
+
+### Google Cloud / Vertex AI
+
+For Vertex AI models (Gemini, Claude on Vertex, etc.), authenticate using Google Cloud Application Default Credentials:
+
+```bash
+# One-time setup: authenticate with your Google Cloud account
+gcloud auth application-default login
+
+# Set your GCP project and location
+export VERTEXAI_PROJECT=<your-project-id>
+export VERTEXAI_LOCATION=<your-location>  # e.g., us-central1, europe-west1
+```
+
+Alternatively, use a service account JSON file:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 ```
 
 ## Basic Usage
