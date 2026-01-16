@@ -477,32 +477,34 @@ class _UniClient(_Client, abc.ABC):
                     raise
 
                 if stateful and placeholder_idx is not None:
-                    if return_full_completion:
-                        self._messages.insert(
-                            placeholder_idx,
-                            res.choices[0].message.model_dump(warnings=False),
-                        )
-                    else:
-                        self._messages.insert(
-                            placeholder_idx,
-                            {"role": "assistant", "content": str(res)},
-                        )
+                    # Always store full message (preserves thinking blocks for Claude, etc.)
+                    self._messages.insert(
+                        placeholder_idx,
+                        res.choices[0].message.model_dump(warnings=False),
+                    )
                 elif self._messages:
                     self._messages.clear()
+
+                # Extract content if caller doesn't want full completion
+                if not return_full_completion:
+                    content = res.choices[0].message.content
+                    return content.strip(" ") if content else ""
                 return res
 
             return _await_and_process(response)
 
         # ---------- non-streaming path ----------
         if stateful:
-            if return_full_completion:
-                assistant_dict = response.choices[0].message.model_dump(warnings=False)
-            else:
-                assistant_dict = {"role": "assistant", "content": str(response)}
+            # Always store full message (preserves thinking blocks for Claude, etc.)
+            assistant_dict = response.choices[0].message.model_dump(warnings=False)
             self._append_to_history(assistant_dict)
         elif self._messages:
             self._messages.clear()
 
+        # Extract content if caller doesn't want full completion
+        if not return_full_completion:
+            content = response.choices[0].message.content
+            return content.strip(" ") if content else ""
         return response
 
     # Generate #
@@ -952,12 +954,8 @@ class Unify(_UniClient):
         # Deduct credits for cache misses (use already-computed billed_cost)
         if billed_cost is not None and billed_cost > 0:
             unify.deduct_credits(billed_cost)
-        if return_full_completion:
-            return chat_completion
-        content = chat_completion.choices[0].message.content
-        if content:
-            return content.strip(" ")
-        return ""
+        # Always return full completion; _apply_stateful_logic handles extraction
+        return chat_completion
 
     def _generate(  # noqa: WPS234, WPS211
         self,
@@ -1252,12 +1250,8 @@ class AsyncUnify(_UniClient):
                 asyncio.to_thread(unify.deduct_credits, billed_cost),
                 name="unillm_deduct_credits",
             )
-        if return_full_completion:
-            return chat_completion
-        content = chat_completion.choices[0].message.content
-        if content:
-            return content.strip(" ")
-        return ""
+        # Always return full completion; _apply_stateful_logic handles extraction
+        return chat_completion
 
     async def _generate(  # noqa: WPS234, WPS211
         self,
