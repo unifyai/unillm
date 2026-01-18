@@ -2,7 +2,37 @@
 
 Lightweight LLM client wrapper with provider normalization, caching, and observability. Routes requests through [LiteLLM](https://github.com/BerriAI/litellm) with a unified `endpoint` format (`model@provider`) and automatic provider-specific preprocessing.
 
-This package is used as a dependency by higher-level frameworks like [Unity](https://github.com/unifyai/unity), and integrates with the [Unify](https://github.com/unifyai/unify) SDK for query logging.
+## System Architecture
+
+UniLLM is the LLM abstraction layer in a multi-repository system:
+
+```
+         User (Console/Phone/SMS/Email)
+                      │
+    ┌─────────────────┴──────────────────┐
+    │           Communication            │
+    │    (Webhooks, Voice, SMS, Email)   │
+    └────┬───────────────────────────────┘
+         │
+    ┌────┴────┐    ┌─────────┐    ┌─────────┐
+    │  Unity  │    │  Unify  │    │Orchestra│
+    │ (Brain) │───▶│  (SDK)  │───▶│  (API)  │
+    │         │    │         │    │  (DB)   │
+    └────┬────┘    └────┬────┘    └────┬────┘
+         │              ▲              ▲
+         │              │              │
+         │    ┌─────────┴─┐       ┌────┴───────┐
+         └───▶│  UniLLM   │       │  Console   │
+              │ (LLM API) │       │(Interfaces)│
+              └───────────┘       └────────────┘
+```
+
+**This repo (UniLLM)** handles all LLM inference for Unity. It normalizes requests across providers (OpenAI, Anthropic, Vertex AI, etc.), provides response caching for test determinism, and integrates with Unify for query logging.
+
+Related repositories:
+- [Unity](https://github.com/unifyai/unity) — AI assistant brain (primary consumer)
+- [Unify](https://github.com/unifyai/unify) — Python SDK for logging and persistence
+- [Orchestra](https://github.com/unifyai/orchestra) — Backend API and database
 
 ## Installation
 
