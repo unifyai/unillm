@@ -2,6 +2,12 @@ from .helpers import new_llm_client
 from unillm.clients.provider_preprocessing import (
     apply_provider_preprocessing,
     _has_prefilled_assistant_before_real,
+    _is_non_compliant_assistant_tool_call,
+    _has_non_compliant_tool_calls,
+    _transform_tool_calls_to_context,
+    _apply_thinking_compliance,
+    THINKING_COMPLIANCE_CONTEXT_HEADER,
+    THINKING_COMPLIANCE_CONTEXT_FOOTER,
 )
 
 
@@ -210,3 +216,529 @@ def test_prefill_tool_call(model):
     client = new_llm_client(model)
     response = client.generate(messages=history, tools=tools)
     assert "fast" in response.choices[0].message.content
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Thinking Compliance Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# These tests verify that assistant messages with tool_calls but without
+# thinking_blocks are automatically transformed to user context messages when
+# thinking mode is enabled.
+
+
+class TestThinkingComplianceDetection:
+    """Tests for detecting non-compliant assistant tool call messages."""
+
+    def test_is_non_compliant_assistant_tool_call_basic(self):
+        """Assistant with tool_calls but no thinking_blocks is non-compliant."""
+        msg = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "my_tool", "arguments": "{}"},
+                },
+            ],
+        }
+        assert _is_non_compliant_assistant_tool_call(msg) is True
+
+    def test_is_compliant_with_thinking_blocks(self):
+        """Assistant with tool_calls AND thinking_blocks is compliant."""
+        msg = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "my_tool", "arguments": "{}"},
+                },
+            ],
+            "thinking_blocks": [{"type": "thinking", "thinking": "Let me think..."}],
+        }
+        assert _is_non_compliant_assistant_tool_call(msg) is False
+
+    def test_is_compliant_assistant_no_tool_calls(self):
+        """Assistant without tool_calls doesn't need thinking_blocks (for this check)."""
+        msg = {
+            "role": "assistant",
+            "content": "Hello!",
+        }
+        assert _is_non_compliant_assistant_tool_call(msg) is False
+
+    def test_non_assistant_messages_are_compliant(self):
+        """Non-assistant messages are not flagged as non-compliant."""
+        assert (
+            _is_non_compliant_assistant_tool_call({"role": "user", "content": "Hi"})
+            is False
+        )
+        assert (
+            _is_non_compliant_assistant_tool_call({"role": "system", "content": "..."})
+            is False
+        )
+        assert (
+            _is_non_compliant_assistant_tool_call({"role": "tool", "content": "result"})
+            is False
+        )
+
+    def test_empty_tool_calls_is_compliant(self):
+        """Assistant with empty tool_calls list is compliant."""
+        msg = {
+            "role": "assistant",
+            "content": "Hi",
+            "tool_calls": [],
+        }
+        assert _is_non_compliant_assistant_tool_call(msg) is False
+
+    def test_has_non_compliant_tool_calls_true(self):
+        """Detects non-compliant messages in a list."""
+        messages = [
+            {"role": "user", "content": "Do something"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "1", "function": {"name": "tool", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "content": "done", "tool_call_id": "1"},
+        ]
+        assert _has_non_compliant_tool_calls(messages) is True
+
+    def test_has_non_compliant_tool_calls_false_all_have_thinking(self):
+        """No non-compliant messages when all have thinking_blocks."""
+        messages = [
+            {"role": "user", "content": "Do something"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "1", "function": {"name": "tool", "arguments": "{}"}},
+                ],
+                "thinking_blocks": [{"type": "thinking", "thinking": "..."}],
+            },
+            {"role": "tool", "content": "done", "tool_call_id": "1"},
+        ]
+        assert _has_non_compliant_tool_calls(messages) is False
+
+    def test_has_non_compliant_tool_calls_false_no_tool_calls(self):
+        """No non-compliant messages when no tool_calls present."""
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"},
+        ]
+        assert _has_non_compliant_tool_calls(messages) is False
+
+
+class TestThinkingComplianceTransformation:
+    """Tests for transforming non-compliant messages to user context."""
+
+    def test_basic_transformation(self):
+        """Single non-compliant tool call is transformed to user context."""
+        messages = [
+            {"role": "user", "content": "Call a tool"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {"name": "my_tool", "arguments": "{}"},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_123", "content": "result"},
+            {"role": "user", "content": "Thanks"},
+        ]
+
+        result = _transform_tool_calls_to_context(messages)
+
+        # Should have: user, user (transformed context), user
+        assert len(result) == 3
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "Call a tool"
+
+        # Transformed message should be a user message with context
+        assert result[1]["role"] == "user"
+        assert THINKING_COMPLIANCE_CONTEXT_HEADER in result[1]["content"]
+        assert THINKING_COMPLIANCE_CONTEXT_FOOTER in result[1]["content"]
+        assert "my_tool" in result[1]["content"]
+        assert "result" in result[1]["content"]
+
+        assert result[2]["role"] == "user"
+        assert result[2]["content"] == "Thanks"
+
+    def test_compliant_messages_unchanged(self):
+        """Messages with thinking_blocks are not transformed."""
+        messages = [
+            {"role": "user", "content": "Call a tool"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {"name": "my_tool", "arguments": "{}"},
+                    },
+                ],
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "I should call the tool"},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_123", "content": "result"},
+            {"role": "user", "content": "Thanks"},
+        ]
+
+        result = _transform_tool_calls_to_context(messages)
+
+        # Should be unchanged
+        assert len(result) == 4
+        assert result[0]["role"] == "user"
+        assert result[1]["role"] == "assistant"
+        assert result[1].get("thinking_blocks") is not None
+        assert result[2]["role"] == "tool"
+        assert result[3]["role"] == "user"
+
+    def test_multiple_tool_results_collected(self):
+        """Multiple tool results following assistant are all collected."""
+        messages = [
+            {"role": "user", "content": "Call tools"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "tool_a", "arguments": "{}"},
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "tool_b", "arguments": "{}"},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "result_a"},
+            {"role": "tool", "tool_call_id": "call_2", "content": "result_b"},
+            {"role": "user", "content": "Done"},
+        ]
+
+        result = _transform_tool_calls_to_context(messages)
+
+        # Should have: user, user (context with both tools), user
+        assert len(result) == 3
+        assert result[0]["content"] == "Call tools"
+        assert result[1]["role"] == "user"
+        assert "tool_a" in result[1]["content"]
+        assert "tool_b" in result[1]["content"]
+        assert "result_a" in result[1]["content"]
+        assert "result_b" in result[1]["content"]
+        assert result[2]["content"] == "Done"
+
+    def test_mixed_compliant_and_non_compliant(self):
+        """Mixed transcript with both compliant and non-compliant messages."""
+        messages = [
+            {"role": "user", "content": "First"},
+            # Compliant: has thinking_blocks
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "c1", "function": {"name": "t1", "arguments": "{}"}},
+                ],
+                "thinking_blocks": [{"type": "thinking", "thinking": "..."}],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "r1"},
+            {"role": "user", "content": "Second"},
+            # Non-compliant: no thinking_blocks
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "c2", "function": {"name": "t2", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c2", "content": "r2"},
+            {"role": "user", "content": "Third"},
+        ]
+
+        result = _transform_tool_calls_to_context(messages)
+
+        # First tool call sequence should be unchanged (compliant)
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "First"
+        assert result[1]["role"] == "assistant"
+        assert result[1].get("thinking_blocks") is not None
+        assert result[2]["role"] == "tool"
+        assert result[3]["role"] == "user"
+        assert result[3]["content"] == "Second"
+
+        # Second tool call sequence should be transformed (non-compliant)
+        assert result[4]["role"] == "user"
+        assert "t2" in result[4]["content"]
+        assert "r2" in result[4]["content"]
+
+        # Final user message
+        assert result[5]["role"] == "user"
+        assert result[5]["content"] == "Third"
+
+    def test_no_tool_results_following(self):
+        """Non-compliant assistant without following tool results."""
+        messages = [
+            {"role": "user", "content": "Call tool"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "c1", "function": {"name": "tool", "arguments": "{}"}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": "Never mind",
+            },  # User interrupted before tool result
+        ]
+
+        result = _transform_tool_calls_to_context(messages)
+
+        # Should still transform just the assistant message
+        assert len(result) == 3
+        assert result[0]["content"] == "Call tool"
+        assert result[1]["role"] == "user"
+        assert "tool" in result[1]["content"]
+        assert result[2]["content"] == "Never mind"
+
+
+class TestApplyThinkingCompliance:
+    """Tests for the high-level _apply_thinking_compliance function."""
+
+    def test_returns_unchanged_when_all_compliant(self):
+        """Returns same messages when all are compliant."""
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "1", "function": {"name": "t", "arguments": "{}"}},
+                ],
+                "thinking_blocks": [{}],
+            },
+            {"role": "tool", "tool_call_id": "1", "content": "done"},
+        ]
+
+        result = _apply_thinking_compliance(messages)
+        assert result == messages
+
+    def test_transforms_non_compliant(self):
+        """Transforms non-compliant messages."""
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "1", "function": {"name": "t", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "1", "content": "done"},
+        ]
+
+        result = _apply_thinking_compliance(messages)
+        assert len(result) == 2
+        assert result[0]["content"] == "Hi"
+        assert result[1]["role"] == "user"
+        assert THINKING_COMPLIANCE_CONTEXT_HEADER in result[1]["content"]
+
+
+class TestApplyProviderPreprocessingThinkingCompliance:
+    """Integration tests for thinking compliance in apply_provider_preprocessing."""
+
+    def test_non_compliant_tool_calls_after_real_response_transformed(self):
+        """
+        Non-compliant tool calls AFTER a real thinking response are transformed.
+
+        This tests the key use case: a conversation has started with real thinking
+        responses, but then synthetic tool call messages appear (from tool loops)
+        that lack thinking_blocks. These should be transformed to user context.
+
+        Note: If there are NO real thinking responses at all, the prefill conversion
+        handles it differently (converts everything to system message).
+        """
+        messages = [
+            {"role": "user", "content": "First task"},
+            # Real response with thinking_blocks
+            {
+                "role": "assistant",
+                "content": "I'll help with that.",
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "User wants help"},
+                ],
+            },
+            {"role": "user", "content": "Now do something else"},
+            # Synthetic/non-compliant: no thinking_blocks (e.g., from tool loop)
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {"name": "my_tool", "arguments": "{}"},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_123", "content": "result"},
+            {"role": "user", "content": "Continue"},
+        ]
+
+        kw = {"messages": messages, "reasoning_effort": "high"}
+        result = apply_provider_preprocessing(kw, "anthropic")
+
+        result_messages = result["messages"]
+
+        # Should have:
+        # 1. user (First task)
+        # 2. assistant with thinking_blocks (preserved)
+        # 3. user (Now do something else)
+        # 4. user (transformed context from non-compliant tool call + result)
+        # 5. user (Continue)
+        assert len(result_messages) == 5
+
+        assert result_messages[0]["role"] == "user"
+        assert result_messages[0]["content"] == "First task"
+
+        assert result_messages[1]["role"] == "assistant"
+        assert result_messages[1].get("thinking_blocks") is not None
+
+        assert result_messages[2]["role"] == "user"
+        assert result_messages[2]["content"] == "Now do something else"
+
+        # Transformed context message
+        assert result_messages[3]["role"] == "user"
+        assert THINKING_COMPLIANCE_CONTEXT_HEADER in result_messages[3]["content"]
+        assert "my_tool" in result_messages[3]["content"]
+        assert "result" in result_messages[3]["content"]
+
+        assert result_messages[4]["role"] == "user"
+        assert result_messages[4]["content"] == "Continue"
+
+    def test_all_non_compliant_handled_by_prefill_conversion(self):
+        """
+        When there are NO real thinking responses, prefill conversion handles it.
+
+        This is the case for seeded transcripts where all assistant messages
+        are prefilled (no thinking_blocks). The prefill conversion converts
+        everything to a system message + [continue] prompt.
+        """
+        messages = [
+            {"role": "user", "content": "Do something"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {"name": "my_tool", "arguments": "{}"},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_123", "content": "result"},
+            {"role": "user", "content": "Continue"},
+        ]
+
+        kw = {"messages": messages, "reasoning_effort": "high"}
+        result = apply_provider_preprocessing(kw, "anthropic")
+
+        result_messages = result["messages"]
+
+        # Prefill conversion converts everything to system message + [continue]
+        assert len(result_messages) == 2
+        assert result_messages[0]["role"] == "system"
+        assert "Do something" in result_messages[0]["content"]
+        assert "my_tool" in result_messages[0]["content"]
+        assert result_messages[1]["role"] == "user"
+        assert result_messages[1]["content"] == "[continue]"
+
+    def test_compliant_tool_calls_unchanged_with_reasoning_effort(self):
+        """Compliant tool calls (with thinking_blocks) are not transformed."""
+        messages = [
+            {"role": "user", "content": "Do something"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {"name": "my_tool", "arguments": "{}"},
+                    },
+                ],
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "Let me call the tool"},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_123", "content": "result"},
+            {"role": "user", "content": "Continue"},
+        ]
+
+        kw = {"messages": messages, "reasoning_effort": "high"}
+        result = apply_provider_preprocessing(kw, "anthropic")
+
+        result_messages = result["messages"]
+
+        # Should be unchanged (4 messages)
+        assert len(result_messages) == 4
+        assert result_messages[0]["role"] == "user"
+        assert result_messages[1]["role"] == "assistant"
+        assert result_messages[1].get("thinking_blocks") is not None
+        assert result_messages[2]["role"] == "tool"
+        assert result_messages[3]["role"] == "user"
+
+    def test_no_transformation_without_reasoning_effort(self):
+        """No transformation when reasoning_effort is not set."""
+        messages = [
+            {"role": "user", "content": "Do something"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {"name": "my_tool", "arguments": "{}"},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_123", "content": "result"},
+        ]
+
+        kw = {"messages": messages}  # No reasoning_effort
+        result = apply_provider_preprocessing(kw, "anthropic")
+
+        result_messages = result["messages"]
+
+        # Should be unchanged (no transformation without reasoning_effort)
+        assert len(result_messages) == 3
+        assert result_messages[0]["role"] == "user"
+        assert result_messages[1]["role"] == "assistant"
+        assert result_messages[2]["role"] == "tool"
+
+    def test_no_transformation_for_non_anthropic(self):
+        """No transformation for non-Anthropic providers."""
+        messages = [
+            {"role": "user", "content": "Do something"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "1", "function": {"name": "tool", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "1", "content": "result"},
+        ]
+
+        kw = {"messages": messages, "reasoning_effort": "high"}
+        result = apply_provider_preprocessing(kw, "openai")
+
+        # Should be unchanged for non-Anthropic
+        assert result["messages"] == messages
