@@ -774,7 +774,7 @@ class Unify(_UniClient):
 
         # Track usage from the stream for cost deduction
         usage_info = None
-        llm_error: Exception | None = None
+        llm_error: BaseException | None = None
         provider_cost: float | None = None
         billed_cost: float | None = None
 
@@ -855,7 +855,7 @@ class Unify(_UniClient):
         chat_completion = None
         cache_status = "error"
         in_cache = False
-        llm_error: Exception | None = None
+        llm_error: BaseException | None = None
         provider_cost: float | None = None
         billed_cost: float | None = None
 
@@ -895,8 +895,7 @@ class Unify(_UniClient):
                         "request_kw": kw,
                     },
                 )
-        except Exception as e:
-            # Capture the error for the response event
+        except BaseException as e:
             if llm_error is None:
                 llm_error = e
             raise
@@ -1063,7 +1062,7 @@ class AsyncUnify(_UniClient):
 
         # Track usage from the stream for cost deduction
         usage_info = None
-        llm_error: Exception | None = None
+        llm_error: BaseException | None = None
         provider_cost: float | None = None
         billed_cost: float | None = None
 
@@ -1148,7 +1147,7 @@ class AsyncUnify(_UniClient):
         chat_completion = None
         cache_status = "error"
         in_cache = False
-        llm_error: Exception | None = None
+        llm_error: BaseException | None = None
         provider_cost: float | None = None
         billed_cost: float | None = None
 
@@ -1188,7 +1187,7 @@ class AsyncUnify(_UniClient):
                         "request_kw": kw,
                     },
                 )
-        except Exception as e:
+        except BaseException as e:
             # Capture the error for the response event
             if llm_error is None:
                 llm_error = e
@@ -1210,7 +1209,7 @@ class AsyncUnify(_UniClient):
                     cache_status,
                     label=endpoint,
                 )
-            except Exception:
+            except BaseException:
                 pass
 
             # Compute costs for event (only for cache misses - cache hits are free)
