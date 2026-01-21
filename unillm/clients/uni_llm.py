@@ -36,7 +36,7 @@ from .provider_preprocessing import apply_provider_preprocessing
 from ..caching import _get_cache, _write_to_cache, is_caching_enabled
 from ..cache_events import _emit_cache_event
 from ..llm_events import _emit_llm_event, LLMEvent
-from ..helpers import _default, get_seed
+from ..helpers import _default, get_seed, UNSET
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
 from ..logger import (
@@ -81,7 +81,7 @@ class _UniClient(_Client, abc.ABC):
         return_full_completion: bool = False,
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
-        prompt_caching: Optional[PromptCacheParam] = None,
+        prompt_caching: Optional[PromptCacheParam] = UNSET,  # type: ignore[assignment]
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         **kwargs,
@@ -241,7 +241,7 @@ class _UniClient(_Client, abc.ABC):
             return_full_completion=return_full_completion,
             cache=cache,
             cache_backend=cache_backend,
-            prompt_caching=prompt_caching,
+            prompt_caching=["system"] if prompt_caching is UNSET else prompt_caching,
             # passthrough arguments
             extra_headers=extra_headers,
             **kwargs,
