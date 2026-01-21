@@ -241,7 +241,7 @@ class _UniClient(_Client, abc.ABC):
             return_full_completion=return_full_completion,
             cache=cache,
             cache_backend=cache_backend,
-            prompt_caching=["system"] if prompt_caching is UNSET else prompt_caching,
+            prompt_caching=None if prompt_caching is UNSET else prompt_caching,
             # passthrough arguments
             extra_headers=extra_headers,
             **kwargs,
