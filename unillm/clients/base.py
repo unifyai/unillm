@@ -396,7 +396,7 @@ class _Client(ABC):
         return self._cache
 
     @property
-    def prompt_caching(self) -> Optional[List[Literal["tools", "system", "user"]]]:
+    def prompt_caching(self) -> Optional[List[Literal["tools", "system", "messages"]]]:
         """
         Get the default prompt caching settings for Anthropic.
 
@@ -792,14 +792,14 @@ class _Client(ABC):
 
     def set_prompt_caching(
         self,
-        value: Optional[List[Literal["tools", "system", "user"]]],
+        value: Optional[List[Literal["tools", "system", "messages"]]],
     ) -> Self:
         """
         Set the prompt caching settings for Anthropic models.
 
         Args:
             value: List of locations to insert cache breakpoints.
-                   Valid values: "tools", "system", "user".
+                   Valid values: "tools", "system", "messages".
 
         Returns:
             This client, useful for chaining inplace calls.
