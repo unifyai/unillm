@@ -3,4 +3,4 @@
 from typing import List, Literal
 
 # Components that can be targeted for prompt caching
-PromptCacheParam = List[Literal["tools", "system", "user"]]
+PromptCacheParam = List[Literal["tools", "system", "messages"]]

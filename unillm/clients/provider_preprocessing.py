@@ -334,7 +334,7 @@ def _apply_anthropic_caching(
                     msg["cache_control"] = CACHE_CONTROL_EPHEMERAL
                 break
 
-    if "user" in prompt_caching:
+    if "messages" in prompt_caching:
         for msg in reversed(messages):
             if msg.get("role") == "user":
                 content = msg.get("content")
