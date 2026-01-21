@@ -2,7 +2,9 @@
 
 import copy
 import json
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from ..types import PromptCacheParam
 
 CONCURRENT_USER_MESSAGES_EXPLANATION = (
     "For all user messages which are represented in JSON format, please treat each "
@@ -306,7 +308,7 @@ CACHE_CONTROL_EPHEMERAL = {"type": "ephemeral"}
 
 def _apply_anthropic_caching(
     kw: Dict[str, Any],
-    prompt_caching: List[Literal["tools", "system", "user"]],
+    prompt_caching: PromptCacheParam,
 ) -> None:
     """
     Apply Anthropic prompt caching breakpoints to tools, system, and/or user messages.
@@ -346,7 +348,7 @@ def _apply_anthropic_caching(
 def apply_provider_preprocessing(
     kw: Dict[str, Any],
     provider: Optional[str],
-    prompt_caching: Optional[List[Literal["tools", "system", "user"]]] = None,
+    prompt_caching: Optional[PromptCacheParam] = None,
 ) -> Dict[str, Any]:
     """Apply provider-specific preprocessing to messages in kw dict (mutates kw)."""
     messages = kw.get("messages")

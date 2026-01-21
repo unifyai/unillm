@@ -21,6 +21,7 @@ from unify import BASE_URL
 from unify.utils import http
 
 from unify.utils.helpers import _create_request_header, _validate_api_key
+from unillm.types import PromptCacheParam
 
 
 class _Client(ABC):
@@ -57,7 +58,7 @@ class _Client(ABC):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
-        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
+        prompt_caching: PromptCacheParam,
         # passthrough arguments
         extra_headers: Optional[Headers],
         **kwargs,

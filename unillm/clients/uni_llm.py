@@ -11,7 +11,6 @@ from typing import (
     Generator,
     Iterable,
     List,
-    Literal,
     Optional,
     Type,
     Union,
@@ -46,7 +45,7 @@ from ..logger import (
     llm_span,
     set_span_response,
 )
-from ..types import Prompt
+from ..types import Prompt, PromptCacheParam
 from .shared_session import SHARED_SESSION
 
 
@@ -82,7 +81,7 @@ class _UniClient(_Client, abc.ABC):
         return_full_completion: bool = False,
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
-        prompt_caching: Optional[List[Literal["tools", "system", "user"]]] = None,
+        prompt_caching: Optional[PromptCacheParam] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         **kwargs,
@@ -542,7 +541,7 @@ class _UniClient(_Client, abc.ABC):
         return_full_completion: Optional[bool] = None,
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
-        prompt_caching: Optional[List[Literal["tools", "system", "user"]]] = None,
+        prompt_caching: Optional[PromptCacheParam] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         service_tier: Optional[str] = None,
@@ -767,7 +766,7 @@ class Unify(_UniClient):
         stream_options: Optional[ChatCompletionStreamOptionsParam],
         # python client arguments
         return_full_completion: bool,
-        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
+        prompt_caching: Optional[PromptCacheParam],
     ) -> Generator[str, None, None]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -838,7 +837,7 @@ class Unify(_UniClient):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
-        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
+        prompt_caching: Optional[PromptCacheParam],
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -990,7 +989,7 @@ class Unify(_UniClient):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
-        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
+        prompt_caching: Optional[PromptCacheParam],
         # passthrough arguments
         extra_headers: Optional[Headers],
         **kwargs,
@@ -1060,7 +1059,7 @@ class AsyncUnify(_UniClient):
         stream_options: Optional[ChatCompletionStreamOptionsParam],
         # python client arguments
         return_full_completion: bool,
-        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
+        prompt_caching: Optional[PromptCacheParam],
     ) -> AsyncGenerator[str, None]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -1135,7 +1134,7 @@ class AsyncUnify(_UniClient):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
-        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
+        prompt_caching: Optional[PromptCacheParam],
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -1290,7 +1289,7 @@ class AsyncUnify(_UniClient):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
-        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
+        prompt_caching: Optional[PromptCacheParam],
         # passthrough arguments
         extra_headers: Optional[Headers],
         service_tier: Optional[str] = None,
