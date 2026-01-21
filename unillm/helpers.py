@@ -1,6 +1,17 @@
 from typing import Any, Optional
 
 
+class _UnsetSentinel:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        # Stable textual form to avoid process-specific object addresses
+        return "<UNSET>"
+
+
+UNSET = _UnsetSentinel()
+
+
 def _default(value: Any, default_value: Any) -> Any:
     return value if value is not None else default_value
 
