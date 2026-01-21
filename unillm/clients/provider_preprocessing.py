@@ -2,7 +2,7 @@
 
 import copy
 import json
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 CONCURRENT_USER_MESSAGES_EXPLANATION = (
     "For all user messages which are represented in JSON format, please treat each "
@@ -301,9 +301,52 @@ def _combine_adjacent_user_messages(
     return result, combined_any
 
 
+CACHE_CONTROL_EPHEMERAL = {"type": "ephemeral"}
+
+
+def _apply_anthropic_caching(
+    kw: Dict[str, Any],
+    prompt_caching: List[Literal["tools", "system", "user"]],
+) -> None:
+    """
+    Apply Anthropic prompt caching breakpoints to tools, system, and/or user messages.
+
+    Mutates kw in-place to add cache_control markers at specified locations.
+    """
+    if "tools" in prompt_caching:
+        tools = kw.get("tools")
+        if tools and len(tools) > 0:
+            tools[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+
+    messages = kw.get("messages")
+    if not messages:
+        return
+
+    if "system" in prompt_caching:
+        for msg in reversed(messages):
+            if msg.get("role") == "system":
+                content = msg.get("content")
+                if isinstance(content, list) and len(content) > 0:
+                    content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+                else:
+                    msg["cache_control"] = CACHE_CONTROL_EPHEMERAL
+                break
+
+    if "user" in prompt_caching:
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                content = msg.get("content")
+                if isinstance(content, list) and len(content) > 0:
+                    content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+                else:
+                    msg["cache_control"] = CACHE_CONTROL_EPHEMERAL
+                break
+
+
 def apply_provider_preprocessing(
     kw: Dict[str, Any],
     provider: Optional[str],
+    prompt_caching: Optional[List[Literal["tools", "system", "user"]]] = None,
 ) -> Dict[str, Any]:
     """Apply provider-specific preprocessing to messages in kw dict (mutates kw)."""
     messages = kw.get("messages")
@@ -354,5 +397,8 @@ def apply_provider_preprocessing(
     # Disable thinking mode if tool choice is required
     if kw.get("reasoning_effort") is not None and kw.get("tool_choice") == "required":
         del kw["reasoning_effort"]
+
+    if prompt_caching:
+        _apply_anthropic_caching(kw, prompt_caching)
 
     return kw

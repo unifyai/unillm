@@ -11,6 +11,7 @@ from typing import (
     Generator,
     Iterable,
     List,
+    Literal,
     Optional,
     Type,
     Union,
@@ -81,6 +82,7 @@ class _UniClient(_Client, abc.ABC):
         return_full_completion: bool = False,
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
+        prompt_caching: Optional[List[Literal["tools", "system", "user"]]] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         **kwargs,
@@ -240,6 +242,7 @@ class _UniClient(_Client, abc.ABC):
             return_full_completion=return_full_completion,
             cache=cache,
             cache_backend=cache_backend,
+            prompt_caching=prompt_caching,
             # passthrough arguments
             extra_headers=extra_headers,
             **kwargs,
@@ -539,6 +542,7 @@ class _UniClient(_Client, abc.ABC):
         return_full_completion: Optional[bool] = None,
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
+        prompt_caching: Optional[List[Literal["tools", "system", "user"]]] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         service_tier: Optional[str] = None,
@@ -737,6 +741,7 @@ class _UniClient(_Client, abc.ABC):
             return_full_completion=return_full_completion,
             cache=_default(cache, is_caching_enabled()),
             cache_backend=_default(cache_backend, self._cache_backend),
+            prompt_caching=_default(prompt_caching, self._prompt_caching),
             # passthrough arguments
             extra_headers=_default(extra_headers, self._extra_headers),
             **kwargs,
@@ -762,6 +767,7 @@ class Unify(_UniClient):
         stream_options: Optional[ChatCompletionStreamOptionsParam],
         # python client arguments
         return_full_completion: bool,
+        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
     ) -> Generator[str, None, None]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -770,7 +776,7 @@ class Unify(_UniClient):
             stream_options=stream_options,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider)
+        apply_provider_preprocessing(kw, self._provider, prompt_caching)
 
         # Track usage from the stream for cost deduction
         usage_info = None
@@ -832,6 +838,7 @@ class Unify(_UniClient):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
+        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -840,7 +847,7 @@ class Unify(_UniClient):
             stream_options=None,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider)
+        apply_provider_preprocessing(kw, self._provider, prompt_caching)
 
         # Write request to log file (before LLM call) so we don't lose it if call hangs
         pending_path = write_request_pending(kw, label=endpoint)
@@ -983,6 +990,7 @@ class Unify(_UniClient):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
+        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
         # passthrough arguments
         extra_headers: Optional[Headers],
         **kwargs,
@@ -1016,6 +1024,7 @@ class Unify(_UniClient):
                 stream_options=stream_options,
                 # python client arguments
                 return_full_completion=return_full_completion,
+                prompt_caching=prompt_caching,
             )
         return self._generate_non_stream(
             self._endpoint,
@@ -1024,6 +1033,7 @@ class Unify(_UniClient):
             return_full_completion=return_full_completion,
             cache=cache,
             cache_backend=cache_backend,
+            prompt_caching=prompt_caching,
         )
 
     def to_async_client(self):
@@ -1050,6 +1060,7 @@ class AsyncUnify(_UniClient):
         stream_options: Optional[ChatCompletionStreamOptionsParam],
         # python client arguments
         return_full_completion: bool,
+        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
     ) -> AsyncGenerator[str, None]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -1058,7 +1069,7 @@ class AsyncUnify(_UniClient):
             stream_options=stream_options,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider)
+        apply_provider_preprocessing(kw, self._provider, prompt_caching)
 
         # Track usage from the stream for cost deduction
         usage_info = None
@@ -1124,6 +1135,7 @@ class AsyncUnify(_UniClient):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
+        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -1132,7 +1144,7 @@ class AsyncUnify(_UniClient):
             stream_options=None,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider)
+        apply_provider_preprocessing(kw, self._provider, prompt_caching)
 
         # Write request to log file (before LLM call) so we don't lose it if call hangs
         pending_path = write_request_pending(kw, label=endpoint)
@@ -1278,6 +1290,7 @@ class AsyncUnify(_UniClient):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
+        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
         # passthrough arguments
         extra_headers: Optional[Headers],
         service_tier: Optional[str] = None,
@@ -1312,6 +1325,7 @@ class AsyncUnify(_UniClient):
                 stream_options=stream_options,
                 # python client arguments
                 return_full_completion=return_full_completion,
+                prompt_caching=prompt_caching,
             )
         return await self._generate_non_stream(
             self._endpoint,
@@ -1320,6 +1334,7 @@ class AsyncUnify(_UniClient):
             return_full_completion=return_full_completion,
             cache=cache,
             cache_backend=cache_backend,
+            prompt_caching=prompt_caching,
         )
 
     def to_sync_client(self):

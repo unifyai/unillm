@@ -1,7 +1,7 @@
 # global
 import copy
 from abc import ABC, abstractmethod
-from typing import Dict, Iterable, List, Optional, Type, Union
+from typing import Dict, Iterable, List, Literal, Optional, Type, Union
 
 import requests
 
@@ -57,6 +57,7 @@ class _Client(ABC):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
+        prompt_caching: Optional[List[Literal["tools", "system", "user"]]],
         # passthrough arguments
         extra_headers: Optional[Headers],
         **kwargs,
@@ -89,6 +90,7 @@ class _Client(ABC):
         self._return_full_completion = None
         self._cache = None
         self._cache_backend = None
+        self._prompt_caching = None
         self._extra_headers = None
 
         # set based on arguments
@@ -118,6 +120,7 @@ class _Client(ABC):
         self.set_return_full_completion(return_full_completion)
         self.set_cache(cache)
         self.set_cache_backend(cache_backend)
+        self.set_prompt_caching(prompt_caching)
         # passthrough arguments
         self.set_extra_headers(extra_headers)
 
@@ -390,6 +393,16 @@ class _Client(ABC):
             The default cache bool.
         """
         return self._cache
+
+    @property
+    def prompt_caching(self) -> Optional[List[Literal["tools", "system", "user"]]]:
+        """
+        Get the default prompt caching settings for Anthropic.
+
+        Returns:
+            List of cache breakpoint locations, or None if not set.
+        """
+        return self._prompt_caching
 
     @property
     def extra_headers(self) -> Optional[Headers]:
@@ -776,6 +789,23 @@ class _Client(ABC):
         self._cache_backend = value
         return self
 
+    def set_prompt_caching(
+        self,
+        value: Optional[List[Literal["tools", "system", "user"]]],
+    ) -> Self:
+        """
+        Set the prompt caching settings for Anthropic models.
+
+        Args:
+            value: List of locations to insert cache breakpoints.
+                   Valid values: "tools", "system", "user".
+
+        Returns:
+            This client, useful for chaining inplace calls.
+        """
+        self._prompt_caching = value
+        return self
+
     def set_extra_headers(self, value: Headers) -> Self:
         """
         Set the default extra headers.
@@ -1074,6 +1104,7 @@ class _Client(ABC):
                         stateful=self._stateful,
                         return_full_completion=self._return_full_completion,
                         cache=self._cache,
+                        prompt_caching=self._prompt_caching,
                         # passthrough arguments
                         extra_headers=self._extra_headers,
                     ),
@@ -1114,6 +1145,7 @@ class _Client(ABC):
                     stateful=self._stateful,
                     return_full_completion=self._return_full_completion,
                     cache=self._cache,
+                    prompt_caching=self._prompt_caching,
                     # passthrough arguments
                     extra_headers=self._extra_headers,
                 ),
