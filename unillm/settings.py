@@ -62,6 +62,26 @@ class Settings(BaseSettings):
     UNILLM_OTEL_ENDPOINT: str = ""
     UNILLM_OTEL_LOG_DIR: str = ""
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Transient Error Retry Configuration
+    # ─────────────────────────────────────────────────────────────────────────
+    # Number of retries for transient errors that are incorrectly classified
+    # as 400 BadRequest by upstream providers (especially OpenAI).
+    #
+    # Background: OpenAI occasionally returns HTTP 400 with messages like
+    # "something went wrong reading your request" for valid requests. This is
+    # a transient server-side processing error, but because it returns as 400
+    # (not 5xx), neither the OpenAI SDK nor LiteLLM will retry it.
+    #
+    # References:
+    # - LiteLLM issue: https://github.com/BerriAI/litellm/issues/12503
+    #   (400 errors don't trigger fallback/retry even for transient messages)
+    # - OpenAI community reports of intermittent "something went wrong" errors:
+    #   https://community.openai.com/t/error-something-went-wrong-if-this-issue-persists/200411
+    #
+    # Set to 0 to disable this retry logic entirely.
+    UNILLM_TRANSIENT_RETRY_COUNT: int = 3
+
     @field_validator("UNILLM_LOG", "UNILLM_OTEL", mode="before")
     @classmethod
     def parse_bool_fields(cls, v: Any) -> bool:
