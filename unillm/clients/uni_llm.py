@@ -36,7 +36,13 @@ from .provider_preprocessing import apply_provider_preprocessing
 from ..caching import _get_cache, _write_to_cache, is_caching_enabled
 from ..cache_events import _emit_cache_event
 from ..llm_events import _emit_llm_event, LLMEvent
-from ..helpers import _default, get_seed, UNSET
+from ..helpers import (
+    _default,
+    get_seed,
+    retry_transient_400_async,
+    retry_transient_400_sync,
+    UNSET,
+)
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
 from ..logger import (
@@ -784,7 +790,9 @@ class Unify(_UniClient):
         billed_cost: float | None = None
 
         try:
-            chat_completion = litellm.completion(shared_session=SHARED_SESSION, **kw)
+            chat_completion = retry_transient_400_sync(
+                lambda: litellm.completion(shared_session=SHARED_SESSION, **kw),
+            )
             for chunk in chat_completion:
                 # Capture usage if present in the chunk (final chunk with include_usage)
                 if hasattr(chunk, "usage") and chunk.usage is not None:
@@ -880,9 +888,11 @@ class Unify(_UniClient):
                     in_cache = True if chat_completion is not None else False
                 if chat_completion is None:
                     try:
-                        chat_completion = litellm.completion(
-                            shared_session=SHARED_SESSION,
-                            **kw,
+                        chat_completion = retry_transient_400_sync(
+                            lambda: litellm.completion(
+                                shared_session=SHARED_SESSION,
+                                **kw,
+                            ),
                         )
                     except litellm.exceptions.APIError as e:
                         llm_error = Exception(e.message)
@@ -1077,9 +1087,11 @@ class AsyncUnify(_UniClient):
         billed_cost: float | None = None
 
         try:
-            async_stream = await litellm.acompletion(
-                shared_session=SHARED_SESSION,
-                **kw,
+            async_stream = await retry_transient_400_async(
+                lambda: litellm.acompletion(
+                    shared_session=SHARED_SESSION,
+                    **kw,
+                ),
             )
             async for chunk in async_stream:  # type: ignore[union-attr]
                 # Capture usage if present in the chunk (final chunk with include_usage)
@@ -1177,9 +1189,11 @@ class AsyncUnify(_UniClient):
                     in_cache = True if chat_completion is not None else False
                 if chat_completion is None:
                     try:
-                        chat_completion = await litellm.acompletion(
-                            shared_session=SHARED_SESSION,
-                            **kw,
+                        chat_completion = await retry_transient_400_async(
+                            lambda: litellm.acompletion(
+                                shared_session=SHARED_SESSION,
+                                **kw,
+                            ),
                         )
                     except litellm.exceptions.APIError as e:
                         llm_error = Exception(e.message)
