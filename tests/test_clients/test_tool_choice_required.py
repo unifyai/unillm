@@ -26,6 +26,19 @@ SIMPLE_TOOL = {
 }
 
 
+def _assert_no_retry_nudge_in_history(messages: list) -> None:
+    """Assert that retry nudge messages are not present in the message history."""
+    # Check for the tool_choice=required nudge
+    nudge_fragment = "tool_choice is set to 'required'"
+
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, str) and nudge_fragment in content:
+            raise AssertionError(
+                f"Retry nudge message leaked into history: {content!r}",
+            )
+
+
 def test_tool_choice_required_compliance():
     """
     When tool_choice="required", the model MUST call a tool.
@@ -117,3 +130,6 @@ def test_tool_choice_required_stateful_history():
     assert (
         assistant_msg.get("tool_calls") is not None
     ), f"Assistant message in history has no tool_calls: {assistant_msg}"
+
+    # Verify no retry nudge content leaked into history
+    _assert_no_retry_nudge_in_history(messages)

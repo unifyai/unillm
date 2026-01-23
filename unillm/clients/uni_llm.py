@@ -971,15 +971,20 @@ class Unify(_UniClient):
                 build_retry_kw,
             )
 
-            needs_retry, _ = check_needs_postprocessing(
+            needs_retry, retry_reason = check_needs_postprocessing(
                 response=chat_completion,
                 provider=self._provider,
                 original_tool_choice=original_tool_choice,
                 reasoning_effort=prompt.components.get("reasoning_effort"),
+                tools=list(kw.get("tools", [])) if kw.get("tools") else None,
             )
 
             if needs_retry:
-                retry_kw = build_retry_kw(kw=kw, response=chat_completion)
+                retry_kw = build_retry_kw(
+                    kw=kw,
+                    response=chat_completion,
+                    retry_reason=retry_reason,
+                )
                 retry_pending = write_request_pending(
                     retry_kw,
                     label=f"{endpoint}-retry",
@@ -1348,15 +1353,20 @@ class AsyncUnify(_UniClient):
                 build_retry_kw,
             )
 
-            needs_retry, _ = check_needs_postprocessing(
+            needs_retry, retry_reason = check_needs_postprocessing(
                 response=chat_completion,
                 provider=self._provider,
                 original_tool_choice=original_tool_choice,
                 reasoning_effort=prompt.components.get("reasoning_effort"),
+                tools=list(kw.get("tools", [])) if kw.get("tools") else None,
             )
 
             if needs_retry:
-                retry_kw = build_retry_kw(kw=kw, response=chat_completion)
+                retry_kw = build_retry_kw(
+                    kw=kw,
+                    response=chat_completion,
+                    retry_reason=retry_reason,
+                )
                 retry_pending = write_request_pending(
                     retry_kw,
                     label=f"{endpoint}-retry",
