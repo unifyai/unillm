@@ -924,11 +924,13 @@ class Unify(_UniClient):
                     and hasattr(chat_completion, "model_dump")
                     else chat_completion
                 )
+                # For logging, include error info if present
+                log_body = resp_body
                 if llm_error is not None:
-                    resp_body = {"response": resp_body, "error": str(llm_error)}
+                    log_body = {"response": resp_body, "error": str(llm_error)}
                 append_response_and_finalize(
                     pending_path,
-                    resp_body,
+                    log_body,
                     cache_status,
                     label=endpoint,
                 )
@@ -944,7 +946,7 @@ class Unify(_UniClient):
                     billed_cost = provider_cost * get_cost_margin()
 
             # Emit LLM event (after LLM call, always runs)
-            # resp_body is already serialized above for logging
+            # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
             _emit_llm_event(
                 LLMEvent(
                     request=kw,
@@ -1226,11 +1228,13 @@ class AsyncUnify(_UniClient):
                     and hasattr(chat_completion, "model_dump")
                     else chat_completion
                 )
+                # For logging, include error info if present
+                log_body = resp_body
                 if llm_error is not None:
-                    resp_body = {"response": resp_body, "error": str(llm_error)}
+                    log_body = {"response": resp_body, "error": str(llm_error)}
                 append_response_and_finalize(
                     pending_path,
-                    resp_body,
+                    log_body,
                     cache_status,
                     label=endpoint,
                 )
@@ -1246,7 +1250,7 @@ class AsyncUnify(_UniClient):
                     billed_cost = provider_cost * get_cost_margin()
 
             # Emit LLM event (after LLM call, always runs)
-            # resp_body is already serialized above for logging
+            # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
             _emit_llm_event(
                 LLMEvent(
                     request=kw,
