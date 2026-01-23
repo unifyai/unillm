@@ -22,6 +22,11 @@ THINKING_PREFILL_EXPLANATION = (
 THINKING_COMPLIANCE_CONTEXT_HEADER = "[Prior tool execution context]"
 THINKING_COMPLIANCE_CONTEXT_FOOTER = "[Continue from here]"
 
+TOOL_CHOICE_REQUIRED_INSTRUCTION = (
+    "IMPORTANT: You MUST call a tool on this turn. A tool call is required - "
+    "do not respond with text only. Select the most appropriate tool and call it."
+)
+
 
 def _move_system_messages_to_front(
     messages: List[Dict[str, Any]],
@@ -166,6 +171,36 @@ def _apply_thinking_compliance(
         return messages
 
     return _transform_tool_calls_to_context(messages)
+
+
+def _strip_thinking_blocks(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Remove thinking_blocks from all messages.
+
+    When reasoning/thinking is disabled but messages from a previous
+    thinking-enabled conversation contain thinking_blocks, Anthropic rejects with:
+    "When thinking is disabled, an assistant message cannot contain thinking."
+
+    This function removes thinking_blocks from all messages to make them
+    compatible with non-thinking requests.
+
+    Args:
+        messages: List of message dicts.
+
+    Returns:
+        New list with thinking_blocks removed from all messages.
+    """
+    result = []
+    for msg in messages:
+        if msg.get("thinking_blocks"):
+            # Create a copy without thinking_blocks
+            new_msg = {k: v for k, v in msg.items() if k != "thinking_blocks"}
+            result.append(new_msg)
+        else:
+            result.append(msg)
+    return result
 
 
 def _find_first_real_assistant_index(messages: List[Dict[str, Any]]) -> Optional[int]:
@@ -431,6 +466,13 @@ def apply_provider_preprocessing(
     if kw.get("reasoning_effort") is not None:
         messages = _apply_thinking_compliance(messages)
 
+    # Strip thinking_blocks when reasoning is disabled.
+    # If messages contain thinking_blocks from a previous thinking-enabled conversation,
+    # but reasoning is not enabled for this request, Anthropic will reject with:
+    # "When thinking is disabled, an assistant message cannot contain thinking."
+    if kw.get("reasoning_effort") is None:
+        messages = _strip_thinking_blocks(messages)
+
     kw["messages"] = messages
 
     # Anthropic requires tools=[] (not None) when messages contain tool-related content.
@@ -438,9 +480,22 @@ def apply_provider_preprocessing(
     if kw.get("tools") is None:
         kw["tools"] = []
 
-    # Disable thinking mode if tool choice is required
+    # Handle thinking mode + tool_choice="required" conflict.
+    # Anthropic's API forbids thinking when tool_choice forces tool use.
+    # Instead of disabling thinking (losing intelligence), we:
+    # 1. Keep reasoning_effort enabled
+    # 2. Downgrade tool_choice from "required" to "auto"
+    # 3. Add a system message instructing the model to call a tool
+    # This preserves the smarter thinking model while nudging toward tool use.
     if kw.get("reasoning_effort") is not None and kw.get("tool_choice") == "required":
-        del kw["reasoning_effort"]
+        kw["tool_choice"] = "auto"
+        # Insert tool instruction as first system message
+        messages = kw.get("messages", [])
+        messages.insert(
+            0,
+            {"role": "system", "content": TOOL_CHOICE_REQUIRED_INSTRUCTION},
+        )
+        kw["messages"] = messages
 
     if prompt_caching:
         _apply_anthropic_caching(kw, prompt_caching)
