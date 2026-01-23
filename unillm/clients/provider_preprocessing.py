@@ -486,7 +486,7 @@ def apply_provider_preprocessing(
     # 1. Keep reasoning_effort enabled
     # 2. Downgrade tool_choice from "required" to "auto"
     # 3. Add a system message instructing the model to call a tool
-    # This preserves the smarter thinking model while nudging toward tool use.
+    # Post-processing (provider_postprocessing.py) handles retry if needed.
     if kw.get("reasoning_effort") is not None and kw.get("tool_choice") == "required":
         kw["tool_choice"] = "auto"
         # Insert tool instruction as first system message
