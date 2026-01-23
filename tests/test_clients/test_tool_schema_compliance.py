@@ -12,7 +12,13 @@ don't appear in the client's message history.
 """
 
 import json
+from unittest.mock import MagicMock
+
 import unillm
+from unillm.clients.provider_postprocessing import (
+    RETRY_REASON_INVALID_TOOL_NAME,
+    build_retry_kw,
+)
 
 
 TOOL_A = {
@@ -205,3 +211,69 @@ Example:
 
     # No retry nudge content should be in the history
     _assert_no_retry_nudge_in_history(messages)
+
+
+def test_build_retry_kw_identifies_correct_invalid_tool():
+    """
+    Bug: build_retry_kw always uses tool_calls[0] in error message.
+
+    When multiple tool calls are returned and the FIRST one is valid but a
+    LATER one is invalid, the retry nudge message incorrectly reports the
+    first (valid) tool as the problem.
+
+    This test verifies the error message correctly identifies the actual
+    invalid tool, not just the first tool call.
+    """
+    # Create a mock response with multiple tool calls:
+    # - tool_calls[0] = "valid_tool" (valid)
+    # - tool_calls[1] = "invalid_tool" (invalid)
+    mock_tool_call_valid = MagicMock()
+    mock_tool_call_valid.function.name = "valid_tool"
+
+    mock_tool_call_invalid = MagicMock()
+    mock_tool_call_invalid.function.name = "invalid_tool"
+
+    mock_message = MagicMock()
+    mock_message.tool_calls = [mock_tool_call_valid, mock_tool_call_invalid]
+    mock_message.content = None
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    # Original request had only "valid_tool" in schema
+    kw = {
+        "messages": [{"role": "user", "content": "Do it."}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "valid_tool",
+                    "description": "A valid tool.",
+                    "parameters": {"type": "object", "properties": {}, "required": []},
+                },
+            },
+        ],
+    }
+
+    # Build the retry request
+    retry_kw = build_retry_kw(
+        kw=kw,
+        response=mock_response,
+        retry_reason=RETRY_REASON_INVALID_TOOL_NAME,
+    )
+
+    # Find the nudge message
+    nudge_message = retry_kw["messages"][-1]
+    assert nudge_message["role"] == "user"
+
+    # The nudge should mention "invalid_tool", NOT "valid_tool"
+    nudge_content = nudge_message["content"]
+    assert (
+        "invalid_tool" in nudge_content
+    ), f"Retry nudge should mention 'invalid_tool' but got: {nudge_content!r}"
+    assert (
+        "valid_tool" not in nudge_content.split("'")[1]
+    ), f"Retry nudge incorrectly reports 'valid_tool' as invalid: {nudge_content!r}"
