@@ -277,3 +277,73 @@ def test_build_retry_kw_identifies_correct_invalid_tool():
     assert (
         "valid_tool" not in nudge_content.split("'")[1]
     ), f"Retry nudge incorrectly reports 'valid_tool' as invalid: {nudge_content!r}"
+
+
+def test_build_retry_kw_identifies_multiple_invalid_tools():
+    """
+    When multiple tool calls are invalid, the retry message should list all of them.
+    """
+    # Create a mock response with multiple tool calls:
+    # - tool_calls[0] = "valid_tool" (valid)
+    # - tool_calls[1] = "bad_tool_1" (invalid)
+    # - tool_calls[2] = "bad_tool_2" (invalid)
+    mock_tc_valid = MagicMock()
+    mock_tc_valid.function.name = "valid_tool"
+
+    mock_tc_bad1 = MagicMock()
+    mock_tc_bad1.function.name = "bad_tool_1"
+
+    mock_tc_bad2 = MagicMock()
+    mock_tc_bad2.function.name = "bad_tool_2"
+
+    mock_message = MagicMock()
+    mock_message.tool_calls = [mock_tc_valid, mock_tc_bad1, mock_tc_bad2]
+    mock_message.content = None
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    # Original request had only "valid_tool" in schema
+    kw = {
+        "messages": [{"role": "user", "content": "Do it."}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "valid_tool",
+                    "description": "A valid tool.",
+                    "parameters": {"type": "object", "properties": {}, "required": []},
+                },
+            },
+        ],
+    }
+
+    # Build the retry request
+    retry_kw = build_retry_kw(
+        kw=kw,
+        response=mock_response,
+        retry_reason=RETRY_REASON_INVALID_TOOL_NAME,
+    )
+
+    # Find the nudge message
+    nudge_message = retry_kw["messages"][-1]
+    nudge_content = nudge_message["content"]
+
+    # Should mention BOTH invalid tools
+    assert (
+        "bad_tool_1" in nudge_content
+    ), f"Retry nudge should mention 'bad_tool_1' but got: {nudge_content!r}"
+    assert (
+        "bad_tool_2" in nudge_content
+    ), f"Retry nudge should mention 'bad_tool_2' but got: {nudge_content!r}"
+    # Should NOT mention valid_tool as invalid
+    assert (
+        "valid_tool" in nudge_content.split("only tools you can call are")[1]
+    ), f"Retry nudge should list 'valid_tool' as available: {nudge_content!r}"
+    # Should use plural form
+    assert (
+        "these tools are not available" in nudge_content
+    ), f"Retry nudge should use plural form but got: {nudge_content!r}"

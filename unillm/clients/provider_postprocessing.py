@@ -26,11 +26,16 @@ TOOL_CHOICE_REQUIRED_RETRY_NUDGE = (
     "appropriate tool with the most appropriate arguments. Please call a tool now."
 )
 
-# Nudge message template for retrying when model calls a tool not in the schema
-INVALID_TOOL_NAME_RETRY_NUDGE = (
-    "You attempted to call '{called_tool}', but this tool is not available. "
+# Nudge message templates for retrying when model calls tools not in the schema
+INVALID_TOOL_NAME_RETRY_NUDGE_SINGLE = (
+    "You attempted to call '{invalid_tools}', but this tool is not available. "
     "The only tools you can call are: {valid_tools}. "
     "Please select one of the available tools."
+)
+INVALID_TOOL_NAME_RETRY_NUDGE_PLURAL = (
+    "You attempted to call {invalid_tools}, but these tools are not available. "
+    "The only tools you can call are: {valid_tools}. "
+    "Please select from the available tools only."
 )
 
 
@@ -99,16 +104,36 @@ def build_retry_kw(
 
     # Determine the nudge message based on retry reason
     if retry_reason == RETRY_REASON_INVALID_TOOL_NAME:
-        # For invalid tool name, we need to include the tool call attempt
-        # and provide a helpful error message
+        # For invalid tool name, find ALL invalid tools and report them
         tool_calls = msg.tool_calls or []
-        if tool_calls:
-            called_tool = tool_calls[0].function.name
-            valid_tools = _get_valid_tool_names(kw.get("tools"))
-            nudge = INVALID_TOOL_NAME_RETRY_NUDGE.format(
-                called_tool=called_tool,
-                valid_tools=", ".join(valid_tools) if valid_tools else "(none)",
+        valid_tool_names = set(_get_valid_tool_names(kw.get("tools")))
+
+        # Find all invalid tool names
+        invalid_tools = []
+        for tc in tool_calls:
+            if tc.function.name not in valid_tool_names:
+                invalid_tools.append(tc.function.name)
+
+        if invalid_tools:
+            valid_tools_str = (
+                ", ".join(sorted(valid_tool_names)) if valid_tool_names else "(none)"
             )
+            if len(invalid_tools) == 1:
+                nudge = INVALID_TOOL_NAME_RETRY_NUDGE_SINGLE.format(
+                    invalid_tools=f"'{invalid_tools[0]}'",
+                    valid_tools=valid_tools_str,
+                )
+            else:
+                # Format multiple invalid tools as 'tool1', 'tool2', and 'tool3'
+                quoted = [f"'{t}'" for t in invalid_tools]
+                if len(quoted) == 2:
+                    invalid_str = f"{quoted[0]} and {quoted[1]}"
+                else:
+                    invalid_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
+                nudge = INVALID_TOOL_NAME_RETRY_NUDGE_PLURAL.format(
+                    invalid_tools=invalid_str,
+                    valid_tools=valid_tools_str,
+                )
             # Add the assistant response with the invalid tool call
             # (content only, not thinking blocks, not the tool call itself)
             retry_messages.append(
