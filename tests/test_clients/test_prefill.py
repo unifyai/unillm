@@ -6,9 +6,137 @@ from unillm.clients.provider_preprocessing import (
     _has_non_compliant_tool_calls,
     _transform_tool_calls_to_context,
     _apply_thinking_compliance,
+    _combine_adjacent_user_messages,
     THINKING_COMPLIANCE_CONTEXT_HEADER,
     THINKING_COMPLIANCE_CONTEXT_FOOTER,
 )
+
+
+class TestCombineAdjacentUserMessagesImagePreservation:
+    """
+    Tests for preserving image blocks when combining adjacent user messages.
+
+    Image blocks should be kept as native blocks in the combined message,
+    not JSON-serialized, to maintain their semantic meaning for the model.
+    """
+
+    def test_combine_adjacent_user_messages_preserves_url_images(self):
+        """
+        URL image blocks should be preserved as native blocks when combining
+        adjacent user messages, not JSON-serialized into text.
+        """
+        url_image = {
+            "type": "image_url",
+            "image_url": {"url": "https://example.com/image.jpg"},
+        }
+        messages = [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe this image"},
+                    url_image,
+                ],
+            },
+        ]
+
+        result, combined = _combine_adjacent_user_messages(messages)
+
+        assert combined is True
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+
+        # Content should be a list with text block + preserved image block
+        content = result[0]["content"]
+        assert isinstance(content, list)
+
+        # Find the image block - should be preserved as native block
+        image_blocks = [b for b in content if b.get("type") == "image_url"]
+        assert len(image_blocks) == 1
+        assert image_blocks[0] == url_image
+
+        # Text should be JSON-dumped in a text block
+        text_blocks = [b for b in content if b.get("type") == "text"]
+        assert len(text_blocks) == 1
+        assert "hello" in text_blocks[0]["text"]
+
+    def test_combine_adjacent_user_messages_preserves_base64_images(self):
+        """
+        Base64 image blocks should be preserved as native blocks when combining
+        adjacent user messages, not JSON-serialized into text (which would bloat context).
+        """
+        base64_image = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,SGVsbG8gV29ybGQh"},
+        }
+        messages = [
+            {"role": "user", "content": "first message"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "second message with image"},
+                    base64_image,
+                ],
+            },
+        ]
+
+        result, combined = _combine_adjacent_user_messages(messages)
+
+        assert combined is True
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+
+        # Content should be a list with text block + preserved image block
+        content = result[0]["content"]
+        assert isinstance(content, list)
+
+        # Find the image block - should be preserved as native block
+        image_blocks = [b for b in content if b.get("type") == "image_url"]
+        assert len(image_blocks) == 1
+        assert image_blocks[0] == base64_image
+        # Verify base64 data is preserved exactly, not re-encoded
+        assert "SGVsbG8gV29ybGQh" in image_blocks[0]["image_url"]["url"]
+
+        # Text should be JSON-dumped in a text block
+        text_blocks = [b for b in content if b.get("type") == "text"]
+        assert len(text_blocks) == 1
+        assert "first message" in text_blocks[0]["text"]
+        assert "second message with image" in text_blocks[0]["text"]
+
+    def test_combine_adjacent_user_messages_preserves_multiple_images(self):
+        """
+        Multiple image blocks (both URL and base64) should all be preserved.
+        """
+        url_image = {
+            "type": "image_url",
+            "image_url": {"url": "https://example.com/img.png"},
+        }
+        base64_image = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,aW1hZ2VkYXRh"},
+        }
+        messages = [
+            {"role": "user", "content": "text only"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "with images"},
+                    url_image,
+                    base64_image,
+                ],
+            },
+        ]
+
+        result, combined = _combine_adjacent_user_messages(messages)
+
+        assert combined is True
+        content = result[0]["content"]
+        assert isinstance(content, list)
+
+        image_blocks = [b for b in content if b.get("type") == "image_url"]
+        assert len(image_blocks) == 2
+        assert url_image in image_blocks
+        assert base64_image in image_blocks
 
 
 class TestPreprocessingPrefillRefinement:
