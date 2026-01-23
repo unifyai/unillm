@@ -5,7 +5,10 @@ FINDING: Anthropic does NOT constrain tool names to the schema.
 The model can call tools mentioned in the prompt even if they're not in the
 `tools` array. This happens both with and without extended thinking.
 
-The fix is to use strict mode (`strict: true`) on tool definitions.
+The fix is implemented via retry logic in provider_postprocessing.py.
+When the model calls a tool not in the schema, we detect this and retry
+with a helpful error message. The retry messages are cleaned up so they
+don't appear in the client's message history.
 """
 
 import json
@@ -41,17 +44,33 @@ TOOL_SEARCH = {
 }
 
 
+def _assert_no_retry_nudge_in_history(messages: list) -> None:
+    """Assert that retry nudge messages are not present in the message history."""
+    # The nudge message starts with "You attempted to call"
+    nudge_prefix = "You attempted to call"
+
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, str) and nudge_prefix in content:
+            raise AssertionError(
+                f"Retry nudge message leaked into history: {content!r}",
+            )
+
+
 def test_anthropic_no_tool_name_constraint():
     """
     Anthropic does NOT constrain tool names to schema.
 
     When tool_choice="required" and the prompt mentions tool_b,
     Claude calls tool_b even though only tool_a is in the schema.
+
+    Our retry logic detects this and retries, ultimately returning tool_a.
+    The intermediate retry messages should NOT appear in the client's history.
     """
     client = unillm.Unify(
         "claude-4.5-opus@anthropic",
         cache=True,
-        stateful=False,
+        stateful=True,  # Enable stateful to test history cleanup
     )
 
     system_prompt = """Tools:
@@ -78,6 +97,30 @@ You MUST call tool_b. Do not call tool_a.
         f"Anthropic does not constrain tool names. Fix: use strict=true."
     )
 
+    # Verify intermediate retry messages are NOT in the client's history
+    messages = client._messages
+
+    # Should only have: system message, user message, compliant assistant response
+    user_messages = [m for m in messages if m.get("role") == "user"]
+    assert (
+        len(user_messages) == 1
+    ), f"Expected 1 user message but found {len(user_messages)}: {user_messages}"
+    assert (
+        user_messages[0]["content"] == "Do it."
+    ), f"Unexpected user message: {user_messages[0]['content']!r}"
+
+    # The assistant message should have the compliant tool call
+    assistant_messages = [m for m in messages if m.get("role") == "assistant"]
+    assert (
+        len(assistant_messages) == 1
+    ), f"Expected 1 assistant message but found {len(assistant_messages)}"
+    assert (
+        assistant_messages[0].get("tool_calls") is not None
+    ), f"Assistant message should have tool_calls: {assistant_messages[0]}"
+
+    # No retry nudge content should be in the history
+    _assert_no_retry_nudge_in_history(messages)
+
 
 def test_anthropic_no_tool_name_constraint_with_thinking():
     """
@@ -87,13 +130,13 @@ def test_anthropic_no_tool_name_constraint_with_thinking():
     and filter, but only search is in schema. For an exact-match task,
     Claude prefers filter - and calls it even though it's not available.
 
-    The thinking block may correctly identify the conflict, but the tool
-    call output is not constrained to the schema.
+    Our retry logic detects this and retries, ultimately returning search.
+    The intermediate retry messages should NOT appear in the client's history.
     """
     client = unillm.Unify(
         "claude-4.5-opus@anthropic",
         cache=True,
-        stateful=False,
+        stateful=True,  # Enable stateful to test history cleanup
     )
 
     tools_json = json.dumps(
@@ -138,3 +181,27 @@ Example:
         f"Anthropic does not constrain tool names even with thinking. "
         f"Fix: use strict=true."
     )
+
+    # Verify intermediate retry messages are NOT in the client's history
+    messages = client._messages
+
+    # Should only have: system message, user message, compliant assistant response
+    user_messages = [m for m in messages if m.get("role") == "user"]
+    assert (
+        len(user_messages) == 1
+    ), f"Expected 1 user message but found {len(user_messages)}: {user_messages}"
+    assert (
+        user_messages[0]["content"] == "Find Alice Smith."
+    ), f"Unexpected user message: {user_messages[0]['content']!r}"
+
+    # The assistant message should have the compliant tool call
+    assistant_messages = [m for m in messages if m.get("role") == "assistant"]
+    assert (
+        len(assistant_messages) == 1
+    ), f"Expected 1 assistant message but found {len(assistant_messages)}"
+    assert (
+        assistant_messages[0].get("tool_calls") is not None
+    ), f"Assistant message should have tool_calls: {assistant_messages[0]}"
+
+    # No retry nudge content should be in the history
+    _assert_no_retry_nudge_in_history(messages)
