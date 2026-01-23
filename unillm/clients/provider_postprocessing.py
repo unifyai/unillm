@@ -9,7 +9,7 @@ Currently handles:
 - Anthropic: tool_choice="required" compliance with thinking mode
 """
 
-from typing import Callable, Optional, TYPE_CHECKING
+from typing import Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion
@@ -22,73 +22,43 @@ TOOL_CHOICE_REQUIRED_RETRY_NUDGE = (
 )
 
 
-def apply_provider_postprocessing(
+def check_needs_postprocessing(
     *,
-    kw: dict,
     response: "ChatCompletion",
     provider: str,
     original_tool_choice: Optional[str],
     reasoning_effort: Optional[str],
-    retry_fn: Callable[[dict], "ChatCompletion"],
-) -> "ChatCompletion":
+) -> Tuple[bool, Optional[dict]]:
     """
-    Apply provider-specific post-processing to an LLM response.
+    Check if a response needs post-processing (retry).
 
-    This function may modify the response or trigger retries for provider-specific
-    edge cases. Currently handles the Anthropic thinking mode + tool_choice="required"
-    incompatibility.
+    Returns a tuple of (needs_retry, retry_kw).
+    If needs_retry is True, retry_kw contains the kwargs for the retry call.
+    If needs_retry is False, retry_kw is None.
 
-    Args:
-        kw: The request kwargs that were sent to the LLM.
-        response: The LLM response to potentially fix.
-        provider: The provider name (e.g., "anthropic", "openai").
-        original_tool_choice: The tool_choice value before preprocessing.
-        reasoning_effort: The reasoning_effort setting (indicates thinking mode).
-        retry_fn: A function that takes retry_kw and returns a new ChatCompletion.
-
-    Returns:
-        The original response if compliant, or a fixed response from retry.
+    This design allows the caller to handle the retry (sync or async) themselves.
     """
     if provider == "anthropic":
-        return _anthropic_postprocess(
-            kw=kw,
+        return _check_anthropic_postprocessing(
             response=response,
             original_tool_choice=original_tool_choice,
             reasoning_effort=reasoning_effort,
-            retry_fn=retry_fn,
         )
-    return response
+    return False, None
 
 
-def _anthropic_postprocess(
+def build_retry_kw(
     *,
     kw: dict,
     response: "ChatCompletion",
-    original_tool_choice: Optional[str],
-    reasoning_effort: Optional[str],
-    retry_fn: Callable[[dict], "ChatCompletion"],
-) -> "ChatCompletion":
+) -> dict:
     """
-    Handle Anthropic-specific response fixes.
+    Build the retry request kwargs with nudge messages appended.
 
-    When thinking mode is enabled (reasoning_effort is set), Anthropic's API
-    doesn't support tool_choice="required". We work around this by:
-    1. Preprocessing: downgrade to "auto" + add system instruction
-    2. Postprocessing (here): if model ignored instruction, retry with nudge
-
-    This ensures tool_choice="required" semantics are enforced even when the
-    native API constraint can't be used.
+    Call this only when check_needs_postprocessing returns True.
     """
-    # Only applies when thinking mode caused tool_choice downgrade
-    if reasoning_effort is None or original_tool_choice != "required":
-        return response
-
-    # Check if response is compliant (has tool calls)
     msg = response.choices[0].message
-    if msg.tool_calls:
-        return response  # Compliant, no fix needed
 
-    # Non-compliant: model responded with text only despite instruction
     # Build retry messages: original messages + assistant response + nudge
     retry_messages = list(kw.get("messages", []))
 
@@ -111,5 +81,31 @@ def _anthropic_postprocess(
     # Create retry request
     retry_kw = dict(kw)
     retry_kw["messages"] = retry_messages
+    return retry_kw
 
-    return retry_fn(retry_kw)
+
+def _check_anthropic_postprocessing(
+    *,
+    response: "ChatCompletion",
+    original_tool_choice: Optional[str],
+    reasoning_effort: Optional[str],
+) -> Tuple[bool, Optional[dict]]:
+    """
+    Check if Anthropic response needs post-processing.
+
+    When thinking mode is enabled (reasoning_effort is set), Anthropic's API
+    doesn't support tool_choice="required". We work around this by:
+    1. Preprocessing: downgrade to "auto" + add system instruction
+    2. Postprocessing (here): if model ignored instruction, retry with nudge
+    """
+    # Only applies when thinking mode caused tool_choice downgrade
+    if reasoning_effort is None or original_tool_choice != "required":
+        return False, None
+
+    # Check if response is compliant (has tool calls)
+    msg = response.choices[0].message
+    if msg.tool_calls:
+        return False, None  # Compliant, no fix needed
+
+    # Non-compliant: model responded with text only despite instruction
+    return True, None  # Caller will build retry_kw
