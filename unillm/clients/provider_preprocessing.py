@@ -253,12 +253,39 @@ def _convert_prefill_to_system_message(
     return result
 
 
+def _extract_image_blocks(content: Any) -> Tuple[Any, List[Dict[str, Any]]]:
+    """
+    Extract image blocks from content, returning (non-image content, image blocks).
+
+    If content is a list, separates image blocks from other blocks.
+    If content is a string or other type, returns it unchanged with empty image list.
+    """
+    if not isinstance(content, list):
+        return content, []
+
+    image_blocks = []
+    other_blocks = []
+
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "image_url":
+            image_blocks.append(block)
+        else:
+            other_blocks.append(block)
+
+    # If all blocks were images, return empty list for other_blocks
+    # If no images, return original list
+    return other_blocks if other_blocks else [], image_blocks
+
+
 def _combine_adjacent_user_messages(
     messages: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """
     Combine adjacent user messages into JSON content array format.
     Returns (result, whether_any_combining_occurred).
+
+    Image blocks are preserved as native blocks in the combined message,
+    not JSON-serialized, to maintain their semantic meaning.
     """
     if not messages:
         return [], False
@@ -277,28 +304,43 @@ def _combine_adjacent_user_messages(
 
         # Collect adjacent user messages
         user_contents = []
+        all_image_blocks = []
         while i < len(messages) and messages[i].get("role") == "user":
-            user_contents.append(messages[i].get("content", ""))
+            content = messages[i].get("content", "")
+            non_image_content, image_blocks = _extract_image_blocks(content)
+            user_contents.append(non_image_content)
+            all_image_blocks.extend(image_blocks)
             i += 1
 
         if len(user_contents) == 1:
             result.append(msg)
         else:
             combined_any = True
-            result.append(
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": c} for c in user_contents
-                            ],
-                        },
-                        indent=4,
-                    ),
-                },
-            )
+            # Build list of user messages for JSON dump (excluding images)
+            # Each message preserves its original content structure
+            user_messages = []
+            for c in user_contents:
+                if isinstance(c, str):
+                    # Simple string content
+                    user_messages.append({"role": "user", "content": c})
+                elif isinstance(c, list) and c:
+                    # List content with non-image blocks
+                    user_messages.append({"role": "user", "content": c})
+                # Skip empty lists (all content was images)
+
+            # Create the combined content: JSON-dumped messages + native image blocks
+            json_content = json.dumps(user_messages, indent=4)
+
+            if all_image_blocks:
+                # Mixed content: JSON text block + native image blocks
+                combined_content = [
+                    {"type": "text", "text": json_content},
+                    *all_image_blocks,
+                ]
+                result.append({"role": "user", "content": combined_content})
+            else:
+                # No images, just JSON string as before
+                result.append({"role": "user", "content": json_content})
 
     return result, combined_any
 
