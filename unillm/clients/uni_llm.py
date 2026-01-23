@@ -853,6 +853,9 @@ class Unify(_UniClient):
             stream=False,
             stream_options=None,
         )
+        # Capture original tool_choice before preprocessing may modify it
+        original_tool_choice = kw.get("tool_choice")
+
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
 
@@ -956,21 +959,87 @@ class Unify(_UniClient):
                 ),
             )
 
+        # Deduct credits for cache misses (use already-computed billed_cost)
+        if billed_cost is not None and billed_cost > 0:
+            unify.deduct_credits(billed_cost)
+
+        # Apply provider-specific post-processing (may retry for compliance)
+        original_completion = chat_completion
+        if chat_completion is not None:
+            from .provider_postprocessing import apply_provider_postprocessing
+
+            def retry_fn(retry_kw: dict) -> ChatCompletion:
+                """Execute a retry LLM call with logging and cost tracking."""
+                retry_pending = write_request_pending(
+                    retry_kw,
+                    label=f"{endpoint}-retry",
+                )
+                retry_completion = None
+                try:
+                    with llm_span(
+                        f"{endpoint}-retry",
+                        self._model,
+                        provider=self._provider,
+                    ):
+                        retry_completion = retry_transient_400_sync(
+                            lambda: litellm.completion(
+                                shared_session=SHARED_SESSION,
+                                **retry_kw,
+                            ),
+                        )
+                finally:
+                    try:
+                        retry_body = (
+                            retry_completion.model_dump(warnings=False)
+                            if retry_completion is not None
+                            and hasattr(retry_completion, "model_dump")
+                            else retry_completion
+                        )
+                        append_response_and_finalize(
+                            retry_pending,
+                            retry_body,
+                            "retry",
+                            label=f"{endpoint}-retry",
+                        )
+                    except Exception:
+                        pass
+                # Deduct credits for retry
+                if retry_completion is not None:
+                    from ..costs import get_cost_margin
+
+                    retry_cost = compute_cost_from_response(
+                        retry_kw["model"],
+                        retry_completion,
+                    )
+                    if retry_cost is not None and retry_cost > 0:
+                        unify.deduct_credits(retry_cost * get_cost_margin())
+                return retry_completion
+
+            chat_completion = apply_provider_postprocessing(
+                kw=kw,
+                response=chat_completion,
+                provider=self._provider,
+                original_tool_choice=original_tool_choice,
+                reasoning_effort=prompt.components.get("reasoning_effort"),
+                retry_fn=retry_fn,
+            )
+
+        # Cache the FINAL response (after any post-processing), not intermediate ones
+        did_postprocess = chat_completion is not original_completion
         if (chat_completion is not None or read_closest) and cache in [
             True,
             "both",
             "write",
         ]:
-            if not in_cache or cache == "write":
+            # Write to cache if it wasn't a cache hit, or if post-processing changed it
+            if not in_cache or cache == "write" or did_postprocess:
                 _write_to_cache(
                     fn_name="chat.completions.create",
                     kw=kw,
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        # Deduct credits for cache misses (use already-computed billed_cost)
-        if billed_cost is not None and billed_cost > 0:
-            unify.deduct_credits(billed_cost)
+
         # Always return full completion; _apply_stateful_logic handles extraction
         return chat_completion
 
