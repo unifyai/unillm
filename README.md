@@ -264,6 +264,25 @@ uv sync
 uv run pytest tests/ -v
 ```
 
+### Running Tests in CI
+
+**Tests are opt-in to reduce GitHub Actions costs.** Tests only run when explicitly requested:
+
+- **Commit message**: Include `[run-tests]` in your commit message
+- **PR title**: Include `[run-tests]` in your pull request title
+- **Manual trigger**: Use the "Run workflow" button in GitHub Actions
+
+Examples:
+```bash
+# Run tests on this commit
+git commit -m "Fix caching logic [run-tests]"
+
+# No tests (default)
+git commit -m "Update README"
+```
+
+Note: The `black` formatting check always runs on every push.
+
 ### Pre-commit Hooks
 
 Pre-commit hooks run automatically on `git commit` (Black, isort, autoflake). If a commit fails due to auto-formatting, re-run the commit.
