@@ -364,12 +364,11 @@ class TestLLMEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        with patch("unillm.clients.uni_llm.asyncio.create_task"):
-                            client = unillm.AsyncUnify("gpt-4@openai", cache=True)
-                            async with allm_event_hook_scope(capture_hook):
-                                await client.generate(
-                                    messages=[{"role": "user", "content": "Hi"}],
-                                )
+                        client = unillm.AsyncUnify("gpt-4@openai", cache=True)
+                        async with allm_event_hook_scope(capture_hook):
+                            await client.generate(
+                                messages=[{"role": "user", "content": "Hi"}],
+                            )
 
         # Should have one event per LLM call
         assert len(captured) == 1
@@ -722,12 +721,11 @@ class TestLLMEventCosts:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.002,
                     ):
-                        with patch("unillm.clients.uni_llm.asyncio.create_task"):
-                            client = unillm.AsyncUnify("gpt-4@openai", cache=True)
-                            async with allm_event_hook_scope(capture_hook):
-                                await client.generate(
-                                    messages=[{"role": "user", "content": "Hi"}],
-                                )
+                        client = unillm.AsyncUnify("gpt-4@openai", cache=True)
+                        async with allm_event_hook_scope(capture_hook):
+                            await client.generate(
+                                messages=[{"role": "user", "content": "Hi"}],
+                            )
 
         assert len(captured) == 1
         event = captured[0]
