@@ -207,6 +207,7 @@ class TestHookRegistration:
 
     def test_set_hook(self):
         """Setting a hook enables limit checking."""
+
         async def my_hook(request):
             return LimitCheckResponse(allowed=True)
 
@@ -216,6 +217,7 @@ class TestHookRegistration:
 
     def test_clear_hook(self):
         """Clearing hook disables limit checking."""
+
         async def my_hook(request):
             return LimitCheckResponse(allowed=True)
 
@@ -226,6 +228,7 @@ class TestHookRegistration:
 
     def test_set_hook_to_none(self):
         """Setting hook to None clears it."""
+
         async def my_hook(request):
             return LimitCheckResponse(allowed=True)
 
@@ -274,6 +277,7 @@ class TestCheckLimits:
     @pytest.mark.asyncio
     async def test_hook_returns_allowed(self):
         """Hook that allows the request."""
+
         async def allow_hook(request):
             return LimitCheckResponse(allowed=True)
 
@@ -286,6 +290,7 @@ class TestCheckLimits:
     @pytest.mark.asyncio
     async def test_hook_returns_denied(self):
         """Hook that denies the request."""
+
         async def deny_hook(request):
             return LimitCheckResponse(
                 allowed=False,
@@ -304,6 +309,7 @@ class TestCheckLimits:
     @pytest.mark.asyncio
     async def test_hook_exception_fails_open(self):
         """Hook that raises exception fails open."""
+
         async def failing_hook(request):
             raise RuntimeError("Hook failed!")
 
@@ -349,6 +355,7 @@ class TestCheckLimitsSync:
 
     def test_hook_returns_allowed(self):
         """Hook that allows the request (sync call)."""
+
         async def allow_hook(request):
             return LimitCheckResponse(allowed=True)
 
@@ -360,6 +367,7 @@ class TestCheckLimitsSync:
 
     def test_hook_returns_denied(self):
         """Hook that denies the request (sync call)."""
+
         async def deny_hook(request):
             return LimitCheckResponse(
                 allowed=False,
@@ -375,6 +383,7 @@ class TestCheckLimitsSync:
 
     def test_hook_exception_fails_open(self):
         """Hook that raises exception fails open (sync call)."""
+
         async def failing_hook(request):
             raise ValueError("Oops!")
 
@@ -396,6 +405,7 @@ class TestHookResponses:
     @pytest.mark.asyncio
     async def test_hook_with_full_response_data(self):
         """Hook returns response with all fields populated."""
+
         async def detailed_hook(request):
             return LimitCheckResponse(
                 allowed=False,
@@ -423,6 +433,7 @@ class TestHookResponses:
     @pytest.mark.asyncio
     async def test_hook_based_on_model(self):
         """Hook can make decisions based on model."""
+
         async def model_based_hook(request):
             if "gpt-4" in request.model:
                 return LimitCheckResponse(allowed=False, reason="GPT-4 disabled")
@@ -441,9 +452,12 @@ class TestHookResponses:
     @pytest.mark.asyncio
     async def test_hook_based_on_endpoint(self):
         """Hook can make decisions based on endpoint."""
+
         async def endpoint_based_hook(request):
             if "expensive" in request.endpoint:
-                return LimitCheckResponse(allowed=False, reason="Expensive endpoint blocked")
+                return LimitCheckResponse(
+                    allowed=False, reason="Expensive endpoint blocked"
+                )
             return LimitCheckResponse(allowed=True)
 
         set_limit_check_hook(endpoint_based_hook)
@@ -468,6 +482,7 @@ class TestHookReplacement:
     @pytest.mark.asyncio
     async def test_new_hook_replaces_old(self):
         """Setting a new hook replaces the old one."""
+
         async def first_hook(request):
             return LimitCheckResponse(allowed=True, reason="first")
 
@@ -496,6 +511,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_hook_returns_wrong_type_fails_open(self):
         """Hook returning wrong type should fail open."""
+
         async def bad_hook(request):
             return "not a response"  # Wrong type
 
@@ -508,6 +524,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_empty_model_and_endpoint(self):
         """Request with empty model and endpoint."""
+
         async def echo_hook(request):
             return LimitCheckResponse(
                 allowed=True,
@@ -535,7 +552,9 @@ class TestEdgeCases:
         set_limit_check_hook(counting_hook)
 
         # Make 5 concurrent checks
-        requests = [LimitCheckRequest(model=f"model-{i}", endpoint="test") for i in range(5)]
+        requests = [
+            LimitCheckRequest(model=f"model-{i}", endpoint="test") for i in range(5)
+        ]
         responses = await asyncio.gather(*[check_limits(r) for r in requests])
 
         assert call_count == 5
@@ -553,6 +572,7 @@ class TestLimitBoundary:
     @pytest.mark.asyncio
     async def test_at_limit_is_denied(self):
         """Spend exactly at limit should be denied (design decision)."""
+
         async def boundary_hook(request):
             # Simulating exactly at limit
             return LimitCheckResponse(
@@ -573,6 +593,7 @@ class TestLimitBoundary:
     @pytest.mark.asyncio
     async def test_just_under_limit_is_allowed(self):
         """Spend just under limit should be allowed."""
+
         async def boundary_hook(request):
             return LimitCheckResponse(
                 allowed=True,

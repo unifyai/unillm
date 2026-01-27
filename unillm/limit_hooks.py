@@ -105,7 +105,9 @@ class SpendingLimitExceededError(Exception):
     def _default_message(response: LimitCheckResponse) -> str:
         """Generate default error message from response."""
         limit_type = response.limit_type.value if response.limit_type else "unknown"
-        current = f"${response.current_spend:.2f}" if response.current_spend else "unknown"
+        current = (
+            f"${response.current_spend:.2f}" if response.current_spend else "unknown"
+        )
         limit = f"${response.limit_value:.2f}" if response.limit_value else "unknown"
         return f"Monthly spending limit exceeded: {limit_type} limit of {limit} reached (current: {current})"
 
@@ -199,5 +201,3 @@ def check_limits_sync(request: LimitCheckRequest) -> LimitCheckResponse:
 def clear_limit_check_hook() -> None:
     """Clear the limit check hook (disable limit checking)."""
     set_limit_check_hook(None)
-
-
