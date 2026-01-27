@@ -2,6 +2,7 @@
 import abc
 import asyncio
 import inspect
+import logging
 
 from typing import (
     Any,
@@ -22,6 +23,15 @@ import litellm
 import unify
 from openai._types import Headers
 from ..costs import compute_cost_from_response
+from ..limit_hooks import (
+    check_limits,
+    check_limits_sync,
+    is_limit_check_enabled,
+    LimitCheckRequest,
+    SpendingLimitExceededError,
+)
+
+_LOGGER = logging.getLogger("unillm")
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionMessageParam,
@@ -783,6 +793,16 @@ class Unify(_UniClient):
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
 
+        # Check spending limits before starting stream
+        if is_limit_check_enabled():
+            limit_request = LimitCheckRequest(
+                model=kw.get("model", endpoint),
+                endpoint=endpoint,
+            )
+            limit_result = check_limits_sync(limit_request)
+            if not limit_result.allowed:
+                raise SpendingLimitExceededError(limit_result)
+
         # Track usage from the stream for cost deduction
         usage_info = None
         llm_error: BaseException | None = None
@@ -887,6 +907,16 @@ class Unify(_UniClient):
                     )
                     in_cache = True if chat_completion is not None else False
                 if chat_completion is None:
+                    # Check spending limits before making LLM call (cache miss)
+                    if is_limit_check_enabled():
+                        limit_request = LimitCheckRequest(
+                            model=kw.get("model", endpoint),
+                            endpoint=endpoint,
+                        )
+                        limit_result = check_limits_sync(limit_request)
+                        if not limit_result.allowed:
+                            raise SpendingLimitExceededError(limit_result)
+
                     try:
                         chat_completion = retry_transient_400_sync(
                             lambda: litellm.completion(
@@ -1080,19 +1110,53 @@ class AsyncUnify(_UniClient):
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
 
+        # Start limit check and stream connection in parallel for in-flight cancellation
+        limit_task: asyncio.Task | None = None
+        if is_limit_check_enabled():
+            limit_request = LimitCheckRequest(
+                model=kw.get("model", endpoint),
+                endpoint=endpoint,
+            )
+            limit_task = asyncio.create_task(
+                check_limits(limit_request),
+                name="spending_limit_check_stream",
+            )
+
         # Track usage from the stream for cost deduction
         usage_info = None
         llm_error: BaseException | None = None
         provider_cost: float | None = None
         billed_cost: float | None = None
+        async_stream = None
 
         try:
-            async_stream = await retry_transient_400_async(
-                lambda: litellm.acompletion(
-                    shared_session=SHARED_SESSION,
-                    **kw,
+            # Start stream connection (this initiates the LLM call)
+            stream_task = asyncio.create_task(
+                retry_transient_400_async(
+                    lambda: litellm.acompletion(
+                        shared_session=SHARED_SESSION,
+                        **kw,
+                    ),
                 ),
+                name="llm_stream_init",
             )
+
+            # Wait for limit check (fast) while stream connects
+            if limit_task is not None:
+                limit_result = await limit_task
+                limit_task = None
+                if not limit_result.allowed:
+                    # Cancel in-flight stream connection
+                    stream_task.cancel()
+                    try:
+                        await stream_task
+                    except asyncio.CancelledError:
+                        pass
+                    raise SpendingLimitExceededError(limit_result)
+
+            # Limit passed, get the stream
+            async_stream = await stream_task
+
             async for chunk in async_stream:  # type: ignore[union-attr]
                 # Capture usage if present in the chunk (final chunk with include_usage)
                 if hasattr(chunk, "usage") and chunk.usage is not None:
@@ -1174,6 +1238,10 @@ class AsyncUnify(_UniClient):
         provider_cost: float | None = None
         billed_cost: float | None = None
 
+        # Task tracking for cleanup
+        limit_task: asyncio.Task | None = None
+        llm_task: asyncio.Task | None = None
+
         # Wrap in OTel span with try/finally to guarantee log finalization
         try:
             with llm_span(endpoint, self._model, provider=self._provider) as span:
@@ -1188,13 +1256,47 @@ class AsyncUnify(_UniClient):
                     )
                     in_cache = True if chat_completion is not None else False
                 if chat_completion is None:
-                    try:
-                        chat_completion = await retry_transient_400_async(
+                    # Start limit check and LLM call in parallel for true in-flight
+                    # cancellation. Limit check is fast (~50ms), LLM call is slow.
+                    if is_limit_check_enabled():
+                        limit_request = LimitCheckRequest(
+                            model=kw.get("model", endpoint),
+                            endpoint=endpoint,
+                        )
+                        limit_task = asyncio.create_task(
+                            check_limits(limit_request),
+                            name="spending_limit_check",
+                        )
+
+                    # Start LLM call immediately (don't wait for limit check)
+                    llm_task = asyncio.create_task(
+                        retry_transient_400_async(
                             lambda: litellm.acompletion(
                                 shared_session=SHARED_SESSION,
                                 **kw,
                             ),
-                        )
+                        ),
+                        name="llm_call",
+                    )
+
+                    try:
+                        # Wait for limit check first (fast) while LLM runs in background
+                        if limit_task is not None:
+                            limit_result = await limit_task
+                            limit_task = None  # Mark as consumed
+                            if not limit_result.allowed:
+                                # Cancel in-flight LLM call
+                                llm_task.cancel()
+                                try:
+                                    await llm_task
+                                except asyncio.CancelledError:
+                                    pass
+                                llm_task = None
+                                raise SpendingLimitExceededError(limit_result)
+
+                        # Limit check passed (or disabled), wait for LLM result
+                        chat_completion = await llm_task
+                        llm_task = None  # Mark as consumed
                     except litellm.exceptions.APIError as e:
                         llm_error = Exception(e.message)
                         raise llm_error
@@ -1218,6 +1320,15 @@ class AsyncUnify(_UniClient):
                 llm_error = e
             raise
         finally:
+            # Cancel any unconsumed tasks (e.g., cache hit or error)
+            for task in [limit_task, llm_task]:
+                if task is not None and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
             # Finalize log file with response and cache status (always runs)
             try:
                 resp_body = (
