@@ -95,8 +95,11 @@ class _Client(ABC):
         self._extra_headers = None
 
         # set based on arguments
-        self.set_system_message(system_message)
+        # NOTE: Order matters! set_messages first, then conditionally set_system_message.
+        # If we did set_system_message first, then set_messages(None) would wipe it out.
         self.set_messages(messages)
+        if system_message is not None:
+            self.set_system_message(system_message)
         self.set_frequency_penalty(frequency_penalty)
         self.set_logit_bias(logit_bias)
         self.set_logprobs(logprobs)
