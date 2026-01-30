@@ -4,6 +4,7 @@ from typing import Optional, Union
 
 import litellm
 import unify
+from .endpoints.utils import get_model_alias
 
 
 def _normalize_model_name(model: str) -> str:
@@ -62,7 +63,7 @@ def compute_cost(
     Raises:
         ValueError: If the model is not found in LiteLLM's pricing data.
     """
-    model_info = _get_model_info(model)
+    model_info = _get_model_info(get_model_alias(model))
 
     input_cost_per_token = model_info.get("input_cost_per_token", 0)
     output_cost_per_token = model_info.get("output_cost_per_token", 0)
