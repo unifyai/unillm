@@ -341,9 +341,9 @@ def test_build_retry_kw_identifies_multiple_invalid_tools():
     ), f"Retry nudge should mention 'bad_tool_2' but got: {nudge_content!r}"
     # Should NOT mention valid_tool as invalid
     assert (
-        "valid_tool" in nudge_content.split("only tools you can call are")[1]
+        "valid_tool" in nudge_content.split("tools currently available are")[1]
     ), f"Retry nudge should list 'valid_tool' as available: {nudge_content!r}"
     # Should use plural form
     assert (
-        "these tools are not available" in nudge_content
+        "they are not callable on this turn" in nudge_content
     ), f"Retry nudge should use plural form but got: {nudge_content!r}"
