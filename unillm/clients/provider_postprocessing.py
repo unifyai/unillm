@@ -26,15 +26,19 @@ TOOL_CHOICE_REQUIRED_RETRY_NUDGE = (
     "appropriate tool with the most appropriate arguments. Please call a tool now."
 )
 
-# Nudge message templates for retrying when model calls tools not in the schema
+# Nudge message templates for retrying when model calls tools not in the schema.
+# These acknowledge the system message may list more tools than are currently callable,
+# which happens when tool_policy restricts available tools on certain turns.
 INVALID_TOOL_NAME_RETRY_NUDGE_SINGLE = (
-    "You attempted to call '{invalid_tools}', but this tool is not available. "
-    "The only tools you can call are: {valid_tools}. "
+    "You attempted to call '{invalid_tools}'. "
+    "This tool may be mentioned in the system message, but it is not callable on this turn. "
+    "The tools currently available are: {valid_tools}. "
     "Please select one of the available tools."
 )
 INVALID_TOOL_NAME_RETRY_NUDGE_PLURAL = (
-    "You attempted to call {invalid_tools}, but these tools are not available. "
-    "The only tools you can call are: {valid_tools}. "
+    "You attempted to call {invalid_tools}. "
+    "These tools may be mentioned in the system message, but they are not callable on this turn. "
+    "The tools currently available are: {valid_tools}. "
     "Please select from the available tools only."
 )
 
