@@ -21,9 +21,6 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Unify
-    UNIFY_API_KEY: SecretStr = SecretStr("")
-
     # OpenAI
     OPENAI_API_KEY: SecretStr = SecretStr("")
 
