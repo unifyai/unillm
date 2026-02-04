@@ -16,9 +16,9 @@ class TestApplyAnthropicCachingSystemMessage:
                 {
                     "role": "system",
                     "content": [
-                        {"type": "text", "text": "abc0", "static": True},
-                        {"type": "text", "text": "abc1", "static": True},
-                        {"type": "text", "text": "abc2", "static": True},
+                        {"type": "text", "text": "abc0", "_static": True},
+                        {"type": "text", "text": "abc1", "_static": True},
+                        {"type": "text", "text": "abc2", "_static": True},
                     ],
                 },
             ],
@@ -37,11 +37,11 @@ class TestApplyAnthropicCachingSystemMessage:
                 {
                     "role": "system",
                     "content": [
-                        {"type": "text", "text": "abc0", "static": True},
-                        {"type": "text", "text": "abc1", "static": True},
-                        {"type": "text", "text": "abc2", "static": True},
-                        {"type": "text", "text": "abc3", "static": False},
-                        {"type": "text", "text": "abc4", "static": True},
+                        {"type": "text", "text": "abc0", "_static": True},
+                        {"type": "text", "text": "abc1", "_static": True},
+                        {"type": "text", "text": "abc2", "_static": True},
+                        {"type": "text", "text": "abc3", "_static": False},
+                        {"type": "text", "text": "abc4", "_static": True},
                     ],
                 },
             ],
@@ -62,9 +62,9 @@ class TestApplyAnthropicCachingSystemMessage:
                 {
                     "role": "system",
                     "content": [
-                        {"type": "text", "text": "dynamic", "static": False},
-                        {"type": "text", "text": "abc1", "static": True},
-                        {"type": "text", "text": "abc2", "static": True},
+                        {"type": "text", "text": "dynamic", "_static": False},
+                        {"type": "text", "text": "abc1", "_static": True},
+                        {"type": "text", "text": "abc2", "_static": True},
                     ],
                 },
             ],
@@ -85,7 +85,7 @@ class TestApplyAnthropicCachingSystemMessage:
                     "content": [
                         {"type": "text", "text": "abc0"},
                         {"type": "text", "text": "abc1"},
-                        {"type": "text", "text": "abc2", "static": False},
+                        {"type": "text", "text": "abc2", "_static": False},
                         {"type": "text", "text": "abc3"},
                     ],
                 },
@@ -106,8 +106,8 @@ class TestApplyAnthropicCachingSystemMessage:
                 {
                     "role": "system",
                     "content": [
-                        {"type": "text", "text": "dynamic1", "static": False},
-                        {"type": "text", "text": "dynamic2", "static": False},
+                        {"type": "text", "text": "dynamic1", "_static": False},
+                        {"type": "text", "text": "dynamic2", "_static": False},
                     ],
                 },
             ],
@@ -125,7 +125,7 @@ class TestApplyAnthropicCachingSystemMessage:
                 {
                     "role": "system",
                     "content": [
-                        {"type": "text", "text": "only one", "static": True},
+                        {"type": "text", "text": "only one", "_static": True},
                     ],
                 },
             ],
@@ -142,7 +142,7 @@ class TestApplyAnthropicCachingSystemMessage:
                 {
                     "role": "system",
                     "content": [
-                        {"type": "text", "text": "dynamic", "static": False},
+                        {"type": "text", "text": "dynamic", "_static": False},
                     ],
                 },
             ],
