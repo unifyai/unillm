@@ -406,10 +406,10 @@ def _apply_anthropic_caching(
             if msg.get("role") == "system":
                 content = msg.get("content")
                 if isinstance(content, list) and len(content) > 0:
-                    # Find the last static=True before the first static=False
+                    # Find the last _static=True before the first _static=False
                     inject_index = None
                     for i, item in enumerate(content):
-                        if not item.get("static", True):
+                        if not item.get("_static", True):
                             break
                         inject_index = i
                     if inject_index is not None:
