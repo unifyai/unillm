@@ -420,8 +420,8 @@ def _apply_anthropic_caching(
 
     if "messages" in prompt_caching:
         for msg in reversed(messages):
-            if msg.get("role") == "user":
-                content = msg.get("content")
+            content = msg.get("content")
+            if content is not None:
                 if isinstance(content, list) and len(content) > 0:
                     content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
                 else:
