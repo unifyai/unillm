@@ -845,7 +845,7 @@ class Unify(_UniClient):
                     )
                     if provider_cost > 0:
                         billed_cost = provider_cost * get_cost_margin()
-                        unify.deduct_credits(billed_cost)
+                        unify.deduct_credits(billed_cost, api_key=self._api_key)
 
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
@@ -991,7 +991,7 @@ class Unify(_UniClient):
 
         # Deduct credits for cache misses (use already-computed billed_cost)
         if billed_cost is not None and billed_cost > 0:
-            unify.deduct_credits(billed_cost)
+            unify.deduct_credits(billed_cost, api_key=self._api_key)
 
         # Apply provider-specific post-processing (may retry for compliance)
         original_completion = chat_completion
@@ -1057,7 +1057,10 @@ class Unify(_UniClient):
                         retry_completion,
                     )
                     if retry_cost is not None and retry_cost > 0:
-                        unify.deduct_credits(retry_cost * get_cost_margin())
+                        unify.deduct_credits(
+                            retry_cost * get_cost_margin(),
+                            api_key=self._api_key,
+                        )
                 chat_completion = retry_completion
 
         # Cache the FINAL response (after any post-processing), not intermediate ones
@@ -1265,7 +1268,11 @@ class AsyncUnify(_UniClient):
                     if provider_cost > 0:
                         billed_cost = provider_cost * get_cost_margin()
                         asyncio.create_task(
-                            asyncio.to_thread(unify.deduct_credits, billed_cost),
+                            asyncio.to_thread(
+                                unify.deduct_credits,
+                                billed_cost,
+                                api_key=self._api_key,
+                            ),
                             name="unillm_deduct_credits_stream",
                         )
 
@@ -1452,7 +1459,11 @@ class AsyncUnify(_UniClient):
         # Deduct credits for cache misses (use already-computed billed_cost)
         if billed_cost is not None and billed_cost > 0:
             asyncio.create_task(
-                asyncio.to_thread(unify.deduct_credits, billed_cost),
+                asyncio.to_thread(
+                    unify.deduct_credits,
+                    billed_cost,
+                    api_key=self._api_key,
+                ),
                 name="unillm_deduct_credits",
             )
 
@@ -1524,6 +1535,7 @@ class AsyncUnify(_UniClient):
                             asyncio.to_thread(
                                 unify.deduct_credits,
                                 retry_cost * get_cost_margin(),
+                                api_key=self._api_key,
                             ),
                             name="unillm_deduct_credits_retry",
                         )
