@@ -1,5 +1,6 @@
 # global
 import copy
+import os
 from abc import ABC, abstractmethod
 from typing import Dict, Iterable, List, Literal, Optional, Type, Union
 
@@ -122,6 +123,17 @@ class _Client(ABC):
         # python client arguments
         self.set_stateful(stateful)
         self.set_return_full_completion(return_full_completion)
+        # Default cache from UNILLM_CACHE env var if not explicitly passed
+        if cache is None:
+            _env_cache = os.environ.get("UNILLM_CACHE")
+            if _env_cache is not None:
+                _lower = _env_cache.lower()
+                if _lower in ("true", "yes", "1"):
+                    cache = True
+                elif _lower in ("false", "no", "0"):
+                    cache = False
+                else:
+                    cache = _env_cache  # String modes like "read-only"
         self.set_cache(cache)
         self.set_cache_backend(cache_backend)
         self.set_prompt_caching(prompt_caching)
