@@ -73,7 +73,7 @@ jobs:
       with:
         repository: unifyai/unify
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        path: unify
+        path: unify-sdk
         token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1
 
@@ -88,8 +88,9 @@ jobs:
     - name: Configure unify path for CI
       run: |
         # Local development uses sibling path (../unify).
-        # CI clones unify into the workspace, so update path accordingly.
-        sed -i 's|path = "../unify"|path = "./unify"|g' pyproject.toml
+        # CI clones into ./unify-sdk/ (not ./unify/) to avoid shadowing
+        # the installed "unify" Python package with an implicit namespace package.
+        sed -i 's|path = "../unify"|path = "./unify-sdk"|g' pyproject.toml
 
     - name: Install deps
       run: uv sync --group dev
@@ -132,7 +133,7 @@ jobs:
       with:
         repository: unifyai/unify
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        path: unify
+        path: unify-sdk
         token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1
 
@@ -192,8 +193,9 @@ jobs:
     - name: Configure unify path for CI
       run: |
         # Local development uses sibling path (../unify).
-        # CI clones unify into the workspace, so update path accordingly.
-        sed -i 's|path = "../unify"|path = "./unify"|g' pyproject.toml
+        # CI clones into ./unify-sdk/ (not ./unify/) to avoid shadowing
+        # the installed "unify" Python package with an implicit namespace package.
+        sed -i 's|path = "../unify"|path = "./unify-sdk"|g' pyproject.toml
 
     - name: Install unillm deps
       run: uv sync --group dev
