@@ -1001,12 +1001,13 @@ class Unify(_UniClient):
                 build_retry_kw,
             )
 
+            raw_tools = kw.get("tools")
             needs_retry, retry_reason = check_needs_postprocessing(
                 response=chat_completion,
                 provider=self._provider,
                 original_tool_choice=original_tool_choice,
                 reasoning_effort=prompt.components.get("reasoning_effort"),
-                tools=list(kw.get("tools", [])) if kw.get("tools") else None,
+                tools=list(raw_tools) if raw_tools is not None else None,
             )
 
             if needs_retry:
@@ -1475,12 +1476,13 @@ class AsyncUnify(_UniClient):
                 build_retry_kw,
             )
 
+            raw_tools = kw.get("tools")
             needs_retry, retry_reason = check_needs_postprocessing(
                 response=chat_completion,
                 provider=self._provider,
                 original_tool_choice=original_tool_choice,
                 reasoning_effort=prompt.components.get("reasoning_effort"),
-                tools=list(kw.get("tools", [])) if kw.get("tools") else None,
+                tools=list(raw_tools) if raw_tools is not None else None,
             )
 
             if needs_retry:

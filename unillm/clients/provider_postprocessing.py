@@ -42,6 +42,18 @@ INVALID_TOOL_NAME_RETRY_NUDGE_PLURAL = (
     "Please select from the available tools only."
 )
 
+# Nudge for the special case where there are NO tools available at all.
+# The model called tools (likely from descriptions in the system prompt) but
+# zero tools are callable on this turn — it must respond with text content.
+NO_TOOLS_RETRY_NUDGE_SINGLE = (
+    "You attempted to call '{invalid_tools}', but there are no tools available on this turn. "
+    "Do not call any tools. Respond with text content only."
+)
+NO_TOOLS_RETRY_NUDGE_PLURAL = (
+    "You attempted to call {invalid_tools}, but there are no tools available on this turn. "
+    "Do not call any tools. Respond with text content only."
+)
+
 
 def check_needs_postprocessing(
     *,
@@ -119,16 +131,30 @@ def build_retry_kw(
                 invalid_tools.append(tc.function.name)
 
         if invalid_tools:
-            valid_tools_str = (
-                ", ".join(sorted(valid_tool_names)) if valid_tool_names else "(none)"
-            )
-            if len(invalid_tools) == 1:
+            if not valid_tool_names:
+                # No tools available at all — use the dedicated no-tools nudge
+                if len(invalid_tools) == 1:
+                    nudge = NO_TOOLS_RETRY_NUDGE_SINGLE.format(
+                        invalid_tools=invalid_tools[0],
+                    )
+                else:
+                    quoted = [f"'{t}'" for t in invalid_tools]
+                    if len(quoted) == 2:
+                        invalid_str = f"{quoted[0]} and {quoted[1]}"
+                    else:
+                        invalid_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
+                    nudge = NO_TOOLS_RETRY_NUDGE_PLURAL.format(
+                        invalid_tools=invalid_str,
+                    )
+            elif len(invalid_tools) == 1:
+                valid_tools_str = ", ".join(sorted(valid_tool_names))
                 nudge = INVALID_TOOL_NAME_RETRY_NUDGE_SINGLE.format(
                     invalid_tools=f"'{invalid_tools[0]}'",
                     valid_tools=valid_tools_str,
                 )
             else:
                 # Format multiple invalid tools as 'tool1', 'tool2', and 'tool3'
+                valid_tools_str = ", ".join(sorted(valid_tool_names))
                 quoted = [f"'{t}'" for t in invalid_tools]
                 if len(quoted) == 2:
                     invalid_str = f"{quoted[0]} and {quoted[1]}"
@@ -202,8 +228,10 @@ def _check_anthropic_postprocessing(
     """
     msg = response.choices[0].message
 
-    # Check for invalid tool names first (applies regardless of thinking mode)
-    if msg.tool_calls and tools:
+    # Check for invalid tool names first (applies regardless of thinking mode).
+    # This must run even when tools is [] or None — Anthropic can call tools
+    # mentioned in the system prompt even if they're not in the tools array.
+    if msg.tool_calls:
         valid_names = set(_get_valid_tool_names(tools))
         for tool_call in msg.tool_calls:
             called_name = tool_call.function.name
