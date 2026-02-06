@@ -18,6 +18,7 @@ import unillm
 from unillm.clients.provider_postprocessing import (
     RETRY_REASON_INVALID_TOOL_NAME,
     build_retry_kw,
+    check_needs_postprocessing,
 )
 
 
@@ -347,3 +348,88 @@ def test_build_retry_kw_identifies_multiple_invalid_tools():
     assert (
         "they are not callable on this turn" in nudge_content
     ), f"Retry nudge should use plural form but got: {nudge_content!r}"
+
+
+# ---------------------------------------------------------------------------
+# Empty-tools edge case: tools=[] but model returns tool_calls
+# ---------------------------------------------------------------------------
+
+
+def test_check_needs_postprocessing_detects_tool_calls_with_empty_tools():
+    """
+    When tools=[] (no tools available this turn) and the model returns
+    tool_calls, check_needs_postprocessing should flag a retry.
+
+    BUG: The current guard `if msg.tool_calls and tools:` treats [] as
+    falsy, so tool calls against an empty schema slip through undetected.
+    """
+    mock_tool_call = MagicMock()
+    mock_tool_call.function.name = "filter_messages"
+
+    mock_message = MagicMock()
+    mock_message.tool_calls = [mock_tool_call]
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=mock_response,
+        provider="anthropic",
+        original_tool_choice=None,
+        reasoning_effort=None,
+        tools=[],  # Explicitly empty — no tools available this turn
+    )
+
+    assert needs_retry, (
+        "check_needs_postprocessing should flag a retry when tools=[] "
+        "but the model returned tool_calls"
+    )
+    assert retry_reason == RETRY_REASON_INVALID_TOOL_NAME
+
+
+def test_build_retry_kw_no_tools_nudge_says_respond_with_text():
+    """
+    When there are zero valid tools, the retry nudge should tell the model
+    to respond with text content — not ask it to "select from the available
+    tools" when there are none.
+
+    BUG: The current nudge says "The tools currently available are: (none).
+    Please select one of the available tools." which is contradictory.
+    """
+    mock_tool_call = MagicMock()
+    mock_tool_call.function.name = "search_messages"
+
+    mock_message = MagicMock()
+    mock_message.tool_calls = [mock_tool_call]
+    mock_message.content = None
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    kw = {
+        "messages": [{"role": "user", "content": "What topics were discussed?"}],
+        "tools": [],  # No tools available
+    }
+
+    retry_kw = build_retry_kw(
+        kw=kw,
+        response=mock_response,
+        retry_reason=RETRY_REASON_INVALID_TOOL_NAME,
+    )
+
+    nudge_content = retry_kw["messages"][-1]["content"]
+
+    # The nudge must NOT ask the model to select a tool when none exist
+    assert (
+        "select" not in nudge_content.lower() or "no tools" in nudge_content.lower()
+    ), f"Nudge asks model to select a tool when none are available: {nudge_content!r}"
+    # It SHOULD instruct the model to respond with text
+    assert (
+        "text" in nudge_content.lower() or "content" in nudge_content.lower()
+    ), f"Nudge should tell model to respond with text, but got: {nudge_content!r}"
