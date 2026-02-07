@@ -857,6 +857,102 @@ class Unify(_UniClient):
                 ),
             )
 
+    def _execute_postprocessing_retry(
+        self,
+        retry_kw: dict,
+        endpoint: str,
+        label_suffix: str,
+    ) -> "ChatCompletion":
+        """Execute a single postprocessing retry: LLM call + logging + cost deduction."""
+        label = f"{endpoint}-{label_suffix}"
+        pending = write_request_pending(retry_kw, label=label)
+        completion = None
+        try:
+            with llm_span(label, self._model, provider=self._provider):
+                completion = retry_transient_400_sync(
+                    lambda: litellm.completion(
+                        shared_session=SHARED_SESSION,
+                        **retry_kw,
+                    ),
+                )
+        finally:
+            try:
+                body = (
+                    completion.model_dump(warnings=False)
+                    if completion is not None and hasattr(completion, "model_dump")
+                    else completion
+                )
+                append_response_and_finalize(pending, body, "retry", label=label)
+            except Exception:
+                pass
+        if completion is not None:
+            from ..costs import get_cost_margin
+
+            cost = compute_cost_from_response(retry_kw["model"], completion)
+            if cost is not None and cost > 0:
+                unify.deduct_credits(
+                    cost * get_cost_margin(),
+                    api_key=self._api_key,
+                )
+        return completion
+
+    def _run_postprocessing(
+        self,
+        chat_completion: "ChatCompletion",
+        kw: dict,
+        endpoint: str,
+        prompt: "Prompt",
+        original_tool_choice: Optional[str],
+    ) -> "ChatCompletion":
+        """Run all postprocessing checks, retrying once per check if needed."""
+        from .provider_postprocessing import (
+            check_needs_postprocessing,
+            build_retry_kw,
+            check_response_format_compliance,
+            build_response_format_retry_kw,
+        )
+
+        # Step 1: Provider-specific postprocessing (tool retries)
+        raw_tools = kw.get("tools")
+        needs_retry, retry_reason = check_needs_postprocessing(
+            response=chat_completion,
+            provider=self._provider,
+            original_tool_choice=original_tool_choice,
+            reasoning_effort=prompt.components.get("reasoning_effort"),
+            tools=list(raw_tools) if raw_tools is not None else None,
+        )
+        if needs_retry:
+            retry_kw = build_retry_kw(
+                kw=kw,
+                response=chat_completion,
+                retry_reason=retry_reason,
+            )
+            chat_completion = self._execute_postprocessing_retry(
+                retry_kw,
+                endpoint,
+                "retry",
+            )
+
+        # Step 2: response_format schema validation
+        rf_needs_retry, rf_error, rf_model = check_response_format_compliance(
+            response=chat_completion,
+            kw=kw,
+        )
+        if rf_needs_retry and rf_model is not None:
+            rf_retry_kw = build_response_format_retry_kw(
+                kw=kw,
+                response=chat_completion,
+                validation_error=rf_error,
+                pydantic_model=rf_model,
+            )
+            chat_completion = self._execute_postprocessing_retry(
+                rf_retry_kw,
+                endpoint,
+                "rf-retry",
+            )
+
+        return chat_completion
+
     def _generate_non_stream(
         self,
         endpoint: str,
@@ -993,76 +1089,16 @@ class Unify(_UniClient):
         if billed_cost is not None and billed_cost > 0:
             unify.deduct_credits(billed_cost, api_key=self._api_key)
 
-        # Apply provider-specific post-processing (may retry for compliance)
+        # Apply postprocessing checks (tool retries + response_format validation)
         original_completion = chat_completion
         if chat_completion is not None:
-            from .provider_postprocessing import (
-                check_needs_postprocessing,
-                build_retry_kw,
+            chat_completion = self._run_postprocessing(
+                chat_completion,
+                kw,
+                endpoint,
+                prompt,
+                original_tool_choice,
             )
-
-            raw_tools = kw.get("tools")
-            needs_retry, retry_reason = check_needs_postprocessing(
-                response=chat_completion,
-                provider=self._provider,
-                original_tool_choice=original_tool_choice,
-                reasoning_effort=prompt.components.get("reasoning_effort"),
-                tools=list(raw_tools) if raw_tools is not None else None,
-            )
-
-            if needs_retry:
-                retry_kw = build_retry_kw(
-                    kw=kw,
-                    response=chat_completion,
-                    retry_reason=retry_reason,
-                )
-                retry_pending = write_request_pending(
-                    retry_kw,
-                    label=f"{endpoint}-retry",
-                )
-                retry_completion = None
-                try:
-                    with llm_span(
-                        f"{endpoint}-retry",
-                        self._model,
-                        provider=self._provider,
-                    ):
-                        retry_completion = retry_transient_400_sync(
-                            lambda: litellm.completion(
-                                shared_session=SHARED_SESSION,
-                                **retry_kw,
-                            ),
-                        )
-                finally:
-                    try:
-                        retry_body = (
-                            retry_completion.model_dump(warnings=False)
-                            if retry_completion is not None
-                            and hasattr(retry_completion, "model_dump")
-                            else retry_completion
-                        )
-                        append_response_and_finalize(
-                            retry_pending,
-                            retry_body,
-                            "retry",
-                            label=f"{endpoint}-retry",
-                        )
-                    except Exception:
-                        pass
-                # Deduct credits for retry
-                if retry_completion is not None:
-                    from ..costs import get_cost_margin
-
-                    retry_cost = compute_cost_from_response(
-                        retry_kw["model"],
-                        retry_completion,
-                    )
-                    if retry_cost is not None and retry_cost > 0:
-                        unify.deduct_credits(
-                            retry_cost * get_cost_margin(),
-                            api_key=self._api_key,
-                        )
-                chat_completion = retry_completion
 
         # Cache the FINAL response (after any post-processing), not intermediate ones
         did_postprocess = chat_completion is not original_completion
@@ -1287,6 +1323,106 @@ class AsyncUnify(_UniClient):
                 ),
             )
 
+    async def _execute_postprocessing_retry(
+        self,
+        retry_kw: dict,
+        endpoint: str,
+        label_suffix: str,
+    ) -> "ChatCompletion":
+        """Execute a single postprocessing retry: LLM call + logging + cost deduction."""
+        label = f"{endpoint}-{label_suffix}"
+        pending = write_request_pending(retry_kw, label=label)
+        completion = None
+        try:
+            with llm_span(label, self._model, provider=self._provider):
+                completion = await retry_transient_400_async(
+                    lambda: litellm.acompletion(
+                        shared_session=SHARED_SESSION,
+                        **retry_kw,
+                    ),
+                )
+        finally:
+            try:
+                body = (
+                    completion.model_dump(warnings=False)
+                    if completion is not None and hasattr(completion, "model_dump")
+                    else completion
+                )
+                append_response_and_finalize(pending, body, "retry", label=label)
+            except Exception:
+                pass
+        if completion is not None:
+            from ..costs import get_cost_margin
+
+            cost = compute_cost_from_response(retry_kw["model"], completion)
+            if cost is not None and cost > 0:
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        unify.deduct_credits,
+                        cost * get_cost_margin(),
+                        api_key=self._api_key,
+                    ),
+                    name=f"unillm_deduct_credits_{label_suffix}",
+                )
+        return completion
+
+    async def _run_postprocessing(
+        self,
+        chat_completion: "ChatCompletion",
+        kw: dict,
+        endpoint: str,
+        prompt: "Prompt",
+        original_tool_choice: Optional[str],
+    ) -> "ChatCompletion":
+        """Run all postprocessing checks, retrying once per check if needed."""
+        from .provider_postprocessing import (
+            check_needs_postprocessing,
+            build_retry_kw,
+            check_response_format_compliance,
+            build_response_format_retry_kw,
+        )
+
+        # Step 1: Provider-specific postprocessing (tool retries)
+        raw_tools = kw.get("tools")
+        needs_retry, retry_reason = check_needs_postprocessing(
+            response=chat_completion,
+            provider=self._provider,
+            original_tool_choice=original_tool_choice,
+            reasoning_effort=prompt.components.get("reasoning_effort"),
+            tools=list(raw_tools) if raw_tools is not None else None,
+        )
+        if needs_retry:
+            retry_kw = build_retry_kw(
+                kw=kw,
+                response=chat_completion,
+                retry_reason=retry_reason,
+            )
+            chat_completion = await self._execute_postprocessing_retry(
+                retry_kw,
+                endpoint,
+                "retry",
+            )
+
+        # Step 2: response_format schema validation
+        rf_needs_retry, rf_error, rf_model = check_response_format_compliance(
+            response=chat_completion,
+            kw=kw,
+        )
+        if rf_needs_retry and rf_model is not None:
+            rf_retry_kw = build_response_format_retry_kw(
+                kw=kw,
+                response=chat_completion,
+                validation_error=rf_error,
+                pydantic_model=rf_model,
+            )
+            chat_completion = await self._execute_postprocessing_retry(
+                rf_retry_kw,
+                endpoint,
+                "rf-retry",
+            )
+
+        return chat_completion
+
     async def _generate_non_stream(
         self,
         endpoint: str,
@@ -1468,80 +1604,16 @@ class AsyncUnify(_UniClient):
                 name="unillm_deduct_credits",
             )
 
-        # Apply provider-specific post-processing (may retry for compliance)
+        # Apply postprocessing checks (tool retries + response_format validation)
         original_completion = chat_completion
         if chat_completion is not None:
-            from .provider_postprocessing import (
-                check_needs_postprocessing,
-                build_retry_kw,
+            chat_completion = await self._run_postprocessing(
+                chat_completion,
+                kw,
+                endpoint,
+                prompt,
+                original_tool_choice,
             )
-
-            raw_tools = kw.get("tools")
-            needs_retry, retry_reason = check_needs_postprocessing(
-                response=chat_completion,
-                provider=self._provider,
-                original_tool_choice=original_tool_choice,
-                reasoning_effort=prompt.components.get("reasoning_effort"),
-                tools=list(raw_tools) if raw_tools is not None else None,
-            )
-
-            if needs_retry:
-                retry_kw = build_retry_kw(
-                    kw=kw,
-                    response=chat_completion,
-                    retry_reason=retry_reason,
-                )
-                retry_pending = write_request_pending(
-                    retry_kw,
-                    label=f"{endpoint}-retry",
-                )
-                retry_completion = None
-                try:
-                    with llm_span(
-                        f"{endpoint}-retry",
-                        self._model,
-                        provider=self._provider,
-                    ):
-                        retry_completion = await retry_transient_400_async(
-                            lambda: litellm.acompletion(
-                                shared_session=SHARED_SESSION,
-                                **retry_kw,
-                            ),
-                        )
-                finally:
-                    try:
-                        retry_body = (
-                            retry_completion.model_dump(warnings=False)
-                            if retry_completion is not None
-                            and hasattr(retry_completion, "model_dump")
-                            else retry_completion
-                        )
-                        append_response_and_finalize(
-                            retry_pending,
-                            retry_body,
-                            "retry",
-                            label=f"{endpoint}-retry",
-                        )
-                    except Exception:
-                        pass
-                # Deduct credits for retry
-                if retry_completion is not None:
-                    from ..costs import get_cost_margin
-
-                    retry_cost = compute_cost_from_response(
-                        retry_kw["model"],
-                        retry_completion,
-                    )
-                    if retry_cost is not None and retry_cost > 0:
-                        asyncio.create_task(
-                            asyncio.to_thread(
-                                unify.deduct_credits,
-                                retry_cost * get_cost_margin(),
-                                api_key=self._api_key,
-                            ),
-                            name="unillm_deduct_credits_retry",
-                        )
-                chat_completion = retry_completion
 
         # Cache the FINAL response (after any post-processing), not intermediate ones
         did_postprocess = chat_completion is not original_completion

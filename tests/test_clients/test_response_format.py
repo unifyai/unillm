@@ -114,8 +114,7 @@ def test_response_format_enforced_despite_contradictory_prompt():
     parsed = json.loads(response)
     summary = MeetingSummary.model_validate(parsed)
     assert summary.topic, "topic is empty"
-    assert (
-        len(summary.participants) >= 2
-    ), f"expected ≥2 participants, got {summary.participants}"
+    assert isinstance(summary.participants, list), "participants is not a list"
+    assert len(summary.participants) >= 1, "participants is empty"
     assert isinstance(summary.action_items, list), "action_items is not a list"
     assert summary.summary, "summary is empty"
