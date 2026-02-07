@@ -8,12 +8,19 @@ but operates on responses rather than requests.
 Currently handles:
 - Anthropic: tool_choice="required" compliance with thinking mode
 - Anthropic: invalid tool name detection (tool called not in schema)
+- response_format schema validation with retry (all providers)
 """
 
-from typing import List, Optional, Tuple, TYPE_CHECKING
+import json
+import logging
+from typing import List, Optional, Tuple, Type, TYPE_CHECKING
+
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion
+
+logger = logging.getLogger(__name__)
 
 # Retry reason constants
 RETRY_REASON_TOOL_CHOICE_REQUIRED = "tool_choice_required"
@@ -246,3 +253,117 @@ def _check_anthropic_postprocessing(
             return True, RETRY_REASON_TOOL_CHOICE_REQUIRED
 
     return False, None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# response_format schema validation retry
+# ─────────────────────────────────────────────────────────────────────────────
+
+RESPONSE_FORMAT_RETRY_NUDGE = (
+    "Your previous response did not conform to the required output schema.\n\n"
+    "Validation error:\n{error}\n\n"
+    "Your response was:\n{response}\n\n"
+    "You MUST respond with valid JSON that exactly matches this schema:\n{schema}\n\n"
+    "Return ONLY the JSON object — no markdown, no commentary, no code fences."
+)
+
+
+def _get_response_format_model(
+    kw: dict,
+) -> Optional[Type[BaseModel]]:
+    """Extract the Pydantic model from the request kwargs, if present."""
+    rf = kw.get("response_format")
+    if rf is None:
+        return None
+    # response_format may be the Pydantic class directly
+    if isinstance(rf, type) and issubclass(rf, BaseModel):
+        return rf
+    # Or it may be a dict with __pydantic_schema__ (unillm internal serialization)
+    if isinstance(rf, dict) and "__pydantic_schema__" in rf:
+        # We can't reconstruct the class from the schema dict alone, but the
+        # original Pydantic class is stored on the *prompt* by callers.  Return
+        # None here — validation will be skipped (no worse than today).
+        return None
+    return None
+
+
+def check_response_format_compliance(
+    *,
+    response: "ChatCompletion",
+    kw: dict,
+) -> Tuple[bool, Optional[str], Optional[Type[BaseModel]]]:
+    """Check whether the response satisfies the response_format Pydantic schema.
+
+    Returns (needs_retry, validation_error_message, pydantic_model).
+    If needs_retry is False the other values are None.
+    """
+    model_cls = _get_response_format_model(kw)
+    if model_cls is None:
+        return False, None, None
+
+    msg = response.choices[0].message
+    content = msg.content
+    if content is None:
+        # tool_calls response or empty — nothing to validate here
+        return False, None, None
+
+    # Try JSON parse then Pydantic validation
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return True, f"Response is not valid JSON: {exc}", model_cls
+
+    try:
+        model_cls.model_validate(parsed)
+    except Exception as exc:
+        return True, str(exc), model_cls
+
+    return False, None, None
+
+
+def build_response_format_retry_kw(
+    *,
+    kw: dict,
+    response: "ChatCompletion",
+    validation_error: str,
+    pydantic_model: Type[BaseModel],
+) -> dict:
+    """Build retry kwargs with a nudge explaining the schema violation."""
+    msg = response.choices[0].message
+
+    retry_messages = list(kw.get("messages", []))
+
+    # Append the non-compliant assistant reply
+    retry_messages.append(
+        {
+            "role": "assistant",
+            "content": msg.content,
+        },
+    )
+
+    # Build a compact schema representation for the nudge
+    schema_str = json.dumps(pydantic_model.model_json_schema(), indent=2)
+
+    nudge = RESPONSE_FORMAT_RETRY_NUDGE.format(
+        error=validation_error,
+        response=msg.content[:500] if msg.content else "(empty)",
+        schema=schema_str,
+    )
+    retry_messages.append(
+        {
+            "role": "user",
+            "content": nudge,
+        },
+    )
+
+    retry_kw = dict(kw)
+    retry_kw["messages"] = retry_messages
+    # Remove tools and response_format from the retry.  The presence of
+    # tools=[] interferes with response_format enforcement on some providers
+    # (notably Anthropic), and response_format itself can be silently ignored
+    # when the conversation context is tool-heavy.  We rely on the explicit
+    # text-based nudge above to enforce the schema instead.
+    retry_kw.pop("tools", None)
+    retry_kw.pop("tool_choice", None)
+    retry_kw.pop("response_format", None)
+    return retry_kw
