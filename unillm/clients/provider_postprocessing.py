@@ -51,7 +51,9 @@ INVALID_TOOL_NAME_RETRY_NUDGE_PLURAL = (
 
 # Nudge for the special case where there are NO tools available at all.
 # The model called tools (likely from descriptions in the system prompt) but
-# zero tools are callable on this turn — it must respond with text content.
+# zero tools are callable on this turn — it must respond with content directly.
+# When response_format is set, the nudge asks for JSON matching the schema;
+# otherwise it asks for plain text.
 NO_TOOLS_RETRY_NUDGE_SINGLE = (
     "You attempted to call '{invalid_tools}', but there are no tools available on this turn. "
     "Do not call any tools. Respond with text content only."
@@ -59,6 +61,16 @@ NO_TOOLS_RETRY_NUDGE_SINGLE = (
 NO_TOOLS_RETRY_NUDGE_PLURAL = (
     "You attempted to call {invalid_tools}, but there are no tools available on this turn. "
     "Do not call any tools. Respond with text content only."
+)
+NO_TOOLS_RETRY_NUDGE_SINGLE_WITH_SCHEMA = (
+    "You attempted to call '{invalid_tools}', but there are no tools available on this turn. "
+    "Do not call any tools. Respond with valid JSON that conforms to the following schema:\n{schema}\n\n"
+    "Return ONLY the JSON object — no markdown, no commentary, no code fences."
+)
+NO_TOOLS_RETRY_NUDGE_PLURAL_WITH_SCHEMA = (
+    "You attempted to call {invalid_tools}, but there are no tools available on this turn. "
+    "Do not call any tools. Respond with valid JSON that conforms to the following schema:\n{schema}\n\n"
+    "Return ONLY the JSON object — no markdown, no commentary, no code fences."
 )
 
 
@@ -139,8 +151,32 @@ def build_retry_kw(
 
         if invalid_tools:
             if not valid_tool_names:
-                # No tools available at all — use the dedicated no-tools nudge
-                if len(invalid_tools) == 1:
+                # No tools available at all — use the dedicated no-tools nudge.
+                # When response_format is set, direct the LLM to output JSON
+                # matching the schema instead of "text content only" (which
+                # would contradict the response_format constraint).
+                rf_model = _get_response_format_model(kw)
+                if rf_model is not None:
+                    schema_str = json.dumps(
+                        rf_model.model_json_schema(),
+                        indent=2,
+                    )
+                    if len(invalid_tools) == 1:
+                        nudge = NO_TOOLS_RETRY_NUDGE_SINGLE_WITH_SCHEMA.format(
+                            invalid_tools=invalid_tools[0],
+                            schema=schema_str,
+                        )
+                    else:
+                        quoted = [f"'{t}'" for t in invalid_tools]
+                        if len(quoted) == 2:
+                            invalid_str = f"{quoted[0]} and {quoted[1]}"
+                        else:
+                            invalid_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
+                        nudge = NO_TOOLS_RETRY_NUDGE_PLURAL_WITH_SCHEMA.format(
+                            invalid_tools=invalid_str,
+                            schema=schema_str,
+                        )
+                elif len(invalid_tools) == 1:
                     nudge = NO_TOOLS_RETRY_NUDGE_SINGLE.format(
                         invalid_tools=invalid_tools[0],
                     )
