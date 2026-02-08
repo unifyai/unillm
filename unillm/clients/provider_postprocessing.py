@@ -134,6 +134,12 @@ def build_retry_kw(
     """
     msg = response.choices[0].message
 
+    # Anthropic rejects assistant messages whose text content is whitespace-only
+    # ("messages: text content blocks must contain non-whitespace text").
+    # Claude commonly returns content="\n\n" alongside tool_calls; sanitize
+    # it to None so the retry request stays valid.
+    assistant_content = msg.content if msg.content and msg.content.strip() else None
+
     # Build retry messages: original messages + assistant response + nudge
     retry_messages = list(kw.get("messages", []))
 
@@ -212,7 +218,7 @@ def build_retry_kw(
             retry_messages.append(
                 {
                     "role": "assistant",
-                    "content": msg.content,
+                    "content": assistant_content,
                 },
             )
         else:
@@ -221,7 +227,7 @@ def build_retry_kw(
             retry_messages.append(
                 {
                     "role": "assistant",
-                    "content": msg.content,
+                    "content": assistant_content,
                 },
             )
     else:
@@ -231,7 +237,7 @@ def build_retry_kw(
         retry_messages.append(
             {
                 "role": "assistant",
-                "content": msg.content,
+                "content": assistant_content,
             },
         )
 
