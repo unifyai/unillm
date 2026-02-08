@@ -580,6 +580,178 @@ class TestTraceHierarchy:
         assert unify_s.parent.span_id == unillm_s.context.span_id
 
 
+class TestLogUsage:
+    """Tests for log_usage() — external session usage logging (e.g. Realtime API)."""
+
+    def test_writes_log_file_with_usage_and_transcript(self, tmp_path, monkeypatch):
+        """log_usage writes a complete log file with request context and usage."""
+        from unittest.mock import patch
+        from unillm import settings
+        from unillm import logger
+        from unillm.logger import log_usage
+
+        # Configure file logging
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        # Realistic Realtime API usage from a single response.done event
+        usage = {
+            "input_tokens": 150,
+            "output_tokens": 80,
+            "total_tokens": 230,
+            "input_token_details": {
+                "audio_tokens": 130,
+                "text_tokens": 20,
+                "cached_tokens": 0,
+            },
+            "output_token_details": {
+                "audio_tokens": 70,
+                "text_tokens": 10,
+            },
+        }
+
+        transcript = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What's the weather like?"},
+            {"role": "assistant", "content": "Let me check on that for you."},
+        ]
+
+        with patch("unillm.logger.unify.deduct_credits"):
+            billed_cost = log_usage(
+                "gpt-4o-realtime-preview",
+                usage,
+                transcript=transcript,
+                label="gpt-4o-realtime-preview",
+            )
+
+        # Should return a positive billed cost
+        assert billed_cost > 0
+
+        # Should have created exactly one log file with _usage suffix
+        log_files = list(tmp_path.glob("*_usage.txt"))
+        assert len(log_files) == 1
+
+        content = log_files[0].read_text()
+
+        # Log file should contain the request section with model and transcript
+        assert "LLM request" in content
+        assert "gpt-4o-realtime-preview" in content
+        assert "What's the weather like?" in content
+        assert "Let me check on that for you." in content
+
+        # Log file should contain the response section with usage stats
+        assert "LLM response" in content
+        assert "[usage]" in content
+        assert "audio_tokens" in content
+        assert "provider_cost" in content
+        assert "billed_cost" in content
+
+    def test_deducts_credits(self, tmp_path, monkeypatch):
+        """log_usage deducts the billed cost via unify.deduct_credits."""
+        from unittest.mock import patch, MagicMock
+        from unillm import settings
+        from unillm import logger
+        from unillm.logger import log_usage
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        usage = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "input_token_details": {
+                "audio_tokens": 80,
+                "text_tokens": 20,
+            },
+            "output_token_details": {
+                "audio_tokens": 40,
+                "text_tokens": 10,
+            },
+        }
+
+        mock_deduct = MagicMock()
+        with patch("unillm.logger.unify.deduct_credits", mock_deduct):
+            billed_cost = log_usage("gpt-4o-realtime-preview", usage)
+
+        # Should have called deduct_credits with the billed amount
+        mock_deduct.assert_called_once()
+        deducted_amount = mock_deduct.call_args[0][0]
+        assert deducted_amount == billed_cost
+        assert deducted_amount > 0
+
+    def test_works_without_transcript(self, tmp_path, monkeypatch):
+        """log_usage works when no transcript is provided."""
+        from unittest.mock import patch
+        from unillm import settings
+        from unillm import logger
+        from unillm.logger import log_usage
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        usage = {"input_tokens": 50, "output_tokens": 30}
+
+        with patch("unillm.logger.unify.deduct_credits"):
+            billed_cost = log_usage("gpt-4o-realtime-preview", usage)
+
+        assert billed_cost > 0
+
+        log_files = list(tmp_path.glob("*_usage.txt"))
+        assert len(log_files) == 1
+
+        content = log_files[0].read_text()
+        # Should NOT contain "messages" key when no transcript
+        assert "messages" not in content
+        assert "gpt-4o-realtime-preview" in content
+
+    def test_resilient_to_deduct_failure(self, tmp_path, monkeypatch):
+        """log_usage still writes the log file even if credit deduction fails."""
+        from unittest.mock import patch
+        from unillm import settings
+        from unillm import logger
+        from unillm.logger import log_usage
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        usage = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "input_token_details": {"audio_tokens": 80, "text_tokens": 20},
+            "output_token_details": {"audio_tokens": 40, "text_tokens": 10},
+        }
+
+        with patch(
+            "unillm.logger.unify.deduct_credits",
+            side_effect=ConnectionError("no connection"),
+        ):
+            # Should not raise
+            billed_cost = log_usage("gpt-4o-realtime-preview", usage)
+
+        # Cost should still be computed
+        assert billed_cost > 0
+
+        # Log file should still exist
+        log_files = list(tmp_path.glob("*_usage.txt"))
+        assert len(log_files) == 1
+
+
 class TestStreamingFileLogging:
     """Tests that streaming LLM calls write file-based I/O logs.
 

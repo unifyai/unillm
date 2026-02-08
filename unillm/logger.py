@@ -42,6 +42,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import unify
+
 from .settings import SETTINGS
 
 # ---------------------------------------------------------------------------
@@ -430,6 +432,114 @@ def _truncate_for_console(body_str: str, max_len: int = 500) -> str:
     if len(body_str) <= max_len:
         return body_str
     return body_str[:max_len] + "...(truncated)"
+
+
+def log_usage(
+    model: str,
+    usage: dict,
+    *,
+    transcript: list[dict[str, str]] | None = None,
+    label: str | None = None,
+) -> float:
+    """Log usage for an externally-managed LLM session and deduct credits.
+
+    Designed for APIs that bypass the standard unillm generate() path (e.g.
+    OpenAI Realtime API via LiveKit), where the caller has real usage stats
+    but no unillm client involved in the actual inference.
+
+    This function:
+    1. Writes a log file (request context + usage) to the configured log dir
+    2. Computes the real cost from token counts (including audio tokens)
+    3. Deducts credits from the user's account
+    4. Logs to console
+
+    Args:
+        model: The model identifier (e.g. 'gpt-4o-realtime-preview').
+        usage: Usage dict with token counts. Expected shape::
+
+            {
+                "input_tokens": int,
+                "output_tokens": int,
+                "total_tokens": int,          # optional
+                "input_token_details": {       # optional
+                    "audio_tokens": int,
+                    "text_tokens": int,
+                    "cached_tokens": int,
+                },
+                "output_token_details": {      # optional
+                    "audio_tokens": int,
+                    "text_tokens": int,
+                },
+            }
+
+        transcript: Conversation transcript as a list of
+            ``{"role": "user"|"assistant"|"system", "content": "..."}`` dicts.
+            Included in the log file for debuggability.
+        label: Label for the log entry (e.g. 'gpt-4o-realtime-preview').
+
+    Returns:
+        The billed cost (provider_cost * margin) that was deducted, in USD.
+    """
+    from .costs import compute_full_cost_from_usage, get_cost_margin
+
+    label = label or model
+    label_prefix = f"[{label}] "
+
+    # Build a synthetic request body for the log file
+    request_body = {"model": model}
+    if transcript:
+        request_body["messages"] = transcript
+
+    # Build the response body (usage stats + cost)
+    provider_cost = compute_full_cost_from_usage(model, usage)
+    billed_cost = provider_cost * get_cost_margin()
+
+    response_body = {
+        "usage": usage,
+        "provider_cost": provider_cost,
+        "billed_cost": billed_cost,
+    }
+
+    # Console log (always when enabled)
+    if _LOG_ENABLED:
+        _LOGGER.debug(
+            f"🔄 {label_prefix}usage log\n"
+            f"  usage: {json.dumps(usage, default=str)}\n"
+            f"  provider_cost: ${provider_cost:.6f}, billed: ${billed_cost:.6f}",
+        )
+
+    # File log (write a complete file in one shot — no pending phase)
+    log_dir = _get_log_dir()
+    if log_dir is not None:
+        try:
+            now = datetime.now(timezone.utc)
+            hhmmss = now.strftime("%H%M%S")
+            ns = time.time_ns() % 1_000_000_000
+            path = log_dir / f"{hhmmss}_{ns:09d}_usage.txt"
+
+            i = 1
+            while path.exists():
+                path = log_dir / f"{hhmmss}_{ns:09d}_usage_{i}.txt"
+                i += 1
+
+            with path.open("w", encoding="utf-8") as f:
+                f.write(f"🔄 {label_prefix}LLM request ➡️\n")
+                f.write(_normalize_body(_serialize_kw(request_body)).rstrip())
+                f.write("\n")
+                f.write(f"\n🔄 {label_prefix}LLM response ⬅️ [usage]\n")
+                f.write(_normalize_body(response_body).rstrip())
+                f.write("\n")
+        except Exception:
+            pass
+
+    # Deduct credits
+    if billed_cost > 0:
+        try:
+            unify.deduct_credits(billed_cost)
+        except Exception:
+            _LOGGER.warning(f"Failed to deduct credits: ${billed_cost:.6f}")
+
+    return billed_cost
 
 
 def write_request_pending(
