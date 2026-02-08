@@ -28,7 +28,6 @@ from unillm.logger import (
     is_otel_enabled,
 )
 
-
 # --------------------------------------------------------------------------- #
 #  Fixtures for OTel testing
 # --------------------------------------------------------------------------- #
@@ -579,6 +578,73 @@ class TestTraceHierarchy:
 
         # unify is child of unillm
         assert unify_s.parent.span_id == unillm_s.context.span_id
+
+
+class TestStreamingFileLogging:
+    """Tests that streaming LLM calls write file-based I/O logs.
+
+    The non-streaming path (_generate_non_stream) calls write_request_pending
+    and append_response_and_finalize. The streaming path (_generate_stream)
+    must do the same so that CI artifacts capture the full request/response
+    for every LLM call regardless of modality.
+    """
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_writes_log_file(self, tmp_path, monkeypatch):
+        """AsyncUnify with stream=True should produce a log file."""
+        from unittest.mock import patch
+        from unillm import settings
+        from unillm import logger
+        import unillm
+
+        # Configure file logging to tmp_path
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        # Build mock streaming chunks
+        mock_chunk1 = MagicMock()
+        mock_chunk1.choices = [MagicMock()]
+        mock_chunk1.choices[0].delta.content = "Hello"
+        mock_chunk1.usage = None
+
+        mock_chunk2 = MagicMock()
+        mock_chunk2.choices = [MagicMock()]
+        mock_chunk2.choices[0].delta.content = " world"
+        mock_chunk2.usage = None
+
+        async def mock_acompletion(*args, **kwargs):
+            async def async_gen():
+                yield mock_chunk1
+                yield mock_chunk2
+
+            return async_gen()
+
+        with patch(
+            "unillm.clients.uni_llm.litellm.acompletion",
+            side_effect=mock_acompletion,
+        ):
+            client = unillm.AsyncUnify("gpt-4@openai", stream=True)
+            gen = await client.generate(
+                messages=[{"role": "user", "content": "Hi"}],
+            )
+            chunks = []
+            async for chunk in gen:
+                chunks.append(chunk)
+
+        # Verify the LLM call itself worked
+        assert "".join(chunks) == "Hello world"
+
+        # A log file must exist — streaming should log just like non-streaming
+        log_files = list(tmp_path.glob("*.txt"))
+        assert len(log_files) >= 1, (
+            f"Streaming call produced no log files in {tmp_path}. "
+            f"Non-streaming calls write a _pending → _hit/_miss file, "
+            f"but the streaming path skips write_request_pending entirely."
+        )
 
 
 class TestSettingsValidation:
