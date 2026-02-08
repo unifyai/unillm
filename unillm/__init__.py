@@ -21,7 +21,6 @@ from .costs import (
     compute_cost,
     compute_cost_from_response,
     compute_full_cost_from_usage,
-    deduct_credits_for_usage,
 )
 from .helpers import get_seed, set_seed
 from .llm_events import (

@@ -1,7 +1,5 @@
 """Tests for the cost computation module."""
 
-from unittest.mock import patch
-
 import pytest
 
 from unillm.costs import (
@@ -9,7 +7,6 @@ from unillm.costs import (
     compute_cost,
     compute_cost_from_response,
     compute_full_cost_from_usage,
-    deduct_credits_for_usage,
 )
 
 
@@ -100,20 +97,6 @@ class TestComputeCostWithProviderSuffix:
         cost = compute_full_cost_from_usage("gpt-5.2@openai", usage)
 
         assert cost > 0
-
-    @patch("unillm.costs.unify.deduct_credits")
-    def test_deduct_credits_with_suffix(self, mock_deduct):
-        """Test deduct_credits_for_usage with @provider suffix."""
-        response = {
-            "usage": {
-                "prompt_tokens": 1000,
-                "completion_tokens": 500,
-            },
-        }
-        cost = deduct_credits_for_usage("gpt-5.2@openai", response)
-
-        assert cost > 0
-        mock_deduct.assert_called_once()
 
 
 class TestComputeCost:
@@ -340,167 +323,3 @@ class TestComputeFullCostFromUsage:
         usage = {"prompt_tokens": 100, "completion_tokens": 50}
         with pytest.raises(ValueError, match="Could not find pricing info"):
             compute_full_cost_from_usage("non-existent-model-xyz", usage)
-
-
-class TestDeductCreditsForUsage:
-    """Tests for the deduct_credits_for_usage function."""
-
-    @patch("unillm.costs.unify.deduct_credits")
-    def test_deducts_credits_for_chat_completion(self, mock_deduct):
-        """Test that credits are deducted for a standard chat completion."""
-        response = {
-            "id": "chatcmpl-123",
-            "model": "gpt-4o",
-            "usage": {
-                "prompt_tokens": 1000,
-                "completion_tokens": 500,
-            },
-        }
-        cost = deduct_credits_for_usage("gpt-4o", response)
-
-        # Verify cost was computed correctly
-        assert abs(cost - 0.0075) < 1e-9
-
-        # Verify deduct_credits was called with the cost
-        mock_deduct.assert_called_once()
-        call_args = mock_deduct.call_args[0][0]
-        assert abs(call_args - 0.0075) < 1e-9
-
-    @patch("unillm.costs.unify.deduct_credits")
-    def test_deducts_credits_for_realtime_audio(self, mock_deduct):
-        """Test that credits are deducted for Realtime API with audio."""
-        response = {
-            "usage": {
-                "input_token_details": {
-                    "text_tokens": 100,
-                    "audio_tokens": 1000,
-                },
-                "output_token_details": {
-                    "text_tokens": 50,
-                    "audio_tokens": 500,
-                },
-            },
-        }
-        cost = deduct_credits_for_usage("gpt-4o-realtime-preview", response)
-
-        # text: (100 * 5e-6) + (50 * 2e-5) = 0.0005 + 0.001 = 0.0015
-        # audio: (1000 * 4e-5) + (500 * 8e-5) = 0.04 + 0.04 = 0.08
-        # total: 0.0015 + 0.08 = 0.0815
-        assert abs(cost - 0.0815) < 1e-6
-        mock_deduct.assert_called_once()
-
-    @patch("unillm.costs.unify.deduct_credits")
-    def test_deducts_credits_from_response_object(self, mock_deduct):
-        """Test with a response object (not dict)."""
-
-        class MockUsage:
-            prompt_tokens = 2000
-            completion_tokens = 1000
-
-            def model_dump(self):
-                return {
-                    "prompt_tokens": self.prompt_tokens,
-                    "completion_tokens": self.completion_tokens,
-                }
-
-        class MockResponse:
-            usage = MockUsage()
-
-        cost = deduct_credits_for_usage("gpt-4o", MockResponse())
-
-        # Expected: (2000 * 2.5e-6) + (1000 * 1e-5) = 0.015
-        assert abs(cost - 0.015) < 1e-9
-        mock_deduct.assert_called_once()
-
-    @patch("unillm.costs.unify.deduct_credits")
-    def test_zero_cost_does_not_deduct(self, mock_deduct):
-        """Test that zero cost doesn't call deduct_credits."""
-        response = {
-            "usage": {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-            },
-        }
-        cost = deduct_credits_for_usage("gpt-4o", response)
-
-        assert cost == 0
-        mock_deduct.assert_not_called()
-
-    def test_missing_usage_raises(self):
-        """Test that missing usage raises ValueError."""
-        response = {"id": "chatcmpl-123", "model": "gpt-4o"}
-        with pytest.raises(ValueError, match="No usage information found"):
-            deduct_credits_for_usage("gpt-4o", response)
-
-    def test_none_usage_raises(self):
-        """Test that None usage raises ValueError."""
-
-        class MockResponse:
-            usage = None
-
-        with pytest.raises(ValueError, match="No usage information found"):
-            deduct_credits_for_usage("gpt-4o", MockResponse())
-
-    def test_unknown_model_raises(self):
-        """Test that unknown models raise ValueError."""
-        response = {
-            "usage": {
-                "prompt_tokens": 100,
-                "completion_tokens": 50,
-            },
-        }
-        with pytest.raises(ValueError, match="Could not find pricing info"):
-            deduct_credits_for_usage("non-existent-model-xyz", response)
-
-    @patch("unillm.costs.unify.deduct_credits")
-    def test_returns_cost_value(self, mock_deduct):
-        """Test that the function returns the computed cost."""
-        response = {
-            "usage": {
-                "prompt_tokens": 1000000,  # 1M tokens
-                "completion_tokens": 0,
-            },
-        }
-        cost = deduct_credits_for_usage("gpt-4o", response)
-
-        # gpt-4o: input=$2.50/M
-        assert abs(cost - 2.5) < 1e-9
-
-    @patch("unillm.costs.unify.deduct_credits")
-    def test_handles_nested_object_usage(self, mock_deduct):
-        """Test with deeply nested object structure."""
-
-        class InputDetails:
-            text_tokens = 100
-            audio_tokens = 500
-
-        class OutputDetails:
-            text_tokens = 50
-            audio_tokens = 250
-
-        class Usage:
-            input_token_details = InputDetails()
-            output_token_details = OutputDetails()
-
-            def model_dump(self):
-                return {
-                    "input_token_details": {
-                        "text_tokens": 100,
-                        "audio_tokens": 500,
-                    },
-                    "output_token_details": {
-                        "text_tokens": 50,
-                        "audio_tokens": 250,
-                    },
-                }
-
-        class Response:
-            usage = Usage()
-
-        cost = deduct_credits_for_usage("gpt-4o-realtime-preview", Response())
-
-        # text: (100 * 5e-6) + (50 * 2e-5) = 0.0005 + 0.001 = 0.0015
-        # audio: (500 * 4e-5) + (250 * 8e-5) = 0.02 + 0.02 = 0.04
-        # total: 0.0015 + 0.04 = 0.0415
-        assert abs(cost - 0.0415) < 1e-6
-        mock_deduct.assert_called_once()
