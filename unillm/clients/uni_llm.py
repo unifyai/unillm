@@ -1227,6 +1227,9 @@ class AsyncUnify(_UniClient):
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
 
+        # Write request to log file (before LLM call) so we don't lose it if call hangs
+        pending_path = write_request_pending(kw, label=endpoint)
+
         # Start limit check and stream connection in parallel for in-flight cancellation
         limit_task: asyncio.Task | None = None
         if is_limit_check_enabled():
@@ -1245,6 +1248,7 @@ class AsyncUnify(_UniClient):
         provider_cost: float | None = None
         billed_cost: float | None = None
         async_stream = None
+        collected_content: list[str] = []
 
         try:
             # Start stream connection (this initiates the LLM call)
@@ -1282,7 +1286,9 @@ class AsyncUnify(_UniClient):
                 if return_full_completion:
                     yield chunk
                 else:
-                    yield chunk.choices[0].delta.content or ""
+                    text = chunk.choices[0].delta.content or ""
+                    collected_content.append(text)
+                    yield text
         except litellm.exceptions.APIError as e:
             llm_error = Exception(e.message)
             raise llm_error
@@ -1290,6 +1296,20 @@ class AsyncUnify(_UniClient):
             llm_error = e
             raise
         finally:
+            # Finalize log file with collected response content
+            try:
+                log_body: dict | str | None = "".join(collected_content) or None
+                if llm_error is not None:
+                    log_body = {"response": log_body, "error": str(llm_error)}
+                append_response_and_finalize(
+                    pending_path,
+                    log_body,
+                    "error" if llm_error else "miss",
+                    label=endpoint,
+                )
+            except BaseException:
+                pass
+
             # Deduct credits based on usage after streaming completes
             if usage_info is not None:
                 prompt_tokens = getattr(usage_info, "prompt_tokens", 0) or 0
