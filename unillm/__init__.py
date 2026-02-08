@@ -35,6 +35,7 @@ from .llm_events import (
 )
 from .logger import (
     configure_log_dir,
+    log_usage,
     write_request_pending,
     append_response_and_finalize,
 )
