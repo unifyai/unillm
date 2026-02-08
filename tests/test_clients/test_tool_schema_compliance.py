@@ -433,3 +433,94 @@ def test_build_retry_kw_no_tools_nudge_says_respond_with_text():
     assert (
         "text" in nudge_content.lower() or "content" in nudge_content.lower()
     ), f"Nudge should tell model to respond with text, but got: {nudge_content!r}"
+
+
+# ---------------------------------------------------------------------------
+# Whitespace-only assistant content in retry messages
+# ---------------------------------------------------------------------------
+
+_WHITESPACE_CONTENTS = ["\n\n", "  ", "\t\n", " \n "]
+
+
+def _make_invalid_tool_response(content):
+    """Build a mock response where the model called an invalid tool."""
+    tc = MagicMock()
+    tc.function.name = "json_tool_call"
+
+    msg = MagicMock()
+    msg.tool_calls = [tc]
+    msg.content = content
+
+    choice = MagicMock()
+    choice.message = msg
+
+    resp = MagicMock()
+    resp.choices = [choice]
+    return resp
+
+
+_VALID_TOOL_KW = {
+    "messages": [{"role": "user", "content": "Do it."}],
+    "tools": [
+        {
+            "type": "function",
+            "function": {
+                "name": "wait",
+                "description": "Wait.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    ],
+}
+
+
+def _assistant_content_from_retry(retry_kw: dict) -> str | None:
+    """Extract the assistant message content from the retry messages."""
+    for m in retry_kw["messages"]:
+        if m.get("role") == "assistant":
+            return m.get("content")
+    return None
+
+
+def test_build_retry_kw_rejects_whitespace_only_assistant_content():
+    """
+    Bug: build_retry_kw includes msg.content verbatim in the retry assistant
+    message. When Claude responds with tool_calls, content is often just
+    "\\n\\n" (whitespace-only). Including this in the retry messages causes
+    Anthropic to reject the request with:
+        "messages: text content blocks must contain non-whitespace text"
+
+    The assistant message content in the retry must either be None or
+    contain non-whitespace characters.
+    """
+    for ws in _WHITESPACE_CONTENTS:
+        resp = _make_invalid_tool_response(content=ws)
+        retry_kw = build_retry_kw(
+            kw=_VALID_TOOL_KW,
+            response=resp,
+            retry_reason=RETRY_REASON_INVALID_TOOL_NAME,
+        )
+        assistant_content = _assistant_content_from_retry(retry_kw)
+        assert assistant_content is None or assistant_content.strip(), (
+            f"Retry assistant message has whitespace-only content {assistant_content!r} "
+            f"(from msg.content={ws!r}). Anthropic rejects this with: "
+            f"'messages: text content blocks must contain non-whitespace text'"
+        )
+
+
+def test_build_retry_kw_tool_choice_required_rejects_whitespace_content():
+    """Same bug for the tool_choice_required (default) retry path."""
+    for ws in _WHITESPACE_CONTENTS:
+        resp = _make_invalid_tool_response(content=ws)
+        # Use default retry_reason (tool_choice_required path)
+        retry_kw = build_retry_kw(
+            kw=_VALID_TOOL_KW,
+            response=resp,
+            retry_reason=None,
+        )
+        assistant_content = _assistant_content_from_retry(retry_kw)
+        assert assistant_content is None or assistant_content.strip(), (
+            f"Retry assistant message has whitespace-only content {assistant_content!r} "
+            f"(from msg.content={ws!r}). Anthropic rejects this with: "
+            f"'messages: text content blocks must contain non-whitespace text'"
+        )
