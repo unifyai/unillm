@@ -751,6 +751,51 @@ class TestLogUsage:
         log_files = list(tmp_path.glob("*_usage.txt"))
         assert len(log_files) == 1
 
+    def test_emits_llm_event(self, tmp_path, monkeypatch):
+        """log_usage emits an LLMEvent so downstream hooks (e.g. cumulative
+        spend tracking) fire."""
+        from unittest.mock import patch
+        from unillm import settings
+        from unillm import logger
+        from unillm.logger import log_usage
+        from unillm.llm_events import LLMEvent
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        usage = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "input_token_details": {"audio_tokens": 80, "text_tokens": 20},
+            "output_token_details": {"audio_tokens": 40, "text_tokens": 10},
+        }
+
+        captured_events = []
+
+        def capture_hook(event: LLMEvent) -> None:
+            captured_events.append(event)
+
+        with (
+            patch("unillm.logger.unify.deduct_credits"),
+            patch(
+                "unillm.llm_events._emit_llm_event",
+                side_effect=lambda e: captured_events.append(e),
+            ),
+        ):
+            log_usage("gpt-4o-realtime-preview", usage)
+
+        assert len(captured_events) == 1
+        event = captured_events[0]
+        assert isinstance(event, LLMEvent)
+        assert event.request["model"] == "gpt-4o-realtime-preview"
+        assert event.provider_cost > 0
+        assert event.billed_cost > 0
+        assert event.response["usage"] == usage
+
 
 class TestStreamingFileLogging:
     """Tests that streaming LLM calls write file-based I/O logs.

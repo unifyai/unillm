@@ -451,7 +451,8 @@ def log_usage(
     1. Writes a log file (request context + usage) to the configured log dir
     2. Computes the real cost from token counts (including audio tokens)
     3. Deducts credits from the user's account
-    4. Logs to console
+    4. Emits an LLMEvent (so downstream hooks like cumulative spend tracking fire)
+    5. Logs to console
 
     Args:
         model: The model identifier (e.g. 'gpt-4o-realtime-preview').
@@ -538,6 +539,18 @@ def log_usage(
             unify.deduct_credits(billed_cost)
         except Exception:
             _LOGGER.warning(f"Failed to deduct credits: ${billed_cost:.6f}")
+
+    # Emit LLM event so downstream hooks (e.g. cumulative spend tracking) fire
+    from .llm_events import LLMEvent, _emit_llm_event
+
+    _emit_llm_event(
+        LLMEvent(
+            request=request_body,
+            response=response_body,
+            provider_cost=provider_cost,
+            billed_cost=billed_cost,
+        ),
+    )
 
     return billed_cost
 
