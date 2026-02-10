@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple, Type, TYPE_CHECKING
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from openai.types.chat import ChatCompletion
+    from openai.types.chat import ChatCompletion, ChatCompletionMessage
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,78 @@ def _format_tool_names(names: List[str]) -> str:
     return ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
 
 
+def _build_invalid_tool_name_retry_messages(
+    *,
+    kw: dict,
+    msg: "ChatCompletionMessage",
+    assistant_content: Optional[str],
+) -> list:
+    """Build retry messages for the invalid-tool-name case.
+
+    Appends an assistant message (content only) and a user nudge that
+    identifies the invalid tool(s) and instructs the model on how to proceed.
+
+    Returns the full retry message list (original messages + assistant + nudge).
+    """
+    retry_messages = list(kw.get("messages", []))
+    tool_calls = msg.tool_calls or []
+    valid_tool_names = set(_get_valid_tool_names(kw.get("tools")))
+
+    # Find all invalid tool names
+    invalid_tools = []
+    for tc in tool_calls:
+        if tc.function.name not in valid_tool_names:
+            invalid_tools.append(tc.function.name)
+
+    if invalid_tools:
+        invalid_tools_str = _format_tool_names(invalid_tools)
+        if not valid_tool_names:
+            # No tools available at all — use the dedicated no-tools nudge.
+            # When response_format is set, direct the LLM to output JSON
+            # matching the schema instead of "text content only" (which
+            # would contradict the response_format constraint).
+            rf_model = _get_response_format_model(kw)
+            if rf_model is not None:
+                schema_str = json.dumps(
+                    rf_model.model_json_schema(),
+                    indent=2,
+                )
+                nudge = NO_TOOLS_RETRY_NUDGE_WITH_SCHEMA.format(
+                    invalid_tools=invalid_tools_str,
+                    schema=schema_str,
+                )
+            else:
+                nudge = NO_TOOLS_RETRY_NUDGE.format(
+                    invalid_tools=invalid_tools_str,
+                )
+        else:
+            valid_tools_str = ", ".join(sorted(valid_tool_names))
+            nudge = INVALID_TOOL_NAME_RETRY_NUDGE.format(
+                invalid_tools=invalid_tools_str,
+                valid_tools=valid_tools_str,
+            )
+    else:
+        # Shouldn't happen, but fallback
+        nudge = TOOL_CHOICE_REQUIRED_RETRY_NUDGE
+
+    # Add the assistant response with the invalid tool call
+    # (content only, not thinking blocks, not the tool call itself)
+    retry_messages.append(
+        {
+            "role": "assistant",
+            "content": assistant_content,
+        },
+    )
+    # Add the nudge user message
+    retry_messages.append(
+        {
+            "role": "user",
+            "content": nudge,
+        },
+    )
+    return retry_messages
+
+
 def build_retry_kw(
     *,
     kw: dict,
@@ -143,83 +215,27 @@ def build_retry_kw(
     # it to None so the retry request stays valid.
     assistant_content = msg.content if msg.content and msg.content.strip() else None
 
-    # Build retry messages: original messages + assistant response + nudge
-    retry_messages = list(kw.get("messages", []))
-
-    # Determine the nudge message based on retry reason
     if retry_reason == RETRY_REASON_INVALID_TOOL_NAME:
-        # For invalid tool name, find ALL invalid tools and report them
-        tool_calls = msg.tool_calls or []
-        valid_tool_names = set(_get_valid_tool_names(kw.get("tools")))
-
-        # Find all invalid tool names
-        invalid_tools = []
-        for tc in tool_calls:
-            if tc.function.name not in valid_tool_names:
-                invalid_tools.append(tc.function.name)
-
-        if invalid_tools:
-            invalid_tools_str = _format_tool_names(invalid_tools)
-            if not valid_tool_names:
-                # No tools available at all — use the dedicated no-tools nudge.
-                # When response_format is set, direct the LLM to output JSON
-                # matching the schema instead of "text content only" (which
-                # would contradict the response_format constraint).
-                rf_model = _get_response_format_model(kw)
-                if rf_model is not None:
-                    schema_str = json.dumps(
-                        rf_model.model_json_schema(),
-                        indent=2,
-                    )
-                    nudge = NO_TOOLS_RETRY_NUDGE_WITH_SCHEMA.format(
-                        invalid_tools=invalid_tools_str,
-                        schema=schema_str,
-                    )
-                else:
-                    nudge = NO_TOOLS_RETRY_NUDGE.format(
-                        invalid_tools=invalid_tools_str,
-                    )
-            else:
-                valid_tools_str = ", ".join(sorted(valid_tool_names))
-                nudge = INVALID_TOOL_NAME_RETRY_NUDGE.format(
-                    invalid_tools=invalid_tools_str,
-                    valid_tools=valid_tools_str,
-                )
-            # Add the assistant response with the invalid tool call
-            # (content only, not thinking blocks, not the tool call itself)
-            retry_messages.append(
-                {
-                    "role": "assistant",
-                    "content": assistant_content,
-                },
-            )
-        else:
-            # Shouldn't happen, but fallback
-            nudge = TOOL_CHOICE_REQUIRED_RETRY_NUDGE
-            retry_messages.append(
-                {
-                    "role": "assistant",
-                    "content": assistant_content,
-                },
-            )
+        retry_messages = _build_invalid_tool_name_retry_messages(
+            kw=kw,
+            msg=msg,
+            assistant_content=assistant_content,
+        )
     else:
         # Default: tool_choice_required case
-        nudge = TOOL_CHOICE_REQUIRED_RETRY_NUDGE
-        # Add the non-compliant assistant response (content only, not thinking blocks)
+        retry_messages = list(kw.get("messages", []))
         retry_messages.append(
             {
                 "role": "assistant",
                 "content": assistant_content,
             },
         )
-
-    # Add the nudge user message
-    retry_messages.append(
-        {
-            "role": "user",
-            "content": nudge,
-        },
-    )
+        retry_messages.append(
+            {
+                "role": "user",
+                "content": TOOL_CHOICE_REQUIRED_RETRY_NUDGE,
+            },
+        )
 
     # Create retry request
     retry_kw = dict(kw)
