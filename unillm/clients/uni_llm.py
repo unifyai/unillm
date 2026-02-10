@@ -62,7 +62,8 @@ from ..logger import (
     set_span_response,
 )
 from ..types import Prompt, PromptCacheParam
-from .shared_session import SHARED_SESSION
+from .shared_session import get_shared_session
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 class _UniClient(_Client, abc.ABC):
@@ -1202,6 +1203,31 @@ class AsyncUnify(_UniClient):
     """Class for interacting with the Unify chat completions endpoint in a synchronous
     manner."""
 
+    # Providers whose litellm handler expects an OpenAI SDK client (AsyncOpenAI)
+    # as the ``client`` kwarg.  We must NOT pass an AsyncHTTPHandler for these.
+    _OPENAI_SDK_PROVIDERS = frozenset({"openai", "azure", "azure_ai"})
+
+    _async_http_client: Optional[AsyncHTTPHandler] = None
+    _async_http_client_session = None  # tracks which aiohttp session the handler wraps
+
+    def _get_async_http_client(self) -> Optional[AsyncHTTPHandler]:
+        """Return an ``AsyncHTTPHandler`` backed by the shared aiohttp session,
+        but **only** for providers whose litellm handler accepts one (e.g.
+        Anthropic).  For OpenAI-SDK providers the ``client`` kwarg has a
+        different meaning (``AsyncOpenAI``), so we return ``None`` to avoid
+        interfering."""
+        if self._provider in self._OPENAI_SDK_PROVIDERS:
+            return None
+
+        session = get_shared_session()
+        if (
+            self._async_http_client is None
+            or self._async_http_client_session is not session
+        ):
+            self._async_http_client = AsyncHTTPHandler(shared_session=session)
+            self._async_http_client_session = session
+        return self._async_http_client
+
     async def _generate_stream(
         self,
         endpoint: str,
@@ -1249,7 +1275,8 @@ class AsyncUnify(_UniClient):
             stream_task = asyncio.create_task(
                 retry_transient_400_async(
                     lambda: litellm.acompletion(
-                        shared_session=SHARED_SESSION,
+                        shared_session=get_shared_session(),
+                        client=self._get_async_http_client(),
                         **kw,
                     ),
                 ),
@@ -1351,7 +1378,8 @@ class AsyncUnify(_UniClient):
             with llm_span(label, self._model, provider=self._provider):
                 completion = await retry_transient_400_async(
                     lambda: litellm.acompletion(
-                        shared_session=SHARED_SESSION,
+                        shared_session=get_shared_session(),
+                        client=self._get_async_http_client(),
                         **retry_kw,
                     ),
                 )
@@ -1510,7 +1538,8 @@ class AsyncUnify(_UniClient):
                     llm_task = asyncio.create_task(
                         retry_transient_400_async(
                             lambda: litellm.acompletion(
-                                shared_session=SHARED_SESSION,
+                                shared_session=get_shared_session(),
+                                client=self._get_async_http_client(),
                                 **kw,
                             ),
                         ),
