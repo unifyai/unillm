@@ -21,7 +21,6 @@ from unillm.clients.provider_postprocessing import (
     check_needs_postprocessing,
 )
 
-
 TOOL_A = {
     "type": "function",
     "function": {
@@ -270,13 +269,16 @@ def test_build_retry_kw_identifies_correct_invalid_tool():
     nudge_message = retry_kw["messages"][-1]
     assert nudge_message["role"] == "user"
 
-    # The nudge should mention "invalid_tool", NOT "valid_tool"
+    # The nudge should mention "invalid_tool" as the problem tool,
+    # and list "valid_tool" only in the available-tools section.
     nudge_content = nudge_message["content"]
     assert (
-        "invalid_tool" in nudge_content
+        "'invalid_tool'" in nudge_content
     ), f"Retry nudge should mention 'invalid_tool' but got: {nudge_content!r}"
+    # "valid_tool" must only appear after "currently available", not as an invalid tool
+    before_available = nudge_content.split("currently available")[0]
     assert (
-        "valid_tool" not in nudge_content.split("'")[1]
+        "'valid_tool'" not in before_available
     ), f"Retry nudge incorrectly reports 'valid_tool' as invalid: {nudge_content!r}"
 
 
@@ -344,10 +346,10 @@ def test_build_retry_kw_identifies_multiple_invalid_tools():
     assert (
         "valid_tool" in nudge_content.split("tools currently available are")[1]
     ), f"Retry nudge should list 'valid_tool' as available: {nudge_content!r}"
-    # Should use plural form
+    # Should mention the tools are not callable
     assert (
-        "they are not callable on this turn" in nudge_content
-    ), f"Retry nudge should use plural form but got: {nudge_content!r}"
+        "not callable on this turn" in nudge_content
+    ), f"Retry nudge should say tools are not callable but got: {nudge_content!r}"
 
 
 # ---------------------------------------------------------------------------

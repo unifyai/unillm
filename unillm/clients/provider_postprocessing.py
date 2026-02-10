@@ -36,15 +36,11 @@ TOOL_CHOICE_REQUIRED_RETRY_NUDGE = (
 # Nudge message templates for retrying when model calls tools not in the schema.
 # These acknowledge the system message may list more tools than are currently callable,
 # which happens when tool_policy restricts available tools on certain turns.
-INVALID_TOOL_NAME_RETRY_NUDGE_SINGLE = (
-    "You attempted to call '{invalid_tools}'. "
-    "This tool may be mentioned in the system message, but it is not callable on this turn. "
-    "The tools currently available are: {valid_tools}. "
-    "Please select one of the available tools."
-)
-INVALID_TOOL_NAME_RETRY_NUDGE_PLURAL = (
+# {invalid_tools} is pre-formatted by _format_tool_names().
+INVALID_TOOL_NAME_RETRY_NUDGE = (
     "You attempted to call {invalid_tools}. "
-    "These tools may be mentioned in the system message, but they are not callable on this turn. "
+    "The called tool(s) may be mentioned in the system message, "
+    "but are not callable on this turn. "
     "The tools currently available are: {valid_tools}. "
     "Please select from the available tools only."
 )
@@ -54,20 +50,11 @@ INVALID_TOOL_NAME_RETRY_NUDGE_PLURAL = (
 # zero tools are callable on this turn — it must respond with content directly.
 # When response_format is set, the nudge asks for JSON matching the schema;
 # otherwise it asks for plain text.
-NO_TOOLS_RETRY_NUDGE_SINGLE = (
-    "You attempted to call '{invalid_tools}', but there are no tools available on this turn. "
-    "Do not call any tools. Respond with text content only."
-)
-NO_TOOLS_RETRY_NUDGE_PLURAL = (
+NO_TOOLS_RETRY_NUDGE = (
     "You attempted to call {invalid_tools}, but there are no tools available on this turn. "
     "Do not call any tools. Respond with text content only."
 )
-NO_TOOLS_RETRY_NUDGE_SINGLE_WITH_SCHEMA = (
-    "You attempted to call '{invalid_tools}', but there are no tools available on this turn. "
-    "Do not call any tools. Respond with valid JSON that conforms to the following schema:\n{schema}\n\n"
-    "Return ONLY the JSON object — no markdown, no commentary, no code fences."
-)
-NO_TOOLS_RETRY_NUDGE_PLURAL_WITH_SCHEMA = (
+NO_TOOLS_RETRY_NUDGE_WITH_SCHEMA = (
     "You attempted to call {invalid_tools}, but there are no tools available on this turn. "
     "Do not call any tools. Respond with valid JSON that conforms to the following schema:\n{schema}\n\n"
     "Return ONLY the JSON object — no markdown, no commentary, no code fences."
@@ -116,6 +103,22 @@ def _get_valid_tool_names(tools: Optional[List[dict]]) -> List[str]:
     return names
 
 
+def _format_tool_names(names: List[str]) -> str:
+    """Format a list of tool names into a human-readable quoted string.
+
+    Examples:
+        ["a"]           -> "'a'"
+        ["a", "b"]      -> "'a' and 'b'"
+        ["a", "b", "c"] -> "'a', 'b', and 'c'"
+    """
+    quoted = [f"'{n}'" for n in names]
+    if len(quoted) == 1:
+        return quoted[0]
+    if len(quoted) == 2:
+        return f"{quoted[0]} and {quoted[1]}"
+    return ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
+
+
 def build_retry_kw(
     *,
     kw: dict,
@@ -156,6 +159,7 @@ def build_retry_kw(
                 invalid_tools.append(tc.function.name)
 
         if invalid_tools:
+            invalid_tools_str = _format_tool_names(invalid_tools)
             if not valid_tool_names:
                 # No tools available at all — use the dedicated no-tools nudge.
                 # When response_format is set, direct the LLM to output JSON
@@ -167,50 +171,18 @@ def build_retry_kw(
                         rf_model.model_json_schema(),
                         indent=2,
                     )
-                    if len(invalid_tools) == 1:
-                        nudge = NO_TOOLS_RETRY_NUDGE_SINGLE_WITH_SCHEMA.format(
-                            invalid_tools=invalid_tools[0],
-                            schema=schema_str,
-                        )
-                    else:
-                        quoted = [f"'{t}'" for t in invalid_tools]
-                        if len(quoted) == 2:
-                            invalid_str = f"{quoted[0]} and {quoted[1]}"
-                        else:
-                            invalid_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
-                        nudge = NO_TOOLS_RETRY_NUDGE_PLURAL_WITH_SCHEMA.format(
-                            invalid_tools=invalid_str,
-                            schema=schema_str,
-                        )
-                elif len(invalid_tools) == 1:
-                    nudge = NO_TOOLS_RETRY_NUDGE_SINGLE.format(
-                        invalid_tools=invalid_tools[0],
+                    nudge = NO_TOOLS_RETRY_NUDGE_WITH_SCHEMA.format(
+                        invalid_tools=invalid_tools_str,
+                        schema=schema_str,
                     )
                 else:
-                    quoted = [f"'{t}'" for t in invalid_tools]
-                    if len(quoted) == 2:
-                        invalid_str = f"{quoted[0]} and {quoted[1]}"
-                    else:
-                        invalid_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
-                    nudge = NO_TOOLS_RETRY_NUDGE_PLURAL.format(
-                        invalid_tools=invalid_str,
+                    nudge = NO_TOOLS_RETRY_NUDGE.format(
+                        invalid_tools=invalid_tools_str,
                     )
-            elif len(invalid_tools) == 1:
-                valid_tools_str = ", ".join(sorted(valid_tool_names))
-                nudge = INVALID_TOOL_NAME_RETRY_NUDGE_SINGLE.format(
-                    invalid_tools=f"'{invalid_tools[0]}'",
-                    valid_tools=valid_tools_str,
-                )
             else:
-                # Format multiple invalid tools as 'tool1', 'tool2', and 'tool3'
                 valid_tools_str = ", ".join(sorted(valid_tool_names))
-                quoted = [f"'{t}'" for t in invalid_tools]
-                if len(quoted) == 2:
-                    invalid_str = f"{quoted[0]} and {quoted[1]}"
-                else:
-                    invalid_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
-                nudge = INVALID_TOOL_NAME_RETRY_NUDGE_PLURAL.format(
-                    invalid_tools=invalid_str,
+                nudge = INVALID_TOOL_NAME_RETRY_NUDGE.format(
+                    invalid_tools=invalid_tools_str,
                     valid_tools=valid_tools_str,
                 )
             # Add the assistant response with the invalid tool call
