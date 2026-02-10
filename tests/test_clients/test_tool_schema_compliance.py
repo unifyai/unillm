@@ -50,17 +50,19 @@ TOOL_SEARCH = {
 }
 
 
-def _assert_no_retry_nudge_in_history(messages: list) -> None:
-    """Assert that retry nudge messages are not present in the message history."""
-    # The nudge message starts with "You attempted to call"
-    nudge_prefix = "You attempted to call"
-
+def _assert_no_retry_messages_in_history(messages: list) -> None:
+    """Assert that retry tool-result error messages are not in the history."""
     for msg in messages:
         content = msg.get("content", "")
-        if isinstance(content, str) and nudge_prefix in content:
-            raise AssertionError(
-                f"Retry nudge message leaked into history: {content!r}",
-            )
+        if msg.get("role") == "tool" and isinstance(content, str):
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict) and "error" in parsed:
+                    raise AssertionError(
+                        f"Retry tool result error leaked into history: {content!r}",
+                    )
+            except (json.JSONDecodeError, TypeError):
+                pass
 
 
 def test_anthropic_no_tool_name_constraint():
@@ -124,8 +126,8 @@ You MUST call tool_b. Do not call tool_a.
         assistant_messages[0].get("tool_calls") is not None
     ), f"Assistant message should have tool_calls: {assistant_messages[0]}"
 
-    # No retry nudge content should be in the history
-    _assert_no_retry_nudge_in_history(messages)
+    # No retry messages should be in the history
+    _assert_no_retry_messages_in_history(messages)
 
 
 def test_anthropic_no_tool_name_constraint_with_thinking():
@@ -209,29 +211,26 @@ Example:
         assistant_messages[0].get("tool_calls") is not None
     ), f"Assistant message should have tool_calls: {assistant_messages[0]}"
 
-    # No retry nudge content should be in the history
-    _assert_no_retry_nudge_in_history(messages)
+    # No retry messages should be in the history
+    _assert_no_retry_messages_in_history(messages)
 
 
 def test_build_retry_kw_identifies_correct_invalid_tool():
     """
-    Bug: build_retry_kw always uses tool_calls[0] in error message.
-
     When multiple tool calls are returned and the FIRST one is valid but a
-    LATER one is invalid, the retry nudge message incorrectly reports the
-    first (valid) tool as the problem.
-
-    This test verifies the error message correctly identifies the actual
-    invalid tool, not just the first tool call.
+    LATER one is invalid, the retry should produce per-tool-call error
+    results that correctly identify which tool is invalid.
     """
     # Create a mock response with multiple tool calls:
     # - tool_calls[0] = "valid_tool" (valid)
     # - tool_calls[1] = "invalid_tool" (invalid)
     mock_tool_call_valid = MagicMock()
     mock_tool_call_valid.function.name = "valid_tool"
+    mock_tool_call_valid.id = "call_valid"
 
     mock_tool_call_invalid = MagicMock()
     mock_tool_call_invalid.function.name = "invalid_tool"
+    mock_tool_call_invalid.id = "call_invalid"
 
     mock_message = MagicMock()
     mock_message.tool_calls = [mock_tool_call_valid, mock_tool_call_invalid]
@@ -265,26 +264,44 @@ def test_build_retry_kw_identifies_correct_invalid_tool():
         retry_reason=RETRY_REASON_INVALID_TOOL_NAME,
     )
 
-    # Find the nudge message
-    nudge_message = retry_kw["messages"][-1]
-    assert nudge_message["role"] == "user"
+    messages = retry_kw["messages"]
 
-    # The nudge should mention "invalid_tool" as the problem tool,
-    # and list "valid_tool" only in the available-tools section.
-    nudge_content = nudge_message["content"]
+    # The assistant message should preserve tool_calls for context
+    assistant_msg = messages[1]  # index 0 is original user message
+    assert assistant_msg["role"] == "assistant"
+    assert assistant_msg["tool_calls"] is not None
+
+    # There should be two tool result messages (one per tool call)
+    tool_results = [m for m in messages if m.get("role") == "tool"]
     assert (
-        "'invalid_tool'" in nudge_content
-    ), f"Retry nudge should mention 'invalid_tool' but got: {nudge_content!r}"
-    # "valid_tool" must only appear after "currently available", not as an invalid tool
-    before_available = nudge_content.split("currently available")[0]
+        len(tool_results) == 2
+    ), f"Expected 2 tool results but got {len(tool_results)}"
+
+    # Find the tool result for the invalid tool
+    invalid_result = next(
+        m for m in tool_results if m["tool_call_id"] == "call_invalid"
+    )
+    invalid_error = json.loads(invalid_result["content"])
     assert (
-        "'valid_tool'" not in before_available
-    ), f"Retry nudge incorrectly reports 'valid_tool' as invalid: {nudge_content!r}"
+        "invalid_tool" in invalid_error["error"]["content"]
+    ), f"Tool result should mention 'invalid_tool': {invalid_error}"
+    assert (
+        "available_tools" in invalid_error["error"]
+    ), f"Tool result should include available_tools: {invalid_error}"
+    assert "valid_tool" in invalid_error["error"]["available_tools"]
+
+    # The valid tool result should say it was not executed
+    valid_result = next(m for m in tool_results if m["tool_call_id"] == "call_valid")
+    valid_error = json.loads(valid_result["content"])
+    assert (
+        "not executed" in valid_error["error"]["content"].lower()
+    ), f"Valid tool result should say not executed: {valid_error}"
 
 
 def test_build_retry_kw_identifies_multiple_invalid_tools():
     """
-    When multiple tool calls are invalid, the retry message should list all of them.
+    When multiple tool calls are invalid, each gets its own tool result
+    identifying that specific tool as not callable.
     """
     # Create a mock response with multiple tool calls:
     # - tool_calls[0] = "valid_tool" (valid)
@@ -292,12 +309,15 @@ def test_build_retry_kw_identifies_multiple_invalid_tools():
     # - tool_calls[2] = "bad_tool_2" (invalid)
     mock_tc_valid = MagicMock()
     mock_tc_valid.function.name = "valid_tool"
+    mock_tc_valid.id = "call_valid"
 
     mock_tc_bad1 = MagicMock()
     mock_tc_bad1.function.name = "bad_tool_1"
+    mock_tc_bad1.id = "call_bad1"
 
     mock_tc_bad2 = MagicMock()
     mock_tc_bad2.function.name = "bad_tool_2"
+    mock_tc_bad2.id = "call_bad2"
 
     mock_message = MagicMock()
     mock_message.tool_calls = [mock_tc_valid, mock_tc_bad1, mock_tc_bad2]
@@ -331,25 +351,33 @@ def test_build_retry_kw_identifies_multiple_invalid_tools():
         retry_reason=RETRY_REASON_INVALID_TOOL_NAME,
     )
 
-    # Find the nudge message
-    nudge_message = retry_kw["messages"][-1]
-    nudge_content = nudge_message["content"]
+    # Should have 3 tool result messages (one per tool call)
+    tool_results = [m for m in retry_kw["messages"] if m.get("role") == "tool"]
+    assert (
+        len(tool_results) == 3
+    ), f"Expected 3 tool results but got {len(tool_results)}"
 
-    # Should mention BOTH invalid tools
+    # Each invalid tool result should mention its own tool name
+    bad1_result = next(m for m in tool_results if m["tool_call_id"] == "call_bad1")
+    bad1_error = json.loads(bad1_result["content"])
     assert (
-        "bad_tool_1" in nudge_content
-    ), f"Retry nudge should mention 'bad_tool_1' but got: {nudge_content!r}"
+        "bad_tool_1" in bad1_error["error"]["content"]
+    ), f"Tool result for bad_tool_1 should mention it: {bad1_error}"
+    assert "not callable" in bad1_error["error"]["content"]
+    assert "valid_tool" in bad1_error["error"]["available_tools"]
+
+    bad2_result = next(m for m in tool_results if m["tool_call_id"] == "call_bad2")
+    bad2_error = json.loads(bad2_result["content"])
     assert (
-        "bad_tool_2" in nudge_content
-    ), f"Retry nudge should mention 'bad_tool_2' but got: {nudge_content!r}"
-    # Should NOT mention valid_tool as invalid
-    assert (
-        "valid_tool" in nudge_content.split("tools currently available are")[1]
-    ), f"Retry nudge should list 'valid_tool' as available: {nudge_content!r}"
-    # Should mention the tools are not callable
-    assert (
-        "not callable on this turn" in nudge_content
-    ), f"Retry nudge should say tools are not callable but got: {nudge_content!r}"
+        "bad_tool_2" in bad2_error["error"]["content"]
+    ), f"Tool result for bad_tool_2 should mention it: {bad2_error}"
+    assert "not callable" in bad2_error["error"]["content"]
+    assert "valid_tool" in bad2_error["error"]["available_tools"]
+
+    # Valid tool result should say not executed
+    valid_result = next(m for m in tool_results if m["tool_call_id"] == "call_valid")
+    valid_error = json.loads(valid_result["content"])
+    assert "not executed" in valid_error["error"]["content"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -392,17 +420,15 @@ def test_check_needs_postprocessing_detects_tool_calls_with_empty_tools():
     assert retry_reason == RETRY_REASON_INVALID_TOOL_NAME
 
 
-def test_build_retry_kw_no_tools_nudge_says_respond_with_text():
+def test_build_retry_kw_no_tools_returns_tool_result_with_text_instruction():
     """
-    When there are zero valid tools, the retry nudge should tell the model
-    to respond with text content — not ask it to "select from the available
-    tools" when there are none.
-
-    BUG: The current nudge says "The tools currently available are: (none).
-    Please select one of the available tools." which is contradictory.
+    Case B: When there are zero valid tools and no response_format schema,
+    the tool result error should instruct the model to respond with text
+    content only. It must NOT include available_tools or json_schema keys.
     """
     mock_tool_call = MagicMock()
     mock_tool_call.function.name = "search_messages"
+    mock_tool_call.id = "call_search"
 
     mock_message = MagicMock()
     mock_message.tool_calls = [mock_tool_call]
@@ -425,16 +451,25 @@ def test_build_retry_kw_no_tools_nudge_says_respond_with_text():
         retry_reason=RETRY_REASON_INVALID_TOOL_NAME,
     )
 
-    nudge_content = retry_kw["messages"][-1]["content"]
+    # Should have exactly one tool result
+    tool_results = [m for m in retry_kw["messages"] if m.get("role") == "tool"]
+    assert len(tool_results) == 1
 
-    # The nudge must NOT ask the model to select a tool when none exist
+    error_obj = json.loads(tool_results[0]["content"])
+    error_inner = error_obj["error"]
+
+    # Should instruct text-only response
     assert (
-        "select" not in nudge_content.lower() or "no tools" in nudge_content.lower()
-    ), f"Nudge asks model to select a tool when none are available: {nudge_content!r}"
-    # It SHOULD instruct the model to respond with text
+        "text content only" in error_inner["content"].lower()
+    ), f"Should instruct text-only response: {error_inner}"
+    # Must NOT include available_tools (no tools exist)
     assert (
-        "text" in nudge_content.lower() or "content" in nudge_content.lower()
-    ), f"Nudge should tell model to respond with text, but got: {nudge_content!r}"
+        "available_tools" not in error_inner
+    ), f"Should not include available_tools when no tools exist: {error_inner}"
+    # Must NOT include json_schema (no schema set)
+    assert (
+        "json_schema" not in error_inner
+    ), f"Should not include json_schema when no schema is set: {error_inner}"
 
 
 # ---------------------------------------------------------------------------
@@ -526,3 +561,133 @@ def test_build_retry_kw_tool_choice_required_rejects_whitespace_content():
             f"(from msg.content={ws!r}). Anthropic rejects this with: "
             f"'messages: text content blocks must contain non-whitespace text'"
         )
+
+
+# ---------------------------------------------------------------------------
+# Case C: no tools available but response_format schema is set
+# ---------------------------------------------------------------------------
+
+
+def test_build_retry_kw_no_tools_with_schema_returns_json_schema():
+    """
+    Case C: When there are zero valid tools but a response_format Pydantic
+    model is set, the tool result error should include the json_schema and
+    instruct the model to return JSON only.
+    """
+    from pydantic import BaseModel as PydanticBaseModel
+
+    class SummaryOutput(PydanticBaseModel):
+        summary: str
+        topics: list
+
+    mock_tool_call = MagicMock()
+    mock_tool_call.function.name = "analyse_data"
+    mock_tool_call.id = "call_analyse"
+
+    mock_message = MagicMock()
+    mock_message.tool_calls = [mock_tool_call]
+    mock_message.content = None
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    kw = {
+        "messages": [{"role": "user", "content": "Summarise the data."}],
+        "tools": [],
+        "response_format": SummaryOutput,  # Pydantic model triggers Case C
+    }
+
+    retry_kw = build_retry_kw(
+        kw=kw,
+        response=mock_response,
+        retry_reason=RETRY_REASON_INVALID_TOOL_NAME,
+    )
+
+    tool_results = [m for m in retry_kw["messages"] if m.get("role") == "tool"]
+    assert len(tool_results) == 1
+
+    error_obj = json.loads(tool_results[0]["content"])
+    error_inner = error_obj["error"]
+
+    # Should instruct JSON-only response
+    assert (
+        "json" in error_inner["content"].lower()
+    ), f"Should instruct JSON response: {error_inner}"
+    # Must include json_schema with the Pydantic schema
+    assert (
+        "json_schema" in error_inner
+    ), f"Should include json_schema for Case C: {error_inner}"
+    schema = error_inner["json_schema"]
+    assert "summary" in schema.get(
+        "properties",
+        {},
+    ), f"Schema should contain 'summary' property: {schema}"
+    assert "topics" in schema.get(
+        "properties",
+        {},
+    ), f"Schema should contain 'topics' property: {schema}"
+    # Must NOT include available_tools
+    assert (
+        "available_tools" not in error_inner
+    ), f"Should not include available_tools for Case C: {error_inner}"
+
+
+# ---------------------------------------------------------------------------
+# Assistant message preserves tool_calls
+# ---------------------------------------------------------------------------
+
+
+def test_build_retry_kw_assistant_message_preserves_tool_calls():
+    """
+    The retry assistant message should preserve the original tool_calls
+    so the model has context about what it attempted.
+    """
+    mock_tc = MagicMock()
+    mock_tc.function.name = "nonexistent_tool"
+    mock_tc.id = "call_123"
+
+    mock_message = MagicMock()
+    mock_message.tool_calls = [mock_tc]
+    mock_message.content = "Let me call the tool."
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    kw = {
+        "messages": [{"role": "user", "content": "Do it."}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "real_tool",
+                    "description": "A real tool.",
+                    "parameters": {"type": "object", "properties": {}, "required": []},
+                },
+            },
+        ],
+    }
+
+    retry_kw = build_retry_kw(
+        kw=kw,
+        response=mock_response,
+        retry_reason=RETRY_REASON_INVALID_TOOL_NAME,
+    )
+
+    # Find the assistant message
+    assistant_msgs = [m for m in retry_kw["messages"] if m.get("role") == "assistant"]
+    assert len(assistant_msgs) == 1
+
+    assistant_msg = assistant_msgs[0]
+    # tool_calls should be preserved (not stripped)
+    assert (
+        assistant_msg.get("tool_calls") is not None
+    ), "Assistant message should preserve tool_calls"
+    assert len(assistant_msg["tool_calls"]) == 1
+    # Content should be preserved (non-whitespace)
+    assert assistant_msg["content"] == "Let me call the tool."
