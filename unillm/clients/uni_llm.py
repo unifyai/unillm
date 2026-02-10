@@ -811,7 +811,7 @@ class Unify(_UniClient):
 
         try:
             chat_completion = retry_transient_400_sync(
-                lambda: litellm.completion(shared_session=SHARED_SESSION, **kw),
+                lambda: litellm.completion(**kw),
             )
             for chunk in chat_completion:
                 # Capture usage if present in the chunk (final chunk with include_usage)
@@ -870,10 +870,7 @@ class Unify(_UniClient):
         try:
             with llm_span(label, self._model, provider=self._provider):
                 completion = retry_transient_400_sync(
-                    lambda: litellm.completion(
-                        shared_session=SHARED_SESSION,
-                        **retry_kw,
-                    ),
+                    lambda: litellm.completion(**retry_kw),
                 )
         finally:
             try:
@@ -1018,10 +1015,7 @@ class Unify(_UniClient):
 
                     try:
                         chat_completion = retry_transient_400_sync(
-                            lambda: litellm.completion(
-                                shared_session=SHARED_SESSION,
-                                **kw,
-                            ),
+                            lambda: litellm.completion(**kw),
                         )
                     except litellm.exceptions.APIError as e:
                         llm_error = Exception(e.message)
