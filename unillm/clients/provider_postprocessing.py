@@ -13,12 +13,12 @@ Currently handles:
 
 import json
 import logging
-from typing import List, Optional, Tuple, Type, TYPE_CHECKING
+from typing import List, Optional, Set, Tuple, Type, TYPE_CHECKING
 
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from openai.types.chat import ChatCompletion
+    from openai.types.chat import ChatCompletion, ChatCompletionMessage
 
 logger = logging.getLogger(__name__)
 
@@ -33,44 +33,11 @@ TOOL_CHOICE_REQUIRED_RETRY_NUDGE = (
     "appropriate tool with the most appropriate arguments. Please call a tool now."
 )
 
-# Nudge message templates for retrying when model calls tools not in the schema.
-# These acknowledge the system message may list more tools than are currently callable,
-# which happens when tool_policy restricts available tools on certain turns.
-INVALID_TOOL_NAME_RETRY_NUDGE_SINGLE = (
-    "You attempted to call '{invalid_tools}'. "
-    "This tool may be mentioned in the system message, but it is not callable on this turn. "
-    "The tools currently available are: {valid_tools}. "
-    "Please select one of the available tools."
-)
-INVALID_TOOL_NAME_RETRY_NUDGE_PLURAL = (
-    "You attempted to call {invalid_tools}. "
-    "These tools may be mentioned in the system message, but they are not callable on this turn. "
-    "The tools currently available are: {valid_tools}. "
-    "Please select from the available tools only."
-)
-
-# Nudge for the special case where there are NO tools available at all.
-# The model called tools (likely from descriptions in the system prompt) but
-# zero tools are callable on this turn — it must respond with content directly.
-# When response_format is set, the nudge asks for JSON matching the schema;
-# otherwise it asks for plain text.
-NO_TOOLS_RETRY_NUDGE_SINGLE = (
-    "You attempted to call '{invalid_tools}', but there are no tools available on this turn. "
-    "Do not call any tools. Respond with text content only."
-)
-NO_TOOLS_RETRY_NUDGE_PLURAL = (
-    "You attempted to call {invalid_tools}, but there are no tools available on this turn. "
-    "Do not call any tools. Respond with text content only."
-)
-NO_TOOLS_RETRY_NUDGE_SINGLE_WITH_SCHEMA = (
-    "You attempted to call '{invalid_tools}', but there are no tools available on this turn. "
-    "Do not call any tools. Respond with valid JSON that conforms to the following schema:\n{schema}\n\n"
-    "Return ONLY the JSON object — no markdown, no commentary, no code fences."
-)
-NO_TOOLS_RETRY_NUDGE_PLURAL_WITH_SCHEMA = (
-    "You attempted to call {invalid_tools}, but there are no tools available on this turn. "
-    "Do not call any tools. Respond with valid JSON that conforms to the following schema:\n{schema}\n\n"
-    "Return ONLY the JSON object — no markdown, no commentary, no code fences."
+# Error message for valid tool calls that were not executed because
+# sibling tool calls in the same batch were invalid.
+_VALID_TOOL_NOT_EXECUTED_MSG = (
+    "Not executed because other tool calls in this batch "
+    "called tools not in the schema."
 )
 
 
@@ -116,6 +83,122 @@ def _get_valid_tool_names(tools: Optional[List[dict]]) -> List[str]:
     return names
 
 
+def _make_tool_error(
+    content: str,
+    *,
+    available_tools: Optional[Set[str]] = None,
+    json_schema: Optional[dict] = None,
+) -> dict:
+    """Build a structured error object for an invalid-tool-call tool result.
+
+    Returns a dict of the form ``{"error": {"content": ..., ...}}``.
+    Optional keys are omitted when ``None``.
+    """
+    inner: dict = {"content": content}
+    if available_tools is not None:
+        inner["available_tools"] = list(available_tools)
+    if json_schema is not None:
+        inner["json_schema"] = json_schema
+    return {"error": inner}
+
+
+def _build_invalid_tool_name_retry_messages(
+    *,
+    kw: dict,
+    msg: "ChatCompletionMessage",
+    assistant_content: Optional[str],
+) -> list:
+    """Build retry messages for the invalid-tool-name case.
+
+    Instead of a sanitised user-text nudge, this keeps the original tool_calls
+    in the assistant message (for context) and replies with structured
+    ``role: "tool"`` result messages containing a JSON error object.
+
+    Three cases are handled:
+
+    * **Case A** – at least one valid tool is available: each invalid tool
+      result includes ``available_tools``; valid tool results explain they
+      were not executed.
+    * **Case B** – no tools available, no ``response_format`` schema:
+      instruct the model to respond with text content only.
+    * **Case C** – no tools available, ``response_format`` schema present:
+      instruct the model to return JSON matching the schema and include the
+      schema in the error object.
+
+    Returns the full retry message list
+    (original messages + assistant w/ tool_calls + tool results).
+    """
+    retry_messages = list(kw.get("messages", []))
+    tool_calls = msg.tool_calls or []
+    valid_tool_names = set(_get_valid_tool_names(kw.get("tools", [])))
+
+    # --- assistant message: preserve tool_calls for model context ----------
+    retry_messages.append(
+        {
+            "role": "assistant",
+            "content": assistant_content,
+            "tool_calls": tool_calls,
+        },
+    )
+
+    # --- tool result messages for every tool call --------------------------
+    if valid_tool_names:
+        # Case A: at least one valid tool is available
+        for tc in tool_calls:
+            if tc.function.name not in valid_tool_names:
+                error_obj = _make_tool_error(
+                    f"'{tc.function.name}' is not callable on this turn. "
+                    "It may be mentioned in the system message but is "
+                    "not in the current tool schema. "
+                    "Please select from the available tools only.",
+                    available_tools=valid_tool_names,
+                )
+            else:
+                error_obj = _make_tool_error(
+                    _VALID_TOOL_NOT_EXECUTED_MSG,
+                    available_tools=valid_tool_names,
+                )
+            retry_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(error_obj),
+                },
+            )
+    else:
+        # No tools available — determine Case B vs Case C
+        rf_model = _get_response_format_model(kw)
+        schema = rf_model.model_json_schema() if rf_model is not None else None
+        for tc in tool_calls:
+            if schema is not None:
+                # Case C: response_format schema is set
+                error_obj = _make_tool_error(
+                    f"'{tc.function.name}' is not callable. "
+                    "No tools are available on this turn. "
+                    "Do not call any tools. "
+                    "Respond with valid JSON only, nothing else, "
+                    "conforming to the required schema.",
+                    json_schema=schema,
+                )
+            else:
+                # Case B: no schema, no tools
+                error_obj = _make_tool_error(
+                    f"'{tc.function.name}' is not callable. "
+                    "No tools are available on this turn. "
+                    "Do not call any tools. "
+                    "Respond with text content only.",
+                )
+            retry_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(error_obj),
+                },
+            )
+
+    return retry_messages
+
+
 def build_retry_kw(
     *,
     kw: dict,
@@ -140,114 +223,27 @@ def build_retry_kw(
     # it to None so the retry request stays valid.
     assistant_content = msg.content if msg.content and msg.content.strip() else None
 
-    # Build retry messages: original messages + assistant response + nudge
-    retry_messages = list(kw.get("messages", []))
-
-    # Determine the nudge message based on retry reason
     if retry_reason == RETRY_REASON_INVALID_TOOL_NAME:
-        # For invalid tool name, find ALL invalid tools and report them
-        tool_calls = msg.tool_calls or []
-        valid_tool_names = set(_get_valid_tool_names(kw.get("tools")))
-
-        # Find all invalid tool names
-        invalid_tools = []
-        for tc in tool_calls:
-            if tc.function.name not in valid_tool_names:
-                invalid_tools.append(tc.function.name)
-
-        if invalid_tools:
-            if not valid_tool_names:
-                # No tools available at all — use the dedicated no-tools nudge.
-                # When response_format is set, direct the LLM to output JSON
-                # matching the schema instead of "text content only" (which
-                # would contradict the response_format constraint).
-                rf_model = _get_response_format_model(kw)
-                if rf_model is not None:
-                    schema_str = json.dumps(
-                        rf_model.model_json_schema(),
-                        indent=2,
-                    )
-                    if len(invalid_tools) == 1:
-                        nudge = NO_TOOLS_RETRY_NUDGE_SINGLE_WITH_SCHEMA.format(
-                            invalid_tools=invalid_tools[0],
-                            schema=schema_str,
-                        )
-                    else:
-                        quoted = [f"'{t}'" for t in invalid_tools]
-                        if len(quoted) == 2:
-                            invalid_str = f"{quoted[0]} and {quoted[1]}"
-                        else:
-                            invalid_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
-                        nudge = NO_TOOLS_RETRY_NUDGE_PLURAL_WITH_SCHEMA.format(
-                            invalid_tools=invalid_str,
-                            schema=schema_str,
-                        )
-                elif len(invalid_tools) == 1:
-                    nudge = NO_TOOLS_RETRY_NUDGE_SINGLE.format(
-                        invalid_tools=invalid_tools[0],
-                    )
-                else:
-                    quoted = [f"'{t}'" for t in invalid_tools]
-                    if len(quoted) == 2:
-                        invalid_str = f"{quoted[0]} and {quoted[1]}"
-                    else:
-                        invalid_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
-                    nudge = NO_TOOLS_RETRY_NUDGE_PLURAL.format(
-                        invalid_tools=invalid_str,
-                    )
-            elif len(invalid_tools) == 1:
-                valid_tools_str = ", ".join(sorted(valid_tool_names))
-                nudge = INVALID_TOOL_NAME_RETRY_NUDGE_SINGLE.format(
-                    invalid_tools=f"'{invalid_tools[0]}'",
-                    valid_tools=valid_tools_str,
-                )
-            else:
-                # Format multiple invalid tools as 'tool1', 'tool2', and 'tool3'
-                valid_tools_str = ", ".join(sorted(valid_tool_names))
-                quoted = [f"'{t}'" for t in invalid_tools]
-                if len(quoted) == 2:
-                    invalid_str = f"{quoted[0]} and {quoted[1]}"
-                else:
-                    invalid_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
-                nudge = INVALID_TOOL_NAME_RETRY_NUDGE_PLURAL.format(
-                    invalid_tools=invalid_str,
-                    valid_tools=valid_tools_str,
-                )
-            # Add the assistant response with the invalid tool call
-            # (content only, not thinking blocks, not the tool call itself)
-            retry_messages.append(
-                {
-                    "role": "assistant",
-                    "content": assistant_content,
-                },
-            )
-        else:
-            # Shouldn't happen, but fallback
-            nudge = TOOL_CHOICE_REQUIRED_RETRY_NUDGE
-            retry_messages.append(
-                {
-                    "role": "assistant",
-                    "content": assistant_content,
-                },
-            )
+        retry_messages = _build_invalid_tool_name_retry_messages(
+            kw=kw,
+            msg=msg,
+            assistant_content=assistant_content,
+        )
     else:
         # Default: tool_choice_required case
-        nudge = TOOL_CHOICE_REQUIRED_RETRY_NUDGE
-        # Add the non-compliant assistant response (content only, not thinking blocks)
+        retry_messages = list(kw.get("messages", []))
         retry_messages.append(
             {
                 "role": "assistant",
                 "content": assistant_content,
             },
         )
-
-    # Add the nudge user message
-    retry_messages.append(
-        {
-            "role": "user",
-            "content": nudge,
-        },
-    )
+        retry_messages.append(
+            {
+                "role": "user",
+                "content": TOOL_CHOICE_REQUIRED_RETRY_NUDGE,
+            },
+        )
 
     # Create retry request
     retry_kw = dict(kw)
