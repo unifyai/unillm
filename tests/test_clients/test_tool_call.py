@@ -1,7 +1,6 @@
 import pytest
 from .helpers import new_llm_client
 
-
 # Use a value that looks like a raw ID that must be echoed verbatim
 TEST_ID = "xK7-pQ9-mR2"
 
