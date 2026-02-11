@@ -17,7 +17,6 @@ import warnings
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-
 # ---------------------------------------------------------------------------
 # Log directory configuration
 # ---------------------------------------------------------------------------

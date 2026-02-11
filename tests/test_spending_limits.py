@@ -12,7 +12,6 @@ UniLLM simply invokes a registered callback hook and respects its response.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -28,7 +27,6 @@ from unillm.limit_hooks import (
     is_limit_check_enabled,
     set_limit_check_hook,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -456,7 +454,8 @@ class TestHookResponses:
         async def endpoint_based_hook(request):
             if "expensive" in request.endpoint:
                 return LimitCheckResponse(
-                    allowed=False, reason="Expensive endpoint blocked"
+                    allowed=False,
+                    reason="Expensive endpoint blocked",
                 )
             return LimitCheckResponse(allowed=True)
 

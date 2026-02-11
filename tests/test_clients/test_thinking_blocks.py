@@ -15,7 +15,6 @@ instead of silently disabling thinking.
 import pytest
 from .helpers import new_llm_client
 
-
 GET_ID_TOOL = {
     "type": "function",
     "function": {

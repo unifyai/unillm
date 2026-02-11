@@ -15,7 +15,6 @@ This test verifies that:
 
 from .helpers import new_llm_client
 
-
 SIMPLE_TOOL = {
     "type": "function",
     "function": {
