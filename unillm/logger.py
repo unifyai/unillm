@@ -289,7 +289,7 @@ def set_span_response(span, cache_status: str, response: Any = None) -> None:
 
     Args:
         span: The OTel span (or None)
-        cache_status: "hit" or "miss"
+        cache_status: "hit", "miss", or "disabled"
         response: The LLM response object (optional)
     """
     if span is None:
@@ -616,7 +616,8 @@ def append_response_and_finalize(
     """Append the response to the pending file and rename to reflect cache status.
 
     Logs to console (always when enabled) and finalizes file (if path provided).
-    The final filename will be: {timestamp}_hit.txt or {timestamp}_miss.txt
+    The final filename will be: {timestamp}_hit.txt, {timestamp}_miss.txt,
+    or {timestamp}_disabled.txt
     """
     if not _LOG_ENABLED:
         return
