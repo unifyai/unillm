@@ -984,6 +984,7 @@ class Unify(_UniClient):
 
         # Initialize before try block so finally can access them
         chat_completion = None
+        is_cache_enabled = cache in [True, "both", "read", "read-only"]
         cache_status = "error"
         in_cache = False
         llm_error: BaseException | None = None
@@ -993,7 +994,7 @@ class Unify(_UniClient):
         # Wrap in OTel span with try/finally to guarantee log finalization
         try:
             with llm_span(endpoint, self._model, provider=self._provider) as span:
-                if cache in [True, "both", "read", "read-only"]:
+                if is_cache_enabled:
                     chat_completion = _get_cache(
                         fn_name="chat.completions.create",
                         kw=kw,
@@ -1023,7 +1024,10 @@ class Unify(_UniClient):
                         raise llm_error
 
                 # Determine cache status and emit event
-                cache_status = "hit" if in_cache else "miss"
+                if is_cache_enabled:
+                    cache_status = "hit" if in_cache else "miss"
+                else:
+                    cache_status = "disabled"
 
                 # Set span response attributes
                 set_span_response(span, cache_status, chat_completion)
@@ -1333,7 +1337,7 @@ class AsyncUnify(_UniClient):
                 append_response_and_finalize(
                     pending_path,
                     log_body,
-                    "error" if llm_error else "miss",
+                    "error" if llm_error else "disabled",
                     label=endpoint,
                 )
             except BaseException:
@@ -1506,6 +1510,7 @@ class AsyncUnify(_UniClient):
 
         # Initialize before try block so finally can access them
         chat_completion = None
+        is_cache_enabled = cache in [True, "both", "read", "read-only"]
         cache_status = "error"
         in_cache = False
         llm_error: BaseException | None = None
@@ -1519,7 +1524,7 @@ class AsyncUnify(_UniClient):
         # Wrap in OTel span with try/finally to guarantee log finalization
         try:
             with llm_span(endpoint, self._model, provider=self._provider) as span:
-                if cache in [True, "both", "read", "read-only"]:
+                if is_cache_enabled:
                     chat_completion = _get_cache(
                         fn_name="chat.completions.create",
                         kw=kw,
@@ -1577,7 +1582,10 @@ class AsyncUnify(_UniClient):
                         raise llm_error
 
                 # Determine cache status and emit event
-                cache_status = "hit" if in_cache else "miss"
+                if is_cache_enabled:
+                    cache_status = "hit" if in_cache else "miss"
+                else:
+                    cache_status = "disabled"
 
                 # Set span response attributes
                 set_span_response(span, cache_status, chat_completion)

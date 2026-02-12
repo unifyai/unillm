@@ -362,7 +362,7 @@ class TestCacheEventEmissionIntegration:
             )
 
         assert len(events) == 1
-        assert events[0]["cache_status"] in ("hit", "miss")
+        assert events[0]["cache_status"] in ("hit", "miss", "disabled")
         assert events[0]["endpoint"] == SETTINGS.UNILLM_DEFAULT_MODEL
 
     @pytest.mark.asyncio
@@ -380,7 +380,7 @@ class TestCacheEventEmissionIntegration:
             )
 
         assert len(events) == 1
-        assert events[0]["cache_status"] in ("hit", "miss")
+        assert events[0]["cache_status"] in ("hit", "miss", "disabled")
         assert events[0]["endpoint"] == SETTINGS.UNILLM_DEFAULT_MODEL
 
     def test_cache_miss_then_hit_sequence(self):
