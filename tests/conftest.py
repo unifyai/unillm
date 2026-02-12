@@ -126,8 +126,9 @@ def _format_cost_label(events) -> str:
     return " ".join(parts)
 
 
+@pytest.hookimpl(hookwrapper=True)
 def pytest_report_teststatus(report, config):
-    """Append inline cost info to the PASSED/FAILED status in verbose mode.
+    """Append inline cost info to whatever the default status word is.
 
     For tests that made LLM calls, the verbose output changes from::
 
@@ -137,24 +138,26 @@ def pytest_report_teststatus(report, config):
 
         tests/test_basics.py::test_foo PASSED [$0.001234 (1m)]
 
-    Tests without LLM calls keep the standard PASSED/FAILED with no suffix.
+    Works for any outcome (PASSED, FAILED, SKIPPED, XFAIL, ERROR, etc.)
+    by wrapping the default hook and appending to its verbose word.
+    Tests without LLM calls keep the standard output with no suffix.
     """
-    if not _COST_REPORT_ENABLED:
-        return
-    # Only annotate the "call" phase (not setup/teardown)
-    if report.when != "call":
+    outcome = yield
+
+    if not _COST_REPORT_ENABLED or report.when != "call":
         return
 
     events = _cost_events_by_nodeid.get(report.nodeid)
     if not events:
         return
 
-    cost_label = _format_cost_label(events)
+    result = outcome.get_result()
+    if result is None:
+        return
 
-    if report.passed:
-        return "passed", ".", f"PASSED [{cost_label}]"
-    elif report.failed:
-        return "failed", "F", f"FAILED [{cost_label}]"
+    category, short, verbose = result
+    cost_label = _format_cost_label(events)
+    outcome.force_result((category, short, f"{verbose} [{cost_label}]"))
 
 
 # TODO: Won't be needed once LiteLLM handles their type annotations correctly...
