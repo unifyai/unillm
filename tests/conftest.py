@@ -68,6 +68,95 @@ def pytest_sessionstart(session):
     os.environ["ORCHESTRA_OTEL_LOG_DIR"] = str(otel_log_dir)
 
 
+# ---------------------------------------------------------------------------
+# Per-test cost tracking
+# ---------------------------------------------------------------------------
+
+import pytest
+
+# Controlled via UNILLM_COST_REPORT env var (default: true)
+_COST_REPORT_ENABLED = os.environ.get("UNILLM_COST_REPORT", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+# Module-level dict so pytest_report_teststatus can look up events by nodeid.
+# Populated by pytest_runtest_protocol before the test runs (the list is mutable
+# and gets filled during the test body).
+_cost_events_by_nodeid: dict = {}
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    """Hook wrapper that captures cost events during the full test protocol.
+
+    Wraps setup + call + teardown so that any LLM calls made in fixtures
+    or the test body itself are captured.  The events list is registered in
+    ``_cost_events_by_nodeid`` *before* yielding so that
+    ``pytest_report_teststatus`` can read it while the test is still in
+    progress (the list is the same mutable object and is already populated
+    by the time the "call" report is created).
+    """
+    if not _COST_REPORT_ENABLED:
+        yield
+        return
+
+    from unillm.cost_tracker import capture_costs
+
+    with capture_costs() as events:
+        # Register before yield -- same mutable list gets populated during test
+        _cost_events_by_nodeid[item.nodeid] = events
+        yield
+
+
+def _format_cost_label(events) -> str:
+    """Build a compact cost label from a list of CostEvents."""
+    from unillm.cost_tracker import summarize_costs
+
+    summary = summarize_costs(events)
+    parts = [f"${summary.total_provider_cost:.6f}"]
+    cache_parts = []
+    if summary.cache_hits:
+        cache_parts.append(f"{summary.cache_hits}h")
+    if summary.cache_misses:
+        cache_parts.append(f"{summary.cache_misses}m")
+    if cache_parts:
+        parts.append(f"({'/'.join(cache_parts)})")
+    return " ".join(parts)
+
+
+def pytest_report_teststatus(report, config):
+    """Append inline cost info to the PASSED/FAILED status in verbose mode.
+
+    For tests that made LLM calls, the verbose output changes from::
+
+        tests/test_basics.py::test_foo PASSED
+
+    to::
+
+        tests/test_basics.py::test_foo PASSED [$0.001234 (1m)]
+
+    Tests without LLM calls keep the standard PASSED/FAILED with no suffix.
+    """
+    if not _COST_REPORT_ENABLED:
+        return
+    # Only annotate the "call" phase (not setup/teardown)
+    if report.when != "call":
+        return
+
+    events = _cost_events_by_nodeid.get(report.nodeid)
+    if not events:
+        return
+
+    cost_label = _format_cost_label(events)
+
+    if report.passed:
+        return "passed", ".", f"PASSED [{cost_label}]"
+    elif report.failed:
+        return "failed", "F", f"FAILED [{cost_label}]"
+
+
 # TODO: Won't be needed once LiteLLM handles their type annotations correctly...
 
 # Suppress Pydantic serialization warnings from litellm's logging system.
