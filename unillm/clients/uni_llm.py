@@ -1051,7 +1051,11 @@ class Unify(_UniClient):
                 # For logging, include error info if present
                 log_body = resp_body
                 if llm_error is not None:
-                    log_body = {"response": resp_body, "error": str(llm_error)}
+                    error_info = {
+                        "type": type(llm_error).__name__,
+                        "message": str(llm_error),
+                    }
+                    log_body = {"response": resp_body, "error": error_info}
                 append_response_and_finalize(
                     pending_path,
                     log_body,
@@ -1321,7 +1325,11 @@ class AsyncUnify(_UniClient):
             try:
                 log_body: dict | str | None = "".join(collected_content) or None
                 if llm_error is not None:
-                    log_body = {"response": log_body, "error": str(llm_error)}
+                    error_info = {
+                        "type": type(llm_error).__name__,
+                        "message": str(llm_error),
+                    }
+                    log_body = {"response": log_body, "error": error_info}
                 append_response_and_finalize(
                     pending_path,
                     log_body,
@@ -1607,7 +1615,11 @@ class AsyncUnify(_UniClient):
                 # For logging, include error info if present
                 log_body = resp_body
                 if llm_error is not None:
-                    log_body = {"response": resp_body, "error": str(llm_error)}
+                    error_info = {
+                        "type": type(llm_error).__name__,
+                        "message": str(llm_error),
+                    }
+                    log_body = {"response": resp_body, "error": error_info}
                 append_response_and_finalize(
                     pending_path,
                     log_body,
