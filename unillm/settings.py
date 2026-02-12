@@ -1,8 +1,10 @@
-from typing import Any
+from typing import Any, Union
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import SecretStr
+
+from unillm.types.cache import CACHE_MODES, CacheParam
 
 
 def _parse_bool(v: Any) -> bool:
@@ -60,6 +62,15 @@ class Settings(BaseSettings):
     UNILLM_OTEL_LOG_DIR: str = ""
 
     # ─────────────────────────────────────────────────────────────────────────
+    # LLM Response Caching
+    # ─────────────────────────────────────────────────────────────────────────
+    # Controls whether LLM responses are cached locally.
+    # - UNILLM_CACHE=true / false: Enable or disable caching (default: false)
+    # - UNILLM_CACHE=<mode>: Fine-grained cache mode
+    #   Modes: both, write, read, read-only, read-closest
+    UNILLM_CACHE: CacheParam = False
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Transient Error Retry Configuration
     # ─────────────────────────────────────────────────────────────────────────
     # Number of retries for transient errors that are incorrectly classified
@@ -83,6 +94,27 @@ class Settings(BaseSettings):
     @classmethod
     def parse_bool_fields(cls, v: Any) -> bool:
         return _parse_bool(v)
+
+    @field_validator("UNILLM_CACHE", mode="before")
+    @classmethod
+    def parse_cache(cls, v: Any) -> Union[bool, str]:
+        if v is None or v == "":
+            return False
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            _lower = v.lower()
+            if _lower in ("true", "yes", "1"):
+                return True
+            if _lower in ("false", "no", "0"):
+                return False
+            if _lower in CACHE_MODES:
+                return _lower
+            raise ValueError(
+                f"Invalid UNILLM_CACHE value: {v!r}. "
+                f"Expected true/false or one of: {', '.join(CACHE_MODES)}",
+            )
+        return v
 
 
 SETTINGS = Settings()

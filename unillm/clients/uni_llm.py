@@ -61,7 +61,7 @@ from ..logger import (
     llm_span,
     set_span_response,
 )
-from ..types import Prompt, PromptCacheParam
+from ..types import Prompt, PromptCacheParam, VALID_CACHE_VALUES
 from .shared_session import get_shared_session
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
@@ -720,12 +720,7 @@ class _UniClient(_Client, abc.ABC):
             else _default(return_full_completion, self._return_full_completion)
         )
         cache = _default(cache, self._cache)
-        _cache_modes = ["read", "read-only", "write", "both"]
-        assert cache in _cache_modes + [m + "-closest" for m in _cache_modes] + [
-            True,
-            False,
-            None,
-        ]
+        assert cache in VALID_CACHE_VALUES
         ret = self._generate(
             messages=messages,
             frequency_penalty=_default(frequency_penalty, self._frequency_penalty),
