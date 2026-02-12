@@ -45,6 +45,7 @@ from .provider_preprocessing import apply_provider_preprocessing
 
 from ..caching import _get_cache, _write_to_cache, is_caching_enabled
 from ..cache_events import _emit_cache_event
+from ..cost_tracker import CostEvent, _emit_cost_event
 from ..llm_events import _emit_llm_event, LLMEvent
 from ..helpers import (
     _default,
@@ -853,6 +854,20 @@ class Unify(_UniClient):
                 ),
             )
 
+            # Emit cost event for cost tracking
+            _pt = getattr(usage_info, "prompt_tokens", 0) or 0 if usage_info else 0
+            _ct = getattr(usage_info, "completion_tokens", 0) or 0 if usage_info else 0
+            _emit_cost_event(
+                CostEvent(
+                    model=kw.get("model", ""),
+                    provider_cost=provider_cost or 0.0,
+                    billed_cost=billed_cost or 0.0,
+                    prompt_tokens=_pt,
+                    completion_tokens=_ct,
+                    cache_status="disabled",  # Streaming bypasses cache
+                ),
+            )
+
     def _execute_postprocessing_retry(
         self,
         retry_kw: dict,
@@ -883,9 +898,24 @@ class Unify(_UniClient):
 
             cost = compute_cost_from_response(retry_kw["model"], completion)
             if cost is not None and cost > 0:
-                unify.deduct_credits(
-                    cost * get_cost_margin(),
-                    api_key=self._api_key,
+                margin = get_cost_margin()
+                billed = cost * margin
+                unify.deduct_credits(billed, api_key=self._api_key)
+
+                # Emit cost event for retry
+                _pt = _ct = 0
+                if hasattr(completion, "usage") and completion.usage:
+                    _pt = getattr(completion.usage, "prompt_tokens", 0) or 0
+                    _ct = getattr(completion.usage, "completion_tokens", 0) or 0
+                _emit_cost_event(
+                    CostEvent(
+                        model=retry_kw.get("model", ""),
+                        provider_cost=cost,
+                        billed_cost=billed,
+                        prompt_tokens=_pt,
+                        completion_tokens=_ct,
+                        cache_status="miss",
+                    ),
                 )
         return completion
 
@@ -1080,6 +1110,26 @@ class Unify(_UniClient):
                     response=resp_body,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
+                ),
+            )
+
+            # Emit cost event for cost tracking
+            _pt = _ct = 0
+            if (
+                chat_completion is not None
+                and hasattr(chat_completion, "usage")
+                and chat_completion.usage
+            ):
+                _pt = getattr(chat_completion.usage, "prompt_tokens", 0) or 0
+                _ct = getattr(chat_completion.usage, "completion_tokens", 0) or 0
+            _emit_cost_event(
+                CostEvent(
+                    model=kw.get("model", ""),
+                    provider_cost=provider_cost or 0.0,
+                    billed_cost=billed_cost or 0.0,
+                    prompt_tokens=_pt,
+                    completion_tokens=_ct,
+                    cache_status=cache_status,
                 ),
             )
 
@@ -1371,6 +1421,20 @@ class AsyncUnify(_UniClient):
                 ),
             )
 
+            # Emit cost event for cost tracking
+            _pt = getattr(usage_info, "prompt_tokens", 0) or 0 if usage_info else 0
+            _ct = getattr(usage_info, "completion_tokens", 0) or 0 if usage_info else 0
+            _emit_cost_event(
+                CostEvent(
+                    model=kw.get("model", ""),
+                    provider_cost=provider_cost or 0.0,
+                    billed_cost=billed_cost or 0.0,
+                    prompt_tokens=_pt,
+                    completion_tokens=_ct,
+                    cache_status="disabled",  # Streaming bypasses cache
+                ),
+            )
+
     async def _execute_postprocessing_retry(
         self,
         retry_kw: dict,
@@ -1405,13 +1469,31 @@ class AsyncUnify(_UniClient):
 
             cost = compute_cost_from_response(retry_kw["model"], completion)
             if cost is not None and cost > 0:
+                margin = get_cost_margin()
+                billed = cost * margin
                 asyncio.create_task(
                     asyncio.to_thread(
                         unify.deduct_credits,
-                        cost * get_cost_margin(),
+                        billed,
                         api_key=self._api_key,
                     ),
                     name=f"unillm_deduct_credits_{label_suffix}",
+                )
+
+                # Emit cost event for retry
+                _pt = _ct = 0
+                if hasattr(completion, "usage") and completion.usage:
+                    _pt = getattr(completion.usage, "prompt_tokens", 0) or 0
+                    _ct = getattr(completion.usage, "completion_tokens", 0) or 0
+                _emit_cost_event(
+                    CostEvent(
+                        model=retry_kw.get("model", ""),
+                        provider_cost=cost,
+                        billed_cost=billed,
+                        prompt_tokens=_pt,
+                        completion_tokens=_ct,
+                        cache_status="miss",
+                    ),
                 )
         return completion
 
@@ -1648,6 +1730,26 @@ class AsyncUnify(_UniClient):
                     response=resp_body,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
+                ),
+            )
+
+            # Emit cost event for cost tracking
+            _pt = _ct = 0
+            if (
+                chat_completion is not None
+                and hasattr(chat_completion, "usage")
+                and chat_completion.usage
+            ):
+                _pt = getattr(chat_completion.usage, "prompt_tokens", 0) or 0
+                _ct = getattr(chat_completion.usage, "completion_tokens", 0) or 0
+            _emit_cost_event(
+                CostEvent(
+                    model=kw.get("model", ""),
+                    provider_cost=provider_cost or 0.0,
+                    billed_cost=billed_cost or 0.0,
+                    prompt_tokens=_pt,
+                    completion_tokens=_ct,
+                    cache_status=cache_status,
                 ),
             )
 
