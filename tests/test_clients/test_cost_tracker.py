@@ -8,14 +8,12 @@ import unillm
 from unillm import (
     capture_costs,
     acapture_costs,
-    summarize_costs,
     CostEvent,
-    CostSummary,
 )
 from unillm.cost_tracker import _emit_cost_event
 
 # ---------------------------------------------------------------------------
-#  Unit tests for CostEvent / CostSummary dataclasses
+#  Unit tests for CostEvent dataclass
 # ---------------------------------------------------------------------------
 
 
@@ -56,21 +54,6 @@ class TestCostEventDataclass:
         assert event.provider_cost == 0.0
         assert event.billed_cost == 0.0
         assert event.cache_status == "hit"
-
-
-class TestCostSummaryDataclass:
-    """Tests for the CostSummary dataclass."""
-
-    def test_create_empty_summary(self):
-        summary = CostSummary()
-        assert summary.total_provider_cost == 0.0
-        assert summary.total_billed_cost == 0.0
-        assert summary.total_prompt_tokens == 0
-        assert summary.total_completion_tokens == 0
-        assert summary.total_requests == 0
-        assert summary.cache_hits == 0
-        assert summary.cache_misses == 0
-        assert summary.events == []
 
 
 # ---------------------------------------------------------------------------
@@ -182,88 +165,6 @@ class TestAsyncCaptureCostsContextManager:
 
         assert len(events) == 1
         assert events[0].model == "inside"
-
-
-# ---------------------------------------------------------------------------
-#  Unit tests for summarize_costs
-# ---------------------------------------------------------------------------
-
-
-class TestSummarizeCosts:
-    """Tests for the summarize_costs aggregation function."""
-
-    def test_empty_list(self):
-        summary = summarize_costs([])
-        assert summary.total_requests == 0
-        assert summary.total_provider_cost == 0.0
-        assert summary.total_billed_cost == 0.0
-
-    def test_single_event(self):
-        events = [
-            CostEvent(
-                model="gpt-4",
-                provider_cost=0.001,
-                billed_cost=0.005,
-                prompt_tokens=100,
-                completion_tokens=50,
-                cache_status="miss",
-            ),
-        ]
-        summary = summarize_costs(events)
-        assert summary.total_requests == 1
-        assert summary.total_provider_cost == 0.001
-        assert summary.total_billed_cost == 0.005
-        assert summary.total_prompt_tokens == 100
-        assert summary.total_completion_tokens == 50
-        assert summary.cache_hits == 0
-        assert summary.cache_misses == 1
-        assert len(summary.events) == 1
-
-    def test_multiple_events(self):
-        events = [
-            CostEvent(
-                model="gpt-4",
-                provider_cost=0.001,
-                billed_cost=0.005,
-                prompt_tokens=100,
-                completion_tokens=50,
-                cache_status="miss",
-            ),
-            CostEvent(
-                model="gpt-4",
-                provider_cost=0.0,
-                billed_cost=0.0,
-                prompt_tokens=0,
-                completion_tokens=0,
-                cache_status="hit",
-            ),
-            CostEvent(
-                model="gpt-4",
-                provider_cost=0.002,
-                billed_cost=0.01,
-                prompt_tokens=200,
-                completion_tokens=100,
-                cache_status="miss",
-            ),
-        ]
-        summary = summarize_costs(events)
-        assert summary.total_requests == 3
-        assert summary.total_provider_cost == pytest.approx(0.003)
-        assert summary.total_billed_cost == pytest.approx(0.015)
-        assert summary.total_prompt_tokens == 300
-        assert summary.total_completion_tokens == 150
-        assert summary.cache_hits == 1
-        assert summary.cache_misses == 2
-        assert len(summary.events) == 3
-
-    def test_disabled_cache_status_not_counted_as_hit_or_miss(self):
-        events = [
-            CostEvent(model="gpt-4", provider_cost=0.001, cache_status="disabled"),
-        ]
-        summary = summarize_costs(events)
-        assert summary.cache_hits == 0
-        assert summary.cache_misses == 0
-        assert summary.total_requests == 1
 
 
 # ---------------------------------------------------------------------------
@@ -429,40 +330,6 @@ class TestCostEventEmissionMocked:
         # Just verify it completed without error
         assert response is not None
 
-    def test_summarize_after_capture(self):
-        """End-to-end: capture + summarize."""
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Hello"
-        mock_response.model_dump.return_value = {}
-        mock_response.usage = MagicMock()
-        mock_response.usage.prompt_tokens = 10
-        mock_response.usage.completion_tokens = 5
-
-        with patch(
-            "unillm.clients.uni_llm.litellm.completion",
-            return_value=mock_response,
-        ):
-            with patch("unillm.clients.uni_llm._get_cache", return_value=None):
-                with patch("unillm.clients.uni_llm._write_to_cache"):
-                    with patch(
-                        "unillm.clients.uni_llm.compute_cost_from_response",
-                        return_value=0.001,
-                    ):
-                        with patch("unillm.clients.uni_llm.unify.deduct_credits"):
-                            client = unillm.Unify("gpt-4@openai", cache=True)
-                            with capture_costs() as events:
-                                client.generate(
-                                    messages=[{"role": "user", "content": "Hi"}],
-                                )
-
-        summary = summarize_costs(events)
-        assert summary.total_requests == 1
-        assert summary.total_provider_cost == 0.001
-        assert summary.total_billed_cost == 0.005
-        assert summary.cache_misses == 1
-        assert summary.cache_hits == 0
-
 
 # ---------------------------------------------------------------------------
 #  Integration tests - only run when API keys are available
@@ -515,27 +382,3 @@ class TestCostEventEmissionIntegration:
         assert len(events) == 1
         event = events[0]
         assert event.cache_status in ("hit", "miss", "disabled")
-
-    def test_real_summarize_costs(self):
-        from ..settings import SETTINGS
-
-        client = unillm.Unify(
-            SETTINGS.UNILLM_DEFAULT_MODEL,
-            cache=SETTINGS.UNILLM_CACHE,
-            cache_backend=SETTINGS.UNILLM_CACHE_BACKEND,
-        )
-        with capture_costs() as events:
-            client.generate(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "What is 2+2? Reply with just the number. [cost_tracker]",
-                    },
-                ],
-            )
-
-        summary = summarize_costs(events)
-        assert summary.total_requests == 1
-        assert summary.total_requests == summary.cache_hits + summary.cache_misses + (
-            1 if events[0].cache_status == "disabled" else 0
-        )
