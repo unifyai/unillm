@@ -59,6 +59,7 @@ class _Client(ABC):
         cache: Union[bool, str],
         cache_backend: str,
         prompt_caching: PromptCacheParam,
+        debug_marker: Optional[str],
         # passthrough arguments
         extra_headers: Optional[Headers],
         **kwargs,
@@ -92,6 +93,7 @@ class _Client(ABC):
         self._cache = None
         self._cache_backend = None
         self._prompt_caching = None
+        self._debug_marker = None
         self._extra_headers = None
 
         # set based on arguments
@@ -130,6 +132,7 @@ class _Client(ABC):
         self.set_cache(cache)
         self.set_cache_backend(cache_backend)
         self.set_prompt_caching(prompt_caching)
+        self.set_debug_marker(debug_marker)
         # passthrough arguments
         self.set_extra_headers(extra_headers)
 
@@ -412,6 +415,16 @@ class _Client(ABC):
             List of cache breakpoint locations, or None if not set.
         """
         return self._prompt_caching
+
+    @property
+    def debug_marker(self) -> Optional[str]:
+        """
+        Get the debug marker, if set.
+
+        Returns:
+            The debug marker string, or None.
+        """
+        return self._debug_marker
 
     @property
     def extra_headers(self) -> Optional[Headers]:
@@ -813,6 +826,19 @@ class _Client(ABC):
             This client, useful for chaining inplace calls.
         """
         self._prompt_caching = value
+        return self
+
+    def set_debug_marker(self, value: Optional[str]) -> Self:
+        """
+        Set the debug marker for identifying LLM call origins in logs and spans.
+
+        Args:
+            value: The debug marker string (e.g. ``"AgentA"``), or None to clear.
+
+        Returns:
+            This client, useful for chaining inplace calls.
+        """
+        self._debug_marker = value
         return self
 
     def set_extra_headers(self, value: Headers) -> Self:
