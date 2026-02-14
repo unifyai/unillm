@@ -31,7 +31,7 @@ from __future__ import annotations
 from contextlib import contextmanager, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Generator, AsyncGenerator, List
+from typing import Any, Generator, AsyncGenerator, List, Optional
 
 
 @dataclass
@@ -55,6 +55,48 @@ class CostEvent:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cache_status: str = "disabled"
+
+    @classmethod
+    def from_completion(
+        cls,
+        model: str,
+        provider_cost: Optional[float],
+        billed_cost: Optional[float],
+        completion: Any,
+        cache_status: str,
+    ) -> CostEvent:
+        """Create a CostEvent by extracting token usage from a completion.
+
+        Handles both full ChatCompletion objects (with ``.usage.prompt_tokens``)
+        and bare usage objects (with ``.prompt_tokens`` directly), as well as
+        ``None``.
+
+        Args:
+            model: The model identifier.
+            provider_cost: Provider cost in USD (None treated as 0.0).
+            billed_cost: Billed cost in USD (None treated as 0.0).
+            completion: A ChatCompletion, a usage object, or None.
+            cache_status: Cache status string ("hit", "miss", or "disabled").
+        """
+        pt = ct = 0
+        if completion is not None:
+            # Full completion object: completion.usage.prompt_tokens
+            usage = getattr(completion, "usage", None)
+            if usage is not None:
+                pt = getattr(usage, "prompt_tokens", 0) or 0
+                ct = getattr(usage, "completion_tokens", 0) or 0
+            else:
+                # Bare usage object: completion.prompt_tokens
+                pt = getattr(completion, "prompt_tokens", 0) or 0
+                ct = getattr(completion, "completion_tokens", 0) or 0
+        return cls(
+            model=model,
+            provider_cost=provider_cost or 0.0,
+            billed_cost=billed_cost or 0.0,
+            prompt_tokens=pt,
+            completion_tokens=ct,
+            cache_status=cache_status,
+        )
 
 
 # Context variable for the current cost event sink (thread-safe and async-safe)

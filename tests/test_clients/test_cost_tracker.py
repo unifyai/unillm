@@ -57,6 +57,112 @@ class TestCostEventDataclass:
 
 
 # ---------------------------------------------------------------------------
+#  Unit tests for CostEvent.from_completion
+# ---------------------------------------------------------------------------
+
+
+class TestCostEventFromCompletion:
+    """Tests for the CostEvent.from_completion classmethod."""
+
+    def test_from_full_completion_object(self):
+        """Extracts tokens from completion.usage.prompt_tokens."""
+        usage = MagicMock()
+        usage.prompt_tokens = 100
+        usage.completion_tokens = 50
+        completion = MagicMock()
+        completion.usage = usage
+
+        event = CostEvent.from_completion(
+            model="gpt-4",
+            provider_cost=0.001,
+            billed_cost=0.005,
+            completion=completion,
+            cache_status="miss",
+        )
+        assert event.model == "gpt-4"
+        assert event.provider_cost == 0.001
+        assert event.billed_cost == 0.005
+        assert event.prompt_tokens == 100
+        assert event.completion_tokens == 50
+        assert event.cache_status == "miss"
+
+    def test_from_bare_usage_object(self):
+        """Extracts tokens from a usage object without a .usage attribute."""
+        usage = MagicMock(spec=["prompt_tokens", "completion_tokens"])
+        usage.prompt_tokens = 42
+        usage.completion_tokens = 17
+
+        event = CostEvent.from_completion(
+            model="gpt-4o",
+            provider_cost=0.002,
+            billed_cost=0.01,
+            completion=usage,
+            cache_status="disabled",
+        )
+        assert event.prompt_tokens == 42
+        assert event.completion_tokens == 17
+
+    def test_from_none_completion(self):
+        """None completion yields zero tokens."""
+        event = CostEvent.from_completion(
+            model="gpt-4",
+            provider_cost=0.001,
+            billed_cost=0.005,
+            completion=None,
+            cache_status="miss",
+        )
+        assert event.prompt_tokens == 0
+        assert event.completion_tokens == 0
+        assert event.provider_cost == 0.001
+
+    def test_none_costs_treated_as_zero(self):
+        """None provider_cost and billed_cost become 0.0."""
+        event = CostEvent.from_completion(
+            model="gpt-4",
+            provider_cost=None,
+            billed_cost=None,
+            completion=None,
+            cache_status="hit",
+        )
+        assert event.provider_cost == 0.0
+        assert event.billed_cost == 0.0
+
+    def test_completion_with_none_usage(self):
+        """Completion object where .usage is None yields zero tokens."""
+        completion = MagicMock(spec=["usage"])
+        completion.usage = None
+
+        event = CostEvent.from_completion(
+            model="gpt-4",
+            provider_cost=0.001,
+            billed_cost=0.005,
+            completion=completion,
+            cache_status="miss",
+        )
+        # usage is None, and spec prevents auto-creation of prompt_tokens
+        assert event.prompt_tokens == 0
+        assert event.completion_tokens == 0
+
+    def test_completion_with_none_token_fields(self):
+        """Token fields that are None are coerced to 0."""
+        usage = MagicMock()
+        usage.prompt_tokens = None
+        usage.completion_tokens = None
+        completion = MagicMock()
+        completion.usage = usage
+
+        event = CostEvent.from_completion(
+            model="gpt-4",
+            provider_cost=0.001,
+            billed_cost=0.005,
+            completion=completion,
+            cache_status="miss",
+        )
+        assert event.prompt_tokens == 0
+        assert event.completion_tokens == 0
+
+
+# ---------------------------------------------------------------------------
 #  Unit tests for capture_costs / acapture_costs context managers
 # ---------------------------------------------------------------------------
 
