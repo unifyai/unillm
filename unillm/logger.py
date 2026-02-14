@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -434,6 +435,33 @@ def _truncate_for_console(body_str: str, max_len: int = 500) -> str:
     return body_str[:max_len] + "...(truncated)"
 
 
+def _sanitize_marker(marker: str) -> str:
+    """Sanitize a debug marker for safe use in filenames.
+
+    Replaces any character that is not a word char, hyphen, or dot with ``_``
+    and caps the result at 64 characters.
+    """
+    sanitized = re.sub(r"[^\w\-.]", "_", marker)
+    return sanitized[:64]
+
+
+def _make_label_prefix(
+    label: str | None = None,
+    debug_marker: str | None = None,
+) -> str:
+    """Build the ``[...] `` prefix used in log lines and file headers.
+
+    Returns an empty string when neither *label* nor *debug_marker* is set.
+    """
+    if debug_marker and label:
+        return f"[{debug_marker} :: {label}] "
+    if debug_marker:
+        return f"[{debug_marker}] "
+    if label:
+        return f"[{label}] "
+    return ""
+
+
 def log_usage(
     model: str,
     usage: dict,
@@ -559,6 +587,7 @@ def write_request_pending(
     request_kw: dict,
     *,
     label: str | None = None,
+    debug_marker: str | None = None,
 ) -> Path | None:
     """Write the request payload immediately with a _pending suffix.
 
@@ -569,7 +598,7 @@ def write_request_pending(
     if not _LOG_ENABLED:
         return None
 
-    label_prefix = f"[{label}] " if label else ""
+    label_prefix = _make_label_prefix(label, debug_marker)
     serialized = _serialize_kw(request_kw)
     body_str = _normalize_body(serialized)
 
@@ -587,7 +616,8 @@ def write_request_pending(
         now = datetime.now(timezone.utc)
         hhmmss = now.strftime("%H%M%S")
         ns = time.time_ns() % 1_000_000_000
-        base = f"{hhmmss}_{ns:09d}_pending"
+        marker_part = f"_{_sanitize_marker(debug_marker)}" if debug_marker else ""
+        base = f"{hhmmss}_{ns:09d}{marker_part}_pending"
         path = log_dir / f"{base}.txt"
 
         # Handle filename collision
@@ -612,6 +642,7 @@ def append_response_and_finalize(
     cache_status: str,
     *,
     label: str | None = None,
+    debug_marker: str | None = None,
 ) -> None:
     """Append the response to the pending file and rename to reflect cache status.
 
@@ -622,7 +653,7 @@ def append_response_and_finalize(
     if not _LOG_ENABLED:
         return
 
-    label_prefix = f"[{label}] " if label else ""
+    label_prefix = _make_label_prefix(label, debug_marker)
     body_str = _normalize_body(response_body)
 
     # Console log (always when enabled)

@@ -45,12 +45,15 @@ class LLMEvent:
             None for cache hits, streaming, or errors.
         billed_cost: The cost charged to the user (provider_cost × margin, in USD).
             None for cache hits, streaming, or errors.
+        debug_marker: Optional user-supplied marker identifying the call origin
+            (e.g. ``"AgentA"``). ``None`` when no marker was set.
     """
 
     request: dict[str, Any]
     response: Optional[dict[str, Any]] = None
     provider_cost: Optional[float] = None
     billed_cost: Optional[float] = None
+    debug_marker: Optional[str] = None
 
 
 # Context variable for the current event hook (context-local, for scoped captures)
