@@ -17,6 +17,11 @@ from .caching import (
     set_cache_backend,
     CacheStats,
 )
+from .cost_tracker import (
+    CostEvent,
+    capture_costs,
+    acapture_costs,
+)
 from .costs import (
     compute_cost,
     compute_cost_from_response,
