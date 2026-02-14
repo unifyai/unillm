@@ -854,7 +854,6 @@ class Unify(_UniClient):
                 ),
             )
 
-            # Emit cost event for cost tracking
             _emit_cost_event(
                 CostEvent.from_completion(
                     model=kw.get("model", ""),
@@ -899,7 +898,6 @@ class Unify(_UniClient):
                 billed = cost * margin
                 unify.deduct_credits(billed, api_key=self._api_key)
 
-                # Emit cost event for retry
                 _emit_cost_event(
                     CostEvent.from_completion(
                         model=retry_kw.get("model", ""),
@@ -1105,7 +1103,6 @@ class Unify(_UniClient):
                 ),
             )
 
-            # Emit cost event for cost tracking
             _emit_cost_event(
                 CostEvent.from_completion(
                     model=kw.get("model", ""),
@@ -1404,7 +1401,6 @@ class AsyncUnify(_UniClient):
                 ),
             )
 
-            # Emit cost event for cost tracking
             _emit_cost_event(
                 CostEvent.from_completion(
                     model=kw.get("model", ""),
@@ -1460,7 +1456,6 @@ class AsyncUnify(_UniClient):
                     name=f"unillm_deduct_credits_{label_suffix}",
                 )
 
-                # Emit cost event for retry
                 _emit_cost_event(
                     CostEvent.from_completion(
                         model=retry_kw.get("model", ""),
@@ -1708,7 +1703,6 @@ class AsyncUnify(_UniClient):
                 ),
             )
 
-            # Emit cost event for cost tracking
             _emit_cost_event(
                 CostEvent.from_completion(
                     model=kw.get("model", ""),
