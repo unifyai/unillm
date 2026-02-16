@@ -2,6 +2,7 @@ from .utils import register_model_alias_map
 
 models = {
     "gemini-3-pro": "vertex_ai/gemini-3-pro-preview",
+    "gemini-3-flash": "vertex_ai/gemini-3-flash-preview",
     "gemini-2.5-flash-lite": "vertex_ai/gemini-2.5-flash-lite",
     "gemini-2.5-flash": "vertex_ai/gemini-2.5-flash",
     "gemini-2.5-pro": "vertex_ai/gemini-2.5-pro",
