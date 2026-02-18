@@ -276,6 +276,66 @@ class TestApplyAnthropicCachingMultipleLocations:
         # No assertion needed, just verify no error
 
 
+class TestApplyAnthropicCachingMultipleSystemMessages:
+    """Cache breakpoint placement across multiple system messages.
+
+    When multiple system messages exist (e.g. main prompt + runtime context +
+    time context), the cache breakpoint must land on the last _static=True block
+    across ALL system messages — not just within the last system message.
+
+    This mirrors Unity's async tool loop where:
+      - messages[0]: main prompt (list content with _static annotations)
+      - messages[1]: runtime context (string, static per-loop)
+      - messages[2]: time context (string, _static=False, changes every turn)
+    """
+
+    def test_breakpoint_on_static_block_not_last_dynamic_system_message(self):
+        """Cache breakpoint should land on the last static content, not on a
+        dynamic system message that happens to be last in the list.
+
+        Reproduces the time-awareness KV cache bust: the time context system
+        message is last, has string content, and changes every turn. The
+        breakpoint must stay on the static prompt content in the first message.
+        """
+        kw = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are a helpful assistant.",
+                            "_static": True,
+                        },
+                        {
+                            "type": "text",
+                            "text": "Current time is 2:09 PM.",
+                            "_static": False,
+                        },
+                    ],
+                },
+                {
+                    "role": "system",
+                    "content": "Runtime context: called by Actor.",
+                },
+                {
+                    "role": "system",
+                    "_static": False,
+                    "content": "## Time Context\n- Started: 45s ago\n\n| tool | duration |\n| search | 2.1s |",
+                },
+                {"role": "user", "content": "hello"},
+            ],
+        }
+        _apply_anthropic_caching(kw, ["system"])
+
+        # The breakpoint must be on the static block in the first system message
+        first_sys_content = kw["messages"][0]["content"]
+        assert first_sys_content[0]["cache_control"] == CACHE_CONTROL_EPHEMERAL
+
+        # NOT on the dynamic time context (last system message)
+        assert "cache_control" not in kw["messages"][2]
+
+
 class TestInternalAnnotationStripping:
     """Underscore-prefixed keys are internal annotations (e.g. _static, _time_context).
 
