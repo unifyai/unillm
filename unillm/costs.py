@@ -5,9 +5,9 @@ from typing import Optional, Union
 
 import litellm
 
-# Cost margin multiplier for billing users. Defaults to 5x to cover costs + profit.
+# Cost margin multiplier for billing users. Defaults to 2x to cover costs + profit.
 # Configurable via UNILLM_COST_MARGIN environment variable.
-_DEFAULT_COST_MARGIN = 5.0
+_DEFAULT_COST_MARGIN = 2.0
 
 
 def get_cost_margin() -> float:

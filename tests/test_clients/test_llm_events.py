@@ -56,14 +56,14 @@ class TestLLMEventDataclass:
 class TestCostMargin:
     """Tests for the cost margin configuration."""
 
-    def test_default_margin_is_5(self):
+    def test_default_margin(self):
         from unillm.costs import get_cost_margin
 
         # Clear env var if set
         with patch.dict(os.environ, {}, clear=True):
             # Remove UNILLM_COST_MARGIN if it exists
             os.environ.pop("UNILLM_COST_MARGIN", None)
-            assert get_cost_margin() == 5.0
+            assert get_cost_margin() == 2.0
 
     def test_margin_from_env_var(self):
         from unillm.costs import get_cost_margin
@@ -75,7 +75,7 @@ class TestCostMargin:
         from unillm.costs import get_cost_margin
 
         with patch.dict(os.environ, {"UNILLM_COST_MARGIN": "not_a_number"}):
-            assert get_cost_margin() == 5.0
+            assert get_cost_margin() == 2.0
 
 
 class TestSetLLMEventHook:
@@ -595,8 +595,8 @@ class TestLLMEventCosts:
         # Provider cost should be set
         assert event.provider_cost == 0.001
 
-        # Billed cost should be provider_cost * margin (default 5)
-        assert event.billed_cost == 0.005
+        # Billed cost should be provider_cost * margin (default 2)
+        assert event.billed_cost == 0.002
 
     def test_costs_with_custom_margin(self):
         """Billed cost should respect UNILLM_COST_MARGIN env var."""
