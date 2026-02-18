@@ -429,6 +429,24 @@ def _apply_anthropic_caching(
                 break
 
 
+def _strip_internal_annotations(kw: Dict[str, Any]) -> None:
+    """Strip underscore-prefixed keys from messages and content blocks.
+
+    Keys like ``_static``, ``_time_context``, ``_ctx_header`` etc. are internal
+    annotations consumed by unillm's preprocessing.  They must never reach a
+    provider API.  Operates on the already-deep-copied messages inside *kw*.
+    """
+    for msg in kw.get("messages", []):
+        for key in [k for k in msg if k.startswith("_")]:
+            del msg[key]
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    for key in [k for k in block if k.startswith("_")]:
+                        del block[key]
+
+
 def apply_provider_preprocessing(
     kw: Dict[str, Any],
     provider: Optional[str],
@@ -439,11 +457,13 @@ def apply_provider_preprocessing(
     if not messages:
         return kw
 
-    # Only Anthropic preprocessing for now
+    messages = copy.deepcopy(messages)
+    kw["messages"] = messages
+
     if provider != "anthropic":
+        _strip_internal_annotations(kw)
         return kw
 
-    messages = copy.deepcopy(messages)
     messages = _move_system_messages_to_front(messages)
     messages, combined_any = _combine_adjacent_user_messages(messages)
 
@@ -506,5 +526,7 @@ def apply_provider_preprocessing(
 
     if prompt_caching:
         _apply_anthropic_caching(kw, prompt_caching)
+
+    _strip_internal_annotations(kw)
 
     return kw
