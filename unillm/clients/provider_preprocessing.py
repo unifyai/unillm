@@ -402,21 +402,28 @@ def _apply_anthropic_caching(
         return
 
     if "system" in prompt_caching:
-        for msg in reversed(messages):
-            if msg.get("role") == "system":
-                content = msg.get("content")
-                if isinstance(content, list) and len(content) > 0:
-                    # Find the last _static=True before the first _static=False
-                    inject_index = None
-                    for i, item in enumerate(content):
-                        if not item.get("_static", True):
-                            break
-                        inject_index = i
-                    if inject_index is not None:
-                        content[inject_index]["cache_control"] = CACHE_CONTROL_EPHEMERAL
-                else:
-                    msg["cache_control"] = CACHE_CONTROL_EPHEMERAL
+        # Flatten all system messages into a sequence of (target, is_static)
+        # pairs, then find the optimal breakpoint across all of them.
+        # "target" is the dict to annotate with cache_control — either a
+        # content block (for list content) or the message itself (for string).
+        targets: List[Tuple[Dict[str, Any], bool]] = []
+        for msg in messages:
+            if msg.get("role") != "system":
+                continue
+            content = msg.get("content")
+            if isinstance(content, list) and len(content) > 0:
+                for item in content:
+                    targets.append((item, item.get("_static", True)))
+            else:
+                targets.append((msg, msg.get("_static", True)))
+
+        inject_target = None
+        for target, is_static in targets:
+            if not is_static:
                 break
+            inject_target = target
+        if inject_target is not None:
+            inject_target["cache_control"] = CACHE_CONTROL_EPHEMERAL
 
     if "messages" in prompt_caching:
         for msg in reversed(messages):
