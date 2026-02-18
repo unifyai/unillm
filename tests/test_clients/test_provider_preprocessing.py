@@ -3,6 +3,7 @@
 from unillm.clients.provider_preprocessing import (
     CACHE_CONTROL_EPHEMERAL,
     _apply_anthropic_caching,
+    apply_provider_preprocessing,
 )
 
 
@@ -273,3 +274,69 @@ class TestApplyAnthropicCachingMultipleLocations:
         kw = {}
         _apply_anthropic_caching(kw, ["system", "messages"])
         # No assertion needed, just verify no error
+
+
+class TestInternalAnnotationStripping:
+    """Underscore-prefixed keys are internal annotations (e.g. _static, _time_context).
+
+    They must be stripped from messages and content blocks before reaching any
+    provider API, regardless of provider.
+    """
+
+    def test_anthropic_strips_internal_annotations_from_content_blocks(self):
+        """_static annotations on content blocks must not leak to Anthropic."""
+        kw = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "static part", "_static": True},
+                        {"type": "text", "text": "dynamic part", "_static": False},
+                    ],
+                },
+                {"role": "user", "content": "hello"},
+            ],
+        }
+        apply_provider_preprocessing(kw, "anthropic", prompt_caching=["system"])
+
+        for msg in kw["messages"]:
+            # No _-prefixed keys on messages
+            assert not any(
+                k.startswith("_") for k in msg
+            ), f"Internal annotation leaked on message: {[k for k in msg if k.startswith('_')]}"
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    assert not any(k.startswith("_") for k in block), (
+                        f"Internal annotation leaked on content block: "
+                        f"{[k for k in block if k.startswith('_')]}"
+                    )
+
+    def test_openai_strips_internal_annotations_from_content_blocks(self):
+        """_static annotations on content blocks must not leak to OpenAI."""
+        kw = {
+            "messages": [
+                {
+                    "role": "system",
+                    "_custom_flag": True,
+                    "content": [
+                        {"type": "text", "text": "static part", "_static": True},
+                        {"type": "text", "text": "dynamic part", "_static": False},
+                    ],
+                },
+                {"role": "user", "content": "hello"},
+            ],
+        }
+        apply_provider_preprocessing(kw, "openai")
+
+        for msg in kw["messages"]:
+            assert not any(
+                k.startswith("_") for k in msg
+            ), f"Internal annotation leaked on message: {[k for k in msg if k.startswith('_')]}"
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    assert not any(k.startswith("_") for k in block), (
+                        f"Internal annotation leaked on content block: "
+                        f"{[k for k in block if k.startswith('_')]}"
+                    )
