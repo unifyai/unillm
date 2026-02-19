@@ -1038,7 +1038,7 @@ class Unify(_UniClient):
         # Initialize before try block so finally can access them
         chat_completion = None
         is_cache_enabled = cache in [True, "both", "read", "read-only"]
-        cache_status = "error"
+        cache_status = "pending" if is_cache_enabled else "disabled"
         in_cache = False
         llm_error: BaseException | None = None
         provider_cost: float | None = None
@@ -1081,11 +1081,9 @@ class Unify(_UniClient):
                         llm_error = Exception(e.message)
                         raise llm_error
 
-                # Determine cache status and emit event
+                # Determine cache status after resolution
                 if is_cache_enabled:
                     cache_status = "hit" if in_cache else "miss"
-                else:
-                    cache_status = "disabled"
 
                 # Set span response attributes
                 set_span_response(span, cache_status, chat_completion)
@@ -1100,6 +1098,8 @@ class Unify(_UniClient):
         except BaseException as e:
             if llm_error is None:
                 llm_error = e
+            if cache_status == "pending":
+                cache_status = "error"
             raise
         finally:
             # Finalize log file with response and cache status (always runs)
@@ -1638,7 +1638,7 @@ class AsyncUnify(_UniClient):
         # Initialize before try block so finally can access them
         chat_completion = None
         is_cache_enabled = cache in [True, "both", "read", "read-only"]
-        cache_status = "error"
+        cache_status = "pending" if is_cache_enabled else "disabled"
         in_cache = False
         llm_error: BaseException | None = None
         provider_cost: float | None = None
@@ -1713,11 +1713,9 @@ class AsyncUnify(_UniClient):
                         llm_error = Exception(e.message)
                         raise llm_error
 
-                # Determine cache status and emit event
+                # Determine cache status after resolution
                 if is_cache_enabled:
                     cache_status = "hit" if in_cache else "miss"
-                else:
-                    cache_status = "disabled"
 
                 # Set span response attributes
                 set_span_response(span, cache_status, chat_completion)
@@ -1733,6 +1731,8 @@ class AsyncUnify(_UniClient):
             # Capture the error for the response event
             if llm_error is None:
                 llm_error = e
+            if cache_status == "pending":
+                cache_status = "error"
             raise
         finally:
             # Cancel any unconsumed tasks (e.g., cache hit or error)
