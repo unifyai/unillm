@@ -39,7 +39,7 @@ class CacheEvent(TypedDict):
         request_kw: The full request kwargs sent to the LLM (model, messages, etc.).
     """
 
-    cache_status: Literal["hit", "miss", "disabled"]
+    cache_status: Literal["hit", "miss", "disabled", "pending", "error"]
     endpoint: str
     request_kw: dict[str, Any]
 
