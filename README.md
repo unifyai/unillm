@@ -182,13 +182,13 @@ response = client.generate(
 
 ### Console & File Logging
 
-Controlled via environment variables:
+Terminal and file logging are independently controlled:
 
 ```bash
-# Master switch (default: true)
-export UNILLM_LOG=true
+# Terminal (console) output (default: true)
+export UNILLM_TERMINAL_LOG=true
 
-# Enable file logging (optional)
+# File-based traces (independent of terminal)
 export UNILLM_LOG_DIR=/path/to/logs
 ```
 

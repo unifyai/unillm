@@ -5,17 +5,23 @@ LLM I/O Logging and OpenTelemetry Tracing
 Provides console and file-based logging for LLM request/response payloads,
 plus OpenTelemetry tracing for distributed observability.
 
-Logging is controlled by two environment variables:
-- UNILLM_LOG: Enable/disable all logging (default: true)
-- UNILLM_LOG_DIR: Directory for log files (default: console only)
+Terminal and file logging are independently controlled:
 
-When UNILLM_LOG_DIR is set, structured files are written:
+- UNILLM_TERMINAL_LOG: Enable/disable terminal (console) output (default: true)
+- UNILLM_LOG_DIR: Directory for file-based traces (independent of terminal)
+
+When UNILLM_LOG_DIR is set, structured files are written regardless of
+UNILLM_TERMINAL_LOG:
 - During the call: ``{timestamp}_pending.txt`` (contains request only)
 - After completion: ``{timestamp}_hit.txt`` or ``{timestamp}_miss.txt``
   (contains both request and response, with cache status in filename)
 
 If an LLM call hangs or crashes, the ``_pending.txt`` file remains as evidence
 of the incomplete request.
+
+Typical production configuration:
+- UNILLM_TERMINAL_LOG=false + UNILLM_LOG_DIR=/var/log/unillm/
+  → quiet terminal, verbose file traces
 
 OpenTelemetry tracing is controlled by:
 - UNILLM_OTEL: Enable/disable OTel tracing (default: false)
@@ -48,12 +54,12 @@ import unify
 from .settings import SETTINGS
 
 # ---------------------------------------------------------------------------
-# Console logging setup
+# Logging setup — terminal and file are independent
 # ---------------------------------------------------------------------------
 
 _LOGGER = logging.getLogger("unillm")
-_LOG_ENABLED = SETTINGS.UNILLM_LOG
-_LOGGER.setLevel(logging.DEBUG if _LOG_ENABLED else logging.WARNING)
+_TERMINAL_LOG_ENABLED = SETTINGS.UNILLM_TERMINAL_LOG
+_LOGGER.setLevel(logging.DEBUG if _TERMINAL_LOG_ENABLED else logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # OpenTelemetry setup
@@ -357,11 +363,9 @@ def configure_log_dir(log_dir: Optional[str] = None) -> Optional[Path]:
 
 
 def _get_log_dir() -> Path | None:
-    """Get the log directory path, or None if logging is disabled.
+    """Get the log directory path, or None if not configured.
 
-    Returns None if:
-    - UNILLM_LOG is False (master switch off)
-    - UNILLM_LOG_DIR is not set
+    Returns None if UNILLM_LOG_DIR is not set.
     """
     global _LOG_DIR, _LOG_DIR_CHECKED
 
@@ -369,9 +373,6 @@ def _get_log_dir() -> Path | None:
         return _LOG_DIR
 
     _LOG_DIR_CHECKED = True
-
-    if not _LOG_ENABLED:
-        return None
 
     # Check env var first (allows runtime override), then settings
     log_dir_str = os.getenv("UNILLM_LOG_DIR", "").strip() or SETTINGS.UNILLM_LOG_DIR
@@ -529,8 +530,7 @@ def log_usage(
         "billed_cost": billed_cost,
     }
 
-    # Console log (always when enabled)
-    if _LOG_ENABLED:
+    if _TERMINAL_LOG_ENABLED:
         _LOGGER.debug(
             f"🔄 {label_prefix}usage log\n"
             f"  usage: {json.dumps(usage, default=str)}\n"
@@ -591,21 +591,18 @@ def write_request_pending(
 ) -> Path | None:
     """Write the request payload immediately with a _pending suffix.
 
-    Logs to console (always when enabled) and to file (if directory set).
+    Logs to console (if terminal logging enabled) and to file (if directory set).
     Returns the file path so we can append the response and rename later.
     If the LLM call hangs/crashes, the _pending file remains as evidence.
     """
-    if not _LOG_ENABLED:
-        return None
-
     label_prefix = _make_label_prefix(label, debug_marker)
     serialized = _serialize_kw(request_kw)
     body_str = _normalize_body(serialized)
 
-    # Console log (always when enabled)
-    _LOGGER.debug(
-        f"🔄 {label_prefix}LLM request ➡️\n{_truncate_for_console(body_str)}",
-    )
+    if _TERMINAL_LOG_ENABLED:
+        _LOGGER.debug(
+            f"🔄 {label_prefix}LLM request ➡️\n{_truncate_for_console(body_str)}",
+        )
 
     # File log (only if directory set)
     log_dir = _get_log_dir()
@@ -646,21 +643,18 @@ def append_response_and_finalize(
 ) -> None:
     """Append the response to the pending file and rename to reflect cache status.
 
-    Logs to console (always when enabled) and finalizes file (if path provided).
+    Logs to console (if terminal logging enabled) and finalizes file (if path provided).
     The final filename will be: {timestamp}_hit.txt, {timestamp}_miss.txt,
     or {timestamp}_disabled.txt
     """
-    if not _LOG_ENABLED:
-        return
-
     label_prefix = _make_label_prefix(label, debug_marker)
     body_str = _normalize_body(response_body)
 
-    # Console log (always when enabled)
-    _LOGGER.debug(
-        f"🔄 {label_prefix}LLM response ⬅️ [cache: {cache_status}]\n"
-        f"{_truncate_for_console(body_str)}",
-    )
+    if _TERMINAL_LOG_ENABLED:
+        _LOGGER.debug(
+            f"🔄 {label_prefix}LLM response ⬅️ [cache: {cache_status}]\n"
+            f"{_truncate_for_console(body_str)}",
+        )
 
     # File log (only if we have a pending path)
     if pending_path is None or not pending_path.exists():

@@ -272,8 +272,7 @@ jobs:
         # Enable OpenTelemetry tracing for unillm
         UNILLM_OTEL: "true"
         UNILLM_OTEL_LOG_DIR: ${{ env.LOGS_DIR }}/all
-        # Enable file-based LLM I/O logging for unillm
-        UNILLM_LOG: "true"
+        # File-based LLM I/O logging (independent of terminal)
         UNILLM_LOG_DIR: ${{ env.LOGS_DIR }}/unillm
         # Enable OpenTelemetry tracing for unify client
         UNIFY_OTEL: "true"

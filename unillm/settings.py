@@ -35,13 +35,11 @@ class Settings(BaseSettings):
     VERTEXAI_PROJECT: SecretStr = SecretStr("")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # LLM I/O Logging
+    # LLM I/O Logging — terminal and file are independent
     # ─────────────────────────────────────────────────────────────────────────
-    # Master switch for LLM I/O logging (console and file).
-    # - UNILLM_LOG=true (default): Console logging enabled via Python logger
-    # - UNILLM_LOG=true + UNILLM_LOG_DIR=/path: Console AND file logging
-    # - UNILLM_LOG=false: All logging disabled
-    UNILLM_LOG: bool = True
+    # - UNILLM_TERMINAL_LOG: Controls console output (default: true)
+    # - UNILLM_LOG_DIR: Directory for file-based traces (independent of terminal)
+    UNILLM_TERMINAL_LOG: bool = True
     UNILLM_LOG_DIR: str = ""
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -90,7 +88,7 @@ class Settings(BaseSettings):
     # Set to 0 to disable this retry logic entirely.
     UNILLM_TRANSIENT_RETRY_COUNT: int = 3
 
-    @field_validator("UNILLM_LOG", "UNILLM_OTEL", mode="before")
+    @field_validator("UNILLM_TERMINAL_LOG", "UNILLM_OTEL", mode="before")
     @classmethod
     def parse_bool_fields(cls, v: Any) -> bool:
         return _parse_bool(v)
