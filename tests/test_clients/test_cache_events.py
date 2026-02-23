@@ -250,12 +250,11 @@ class TestCacheEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        with patch("unillm.clients.uni_llm.asyncio.create_task"):
-                            client = unillm.AsyncUnify("gpt-4@openai", cache=True)
-                            async with acapture_cache_events() as events:
-                                await client.generate(
-                                    messages=[{"role": "user", "content": "Hi"}],
-                                )
+                        client = unillm.AsyncUnify("gpt-4@openai", cache=True)
+                        async with acapture_cache_events() as events:
+                            await client.generate(
+                                messages=[{"role": "user", "content": "Hi"}],
+                            )
 
         assert len(events) == 1
         assert events[0]["cache_status"] == "miss"
@@ -363,7 +362,7 @@ class TestCacheEventEmissionIntegration:
             )
 
         assert len(events) == 1
-        assert events[0]["cache_status"] in ("hit", "miss")
+        assert events[0]["cache_status"] in ("hit", "miss", "disabled")
         assert events[0]["endpoint"] == SETTINGS.UNILLM_DEFAULT_MODEL
 
     @pytest.mark.asyncio
@@ -381,7 +380,7 @@ class TestCacheEventEmissionIntegration:
             )
 
         assert len(events) == 1
-        assert events[0]["cache_status"] in ("hit", "miss")
+        assert events[0]["cache_status"] in ("hit", "miss", "disabled")
         assert events[0]["endpoint"] == SETTINGS.UNILLM_DEFAULT_MODEL
 
     def test_cache_miss_then_hit_sequence(self):

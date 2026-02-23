@@ -1,7 +1,8 @@
 # global
 import copy
 from abc import ABC, abstractmethod
-from typing import Dict, Iterable, List, Optional, Type, Union
+from pathlib import Path
+from typing import Callable, Dict, Iterable, List, Literal, Optional, Type, Union
 
 import requests
 
@@ -21,6 +22,7 @@ from unify import BASE_URL
 from unify.utils import http
 
 from unify.utils.helpers import _create_request_header, _validate_api_key
+from unillm.types import PromptCacheParam
 
 
 class _Client(ABC):
@@ -30,12 +32,7 @@ class _Client(ABC):
         self,
         *,
         system_message: Optional[str],
-        messages: Optional[
-            Union[
-                List[ChatCompletionMessageParam],
-                Dict[str, List[ChatCompletionMessageParam]],
-            ]
-        ],
+        messages: Optional[List[ChatCompletionMessageParam]],
         frequency_penalty: Optional[float],
         logit_bias: Optional[Dict[str, int]],
         logprobs: Optional[bool],
@@ -62,6 +59,8 @@ class _Client(ABC):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
+        prompt_caching: PromptCacheParam,
+        origin: Optional[str],
         # passthrough arguments
         extra_headers: Optional[Headers],
         **kwargs,
@@ -94,11 +93,17 @@ class _Client(ABC):
         self._return_full_completion = None
         self._cache = None
         self._cache_backend = None
+        self._prompt_caching = None
+        self._origin = None
+        self._on_log_file = None
         self._extra_headers = None
 
         # set based on arguments
-        self.set_system_message(system_message)
+        # NOTE: Order matters! set_messages first, then conditionally set_system_message.
+        # If we did set_system_message first, then set_messages(None) would wipe it out.
         self.set_messages(messages)
+        if system_message is not None:
+            self.set_system_message(system_message)
         self.set_frequency_penalty(frequency_penalty)
         self.set_logit_bias(logit_bias)
         self.set_logprobs(logprobs)
@@ -121,8 +126,15 @@ class _Client(ABC):
         # python client arguments
         self.set_stateful(stateful)
         self.set_return_full_completion(return_full_completion)
+        # Default cache from UNILLM_CACHE setting if not explicitly passed
+        if cache is None:
+            from unillm.settings import SETTINGS
+
+            cache = SETTINGS.UNILLM_CACHE
         self.set_cache(cache)
         self.set_cache_backend(cache_backend)
+        self.set_prompt_caching(prompt_caching)
+        self.set_origin(origin)
         # passthrough arguments
         self.set_extra_headers(extra_headers)
 
@@ -167,12 +179,7 @@ class _Client(ABC):
     @property
     def messages(
         self,
-    ) -> Optional[
-        Union[
-            List[ChatCompletionMessageParam],
-            Dict[str, List[ChatCompletionMessageParam]],
-        ]
-    ]:
+    ) -> Optional[List[ChatCompletionMessageParam]]:
         """
         Get the default messages, if set.
 
@@ -402,6 +409,26 @@ class _Client(ABC):
         return self._cache
 
     @property
+    def prompt_caching(self) -> Optional[List[Literal["tools", "system", "messages"]]]:
+        """
+        Get the default prompt caching settings for Anthropic.
+
+        Returns:
+            List of cache breakpoint locations, or None if not set.
+        """
+        return self._prompt_caching
+
+    @property
+    def origin(self) -> Optional[str]:
+        """
+        Get the origin tag identifying the call site, if set.
+
+        Returns:
+            The origin string, or None.
+        """
+        return self._origin
+
+    @property
     def extra_headers(self) -> Optional[Headers]:
         """
         Get the default extra headers, if set.
@@ -448,10 +475,7 @@ class _Client(ABC):
 
     def set_messages(
         self,
-        value: Union[
-            List[ChatCompletionMessageParam],
-            Dict[str, List[ChatCompletionMessageParam]],
-        ],
+        value: List[ChatCompletionMessageParam],
     ) -> Self:
         """
         Set the default messages.
@@ -465,16 +489,13 @@ class _Client(ABC):
         if value is None:
             value = []
         self._messages = value
-        if isinstance(value, list) and value and value[0]["role"] == "system":
+        if value and value[0]["role"] == "system":
             self.set_system_message(value[0]["content"])
         return self
 
     def append_messages(
         self,
-        value: Union[
-            List[ChatCompletionMessageParam],
-            Dict[str, List[ChatCompletionMessageParam]],
-        ],
+        value: List[ChatCompletionMessageParam],
     ) -> Self:
         """
         Append to the default messages.
@@ -792,6 +813,55 @@ class _Client(ABC):
         self._cache_backend = value
         return self
 
+    def set_prompt_caching(
+        self,
+        value: Optional[List[Literal["tools", "system", "messages"]]],
+    ) -> Self:
+        """
+        Set the prompt caching settings for Anthropic models.
+
+        Args:
+            value: List of locations to insert cache breakpoints.
+                   Valid values: "tools", "system", "messages".
+
+        Returns:
+            This client, useful for chaining inplace calls.
+        """
+        self._prompt_caching = value
+        return self
+
+    def set_origin(self, value: Optional[str]) -> Self:
+        """
+        Set the origin tag for identifying LLM call sites in logs and spans.
+
+        Args:
+            value: The origin string (e.g. ``"ConversationManager.decide"``),
+                or None to clear.
+
+        Returns:
+            This client, useful for chaining inplace calls.
+        """
+        self._origin = value
+        return self
+
+    def set_on_log_file(self, callback: Optional[Callable[[Path], None]]) -> Self:
+        """
+        Set a callback invoked with the finalized log file path after each LLM call.
+
+        The callback fires once per generate() call, after the request+response
+        have been written and the file renamed from ``_pending`` to its final
+        name (e.g. ``_hit.txt``, ``_miss.txt``).  Only fires when
+        ``UNILLM_LOG_DIR`` is configured and a file was actually written.
+
+        Args:
+            callback: A callable receiving the final ``Path``, or None to clear.
+
+        Returns:
+            This client, useful for chaining inplace calls.
+        """
+        self._on_log_file = callback
+        return self
+
     def set_extra_headers(self, value: Headers) -> Self:
         """
         Set the default extra headers.
@@ -1090,6 +1160,7 @@ class _Client(ABC):
                         stateful=self._stateful,
                         return_full_completion=self._return_full_completion,
                         cache=self._cache,
+                        prompt_caching=self._prompt_caching,
                         # passthrough arguments
                         extra_headers=self._extra_headers,
                     ),
@@ -1130,6 +1201,7 @@ class _Client(ABC):
                     stateful=self._stateful,
                     return_full_completion=self._return_full_completion,
                     cache=self._cache,
+                    prompt_caching=self._prompt_caching,
                     # passthrough arguments
                     extra_headers=self._extra_headers,
                 ),
@@ -1143,12 +1215,7 @@ class _Client(ABC):
     @abstractmethod
     def _generate(
         self,
-        messages: Optional[
-            Union[
-                List[ChatCompletionMessageParam],
-                Dict[str, List[ChatCompletionMessageParam]],
-            ]
-        ],
+        messages: Optional[List[ChatCompletionMessageParam]],
         *,
         frequency_penalty: Optional[float],
         logit_bias: Optional[Dict[str, int]],

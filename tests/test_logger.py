@@ -28,7 +28,6 @@ from unillm.logger import (
     is_otel_enabled,
 )
 
-
 # --------------------------------------------------------------------------- #
 #  Fixtures for OTel testing
 # --------------------------------------------------------------------------- #
@@ -153,9 +152,9 @@ def test_write_request_pending_creates_file(tmp_path, monkeypatch):
 
     # Clear env var so monkeypatch takes effect (env var takes precedence in _get_log_dir)
     monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
-    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(logger, "_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
     monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
     monkeypatch.setattr(logger, "_LOG_DIR", None)
 
@@ -177,9 +176,9 @@ def test_append_response_and_finalize(tmp_path, monkeypatch):
 
     # Clear env var so monkeypatch takes effect (env var takes precedence in _get_log_dir)
     monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
-    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(logger, "_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
     monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
     monkeypatch.setattr(logger, "_LOG_DIR", None)
 
@@ -208,6 +207,43 @@ def test_append_response_and_finalize(tmp_path, monkeypatch):
     assert "[cache: hit]" in content
 
 
+def test_append_response_and_finalize_with_none_response(tmp_path, monkeypatch):
+    """Finalization works when response is None (exception during LLM call)."""
+    from unillm import settings
+    from unillm import logger
+
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+    # Write pending request
+    pending_path = write_request_pending({"model": "gpt-4"}, label="test")
+    assert pending_path is not None
+
+    # Finalize with None response (simulates exception during LLM call)
+    append_response_and_finalize(
+        pending_path,
+        None,
+        "error",
+        label="test",
+    )
+
+    # Pending file should be gone
+    assert not pending_path.exists()
+
+    # Should have an _error file now
+    error_files = list(tmp_path.glob("*_error.txt"))
+    assert len(error_files) == 1
+
+    content = error_files[0].read_text()
+    assert "LLM request ➡️" in content
+    assert "LLM response ⬅️" in content
+    assert "[cache: error]" in content
+
+
 def test_write_request_without_label(tmp_path, monkeypatch):
     """Writing without a label omits the label prefix."""
     from unillm import settings
@@ -215,9 +251,9 @@ def test_write_request_without_label(tmp_path, monkeypatch):
 
     # Clear env var so monkeypatch takes effect (env var takes precedence in _get_log_dir)
     monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
-    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(logger, "_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
     monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
     monkeypatch.setattr(logger, "_LOG_DIR", None)
 
@@ -236,9 +272,9 @@ def test_multiple_writes_unique_filenames(tmp_path, monkeypatch):
 
     # Clear env var so monkeypatch takes effect (env var takes precedence in _get_log_dir)
     monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
-    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(logger, "_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
     monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
     monkeypatch.setattr(logger, "_LOG_DIR", None)
 
@@ -253,37 +289,16 @@ def test_multiple_writes_unique_filenames(tmp_path, monkeypatch):
     assert len(files) == 3
 
 
-def test_logging_disabled_returns_none(tmp_path, monkeypatch):
-    """When logging is disabled, write_request_pending returns None (no file)."""
-    from unillm import settings
-    from unillm import logger
-
-    # Clear env var so monkeypatch takes effect (env var takes precedence in _get_log_dir)
-    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
-    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", False)
-    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(logger, "_LOG_ENABLED", False)
-    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
-    monkeypatch.setattr(logger, "_LOG_DIR", None)
-
-    path = write_request_pending({"model": "gpt-4"}, label="test")
-
-    assert path is None
-    # No files should be created
-    assert list(tmp_path.glob("*.txt")) == []
-
-
-def test_logging_enabled_no_dir_returns_none_but_console_logs(monkeypatch, caplog):
-    """When logging is enabled but no directory set, returns None but still logs to console."""
+def test_no_dir_returns_none_but_console_logs(monkeypatch, caplog):
+    """When no log directory is set, returns None for file but still logs to console."""
     import logging
     from unillm import settings
     from unillm import logger
 
-    # Clear env var so monkeypatch takes effect (env var takes precedence in _get_log_dir)
     monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
-    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
     monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", "")
-    monkeypatch.setattr(logger, "_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
     monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
     monkeypatch.setattr(logger, "_LOG_DIR", None)
 
@@ -291,12 +306,32 @@ def test_logging_enabled_no_dir_returns_none_but_console_logs(monkeypatch, caplo
 
     path = write_request_pending({"model": "gpt-4"}, label="test")
 
-    # File path is None (no directory)
     assert path is None
-
-    # But console log should still happen
     assert "LLM request" in caplog.text
     assert "gpt-4" in caplog.text
+
+
+def test_terminal_off_still_writes_files(tmp_path, monkeypatch, caplog):
+    """With terminal logging off but log dir set, files are still written."""
+    import logging
+    from unillm import settings
+    from unillm import logger
+
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+    caplog.set_level(logging.DEBUG, logger="unillm")
+
+    path = write_request_pending({"model": "gpt-4"}, label="test")
+
+    assert path is not None
+    assert path.exists()
+    # No console output when terminal logging is off
+    assert "LLM request" not in caplog.text
 
 
 # --------------------------------------------------------------------------- #
@@ -542,6 +577,290 @@ class TestTraceHierarchy:
 
         # unify is child of unillm
         assert unify_s.parent.span_id == unillm_s.context.span_id
+
+
+class TestLogUsage:
+    """Tests for log_usage() — external session usage logging (e.g. Realtime API)."""
+
+    def test_writes_log_file_with_usage_and_transcript(self, tmp_path, monkeypatch):
+        """log_usage writes a complete log file with request context and usage."""
+        from unittest.mock import patch
+        from unillm import settings
+        from unillm import logger
+        from unillm.logger import log_usage
+
+        # Configure file logging
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        # Realistic Realtime API usage from a single response.done event
+        usage = {
+            "input_tokens": 150,
+            "output_tokens": 80,
+            "total_tokens": 230,
+            "input_token_details": {
+                "audio_tokens": 130,
+                "text_tokens": 20,
+                "cached_tokens": 0,
+            },
+            "output_token_details": {
+                "audio_tokens": 70,
+                "text_tokens": 10,
+            },
+        }
+
+        transcript = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What's the weather like?"},
+            {"role": "assistant", "content": "Let me check on that for you."},
+        ]
+
+        with patch("unillm.logger.unify.deduct_credits"):
+            billed_cost = log_usage(
+                "gpt-4o-realtime-preview",
+                usage,
+                transcript=transcript,
+                label="gpt-4o-realtime-preview",
+            )
+
+        # Should return a positive billed cost
+        assert billed_cost > 0
+
+        # Should have created exactly one log file with _usage suffix
+        log_files = list(tmp_path.glob("*_usage.txt"))
+        assert len(log_files) == 1
+
+        content = log_files[0].read_text()
+
+        # Log file should contain the request section with model and transcript
+        assert "LLM request" in content
+        assert "gpt-4o-realtime-preview" in content
+        assert "What's the weather like?" in content
+        assert "Let me check on that for you." in content
+
+        # Log file should contain the response section with usage stats
+        assert "LLM response" in content
+        assert "[usage]" in content
+        assert "audio_tokens" in content
+        assert "provider_cost" in content
+        assert "billed_cost" in content
+
+    def test_deducts_credits(self, tmp_path, monkeypatch):
+        """log_usage deducts the billed cost via unify.deduct_credits."""
+        from unittest.mock import patch, MagicMock
+        from unillm import settings
+        from unillm import logger
+        from unillm.logger import log_usage
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        usage = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "input_token_details": {
+                "audio_tokens": 80,
+                "text_tokens": 20,
+            },
+            "output_token_details": {
+                "audio_tokens": 40,
+                "text_tokens": 10,
+            },
+        }
+
+        mock_deduct = MagicMock()
+        with patch("unillm.logger.unify.deduct_credits", mock_deduct):
+            billed_cost = log_usage("gpt-4o-realtime-preview", usage)
+
+        # Should have called deduct_credits with the billed amount
+        mock_deduct.assert_called_once()
+        deducted_amount = mock_deduct.call_args[0][0]
+        assert deducted_amount == billed_cost
+        assert deducted_amount > 0
+
+    def test_works_without_transcript(self, tmp_path, monkeypatch):
+        """log_usage works when no transcript is provided."""
+        from unittest.mock import patch
+        from unillm import settings
+        from unillm import logger
+        from unillm.logger import log_usage
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        usage = {"input_tokens": 50, "output_tokens": 30}
+
+        with patch("unillm.logger.unify.deduct_credits"):
+            billed_cost = log_usage("gpt-4o-realtime-preview", usage)
+
+        assert billed_cost > 0
+
+        log_files = list(tmp_path.glob("*_usage.txt"))
+        assert len(log_files) == 1
+
+        content = log_files[0].read_text()
+        # Should NOT contain "messages" key when no transcript
+        assert "messages" not in content
+        assert "gpt-4o-realtime-preview" in content
+
+    def test_resilient_to_deduct_failure(self, tmp_path, monkeypatch):
+        """log_usage still writes the log file even if credit deduction fails."""
+        from unittest.mock import patch
+        from unillm import settings
+        from unillm import logger
+        from unillm.logger import log_usage
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        usage = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "input_token_details": {"audio_tokens": 80, "text_tokens": 20},
+            "output_token_details": {"audio_tokens": 40, "text_tokens": 10},
+        }
+
+        with patch(
+            "unillm.logger.unify.deduct_credits",
+            side_effect=ConnectionError("no connection"),
+        ):
+            # Should not raise
+            billed_cost = log_usage("gpt-4o-realtime-preview", usage)
+
+        # Cost should still be computed
+        assert billed_cost > 0
+
+        # Log file should still exist
+        log_files = list(tmp_path.glob("*_usage.txt"))
+        assert len(log_files) == 1
+
+    def test_emits_llm_event(self, tmp_path, monkeypatch):
+        """log_usage emits an LLMEvent so downstream hooks (e.g. cumulative
+        spend tracking) fire."""
+        from unittest.mock import patch
+        from unillm import settings
+        from unillm import logger
+        from unillm.logger import log_usage
+        from unillm.llm_events import LLMEvent
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        usage = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "input_token_details": {"audio_tokens": 80, "text_tokens": 20},
+            "output_token_details": {"audio_tokens": 40, "text_tokens": 10},
+        }
+
+        captured_events = []
+
+        def capture_hook(event: LLMEvent) -> None:
+            captured_events.append(event)
+
+        with (
+            patch("unillm.logger.unify.deduct_credits"),
+            patch(
+                "unillm.llm_events._emit_llm_event",
+                side_effect=lambda e: captured_events.append(e),
+            ),
+        ):
+            log_usage("gpt-4o-realtime-preview", usage)
+
+        assert len(captured_events) == 1
+        event = captured_events[0]
+        assert isinstance(event, LLMEvent)
+        assert event.request["model"] == "gpt-4o-realtime-preview"
+        assert event.provider_cost > 0
+        assert event.billed_cost > 0
+        assert event.response["usage"] == usage
+
+
+class TestStreamingFileLogging:
+    """Tests that streaming LLM calls write file-based I/O logs.
+
+    The non-streaming path (_generate_non_stream) calls write_request_pending
+    and append_response_and_finalize. The streaming path (_generate_stream)
+    must do the same so that CI artifacts capture the full request/response
+    for every LLM call regardless of modality.
+    """
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_writes_log_file(self, tmp_path, monkeypatch):
+        """AsyncUnify with stream=True should produce a log file."""
+        from unittest.mock import patch
+        from unillm import settings
+        from unillm import logger
+        import unillm
+
+        # Configure file logging to tmp_path
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        # Build mock streaming chunks
+        mock_chunk1 = MagicMock()
+        mock_chunk1.choices = [MagicMock()]
+        mock_chunk1.choices[0].delta.content = "Hello"
+        mock_chunk1.usage = None
+
+        mock_chunk2 = MagicMock()
+        mock_chunk2.choices = [MagicMock()]
+        mock_chunk2.choices[0].delta.content = " world"
+        mock_chunk2.usage = None
+
+        async def mock_acompletion(*args, **kwargs):
+            async def async_gen():
+                yield mock_chunk1
+                yield mock_chunk2
+
+            return async_gen()
+
+        with patch(
+            "unillm.clients.uni_llm.litellm.acompletion",
+            side_effect=mock_acompletion,
+        ):
+            client = unillm.AsyncUnify("gpt-4@openai", stream=True)
+            gen = await client.generate(
+                messages=[{"role": "user", "content": "Hi"}],
+            )
+            chunks = []
+            async for chunk in gen:
+                chunks.append(chunk)
+
+        # Verify the LLM call itself worked
+        assert "".join(chunks) == "Hello world"
+
+        # A log file must exist — streaming should log just like non-streaming
+        log_files = list(tmp_path.glob("*.txt"))
+        assert len(log_files) >= 1, (
+            f"Streaming call produced no log files in {tmp_path}. "
+            f"Non-streaming calls write a _pending → _hit/_miss file, "
+            f"but the streaming path skips write_request_pending entirely."
+        )
 
 
 class TestSettingsValidation:

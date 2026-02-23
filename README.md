@@ -2,7 +2,37 @@
 
 Lightweight LLM client wrapper with provider normalization, caching, and observability. Routes requests through [LiteLLM](https://github.com/BerriAI/litellm) with a unified `endpoint` format (`model@provider`) and automatic provider-specific preprocessing.
 
-This package is used as a dependency by higher-level frameworks like [Unity](https://github.com/unifyai/unity), and integrates with the [Unify](https://github.com/unifyai/unify) SDK for query logging.
+## System Architecture
+
+UniLLM is the LLM abstraction layer in a multi-repository system:
+
+```
+         User (Console/Phone/SMS/Email)
+                      │
+    ┌─────────────────┴──────────────────┐
+    │           Communication            │
+    │    (Webhooks, Voice, SMS, Email)   │
+    └────┬───────────────────────────────┘
+         │
+    ┌────┴────┐    ┌─────────┐    ┌─────────┐
+    │  Unity  │    │  Unify  │    │Orchestra│
+    │ (Brain) │───▶│  (SDK)  │───▶│  (API)  │
+    │         │    │         │    │  (DB)   │
+    └────┬────┘    └────┬────┘    └────┬────┘
+         │              ▲              ▲
+         │              │              │
+         │    ┌─────────┴─┐       ┌────┴───────┐
+         └───▶│  UniLLM   │       │  Console   │
+              │ (LLM API) │       │(Interfaces)│
+              └───────────┘       └────────────┘
+```
+
+**This repo (UniLLM)** handles all LLM inference for Unity. It normalizes requests across providers (OpenAI, Anthropic, Vertex AI, etc.), provides response caching for test determinism, and integrates with Unify for query logging.
+
+Related repositories:
+- [Unity](https://github.com/unifyai/unity) — AI assistant brain (primary consumer)
+- [Unify](https://github.com/unifyai/unify) — Python SDK for logging and persistence
+- [Orchestra](https://github.com/unifyai/orchestra) — Backend API and database
 
 ## Installation
 
@@ -14,12 +44,33 @@ Or add to your project's dependencies pointing to this repo.
 
 ## Configuration
 
+### API Keys
+
 Set API keys for the providers you want to use:
 
 ```bash
 export OPENAI_API_KEY=<your-key>
 export ANTHROPIC_API_KEY=<your-key>
 # ... other provider keys
+```
+
+### Google Cloud / Vertex AI
+
+For Vertex AI models (Gemini, Claude on Vertex, etc.), authenticate using Google Cloud Application Default Credentials:
+
+```bash
+# One-time setup: authenticate with your Google Cloud account
+gcloud auth application-default login
+
+# Set your GCP project and location
+export VERTEXAI_PROJECT=<your-project-id>
+export VERTEXAI_LOCATION=<your-location>  # e.g., us-central1, europe-west1
+```
+
+Alternatively, use a service account JSON file:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 ```
 
 ## Basic Usage
@@ -131,13 +182,13 @@ response = client.generate(
 
 ### Console & File Logging
 
-Controlled via environment variables:
+Terminal and file logging are independently controlled:
 
 ```bash
-# Master switch (default: true)
-export UNILLM_LOG=true
+# Terminal (console) output (default: true)
+export UNILLM_TERMINAL_LOG=true
 
-# Enable file logging (optional)
+# File-based traces (independent of terminal)
 export UNILLM_LOG_DIR=/path/to/logs
 ```
 
@@ -212,6 +263,25 @@ uv sync
 ```bash
 uv run pytest tests/ -v
 ```
+
+### Running Tests in CI
+
+**Tests are opt-in to reduce GitHub Actions costs.** Tests only run when explicitly requested:
+
+- **Commit message**: Include `[run-tests]` in your commit message
+- **PR title**: Include `[run-tests]` in your pull request title
+- **Manual trigger**: Use the "Run workflow" button in GitHub Actions
+
+Examples:
+```bash
+# Run tests on this commit
+git commit -m "Fix caching logic [run-tests]"
+
+# No tests (default)
+git commit -m "Update README"
+```
+
+Note: The `black` formatting check always runs on every push.
 
 ### Pre-commit Hooks
 

@@ -10,8 +10,8 @@ All logs are organized under `logs/` with four main subdirectories:
 
 | Directory | Purpose | Structure | Control |
 |-----------|---------|-----------|---------|
-| `logs/unillm/` | Raw LLM request/response traces | `.txt` files per request | `UNILLM_LOG` + `UNILLM_LOG_DIR` |
-| `logs/unify/` | Unify SDK HTTP traces | JSON files per request | `UNIFY_LOG` + `UNIFY_LOG_DIR` |
+| `logs/unillm/` | Raw LLM request/response traces | `.txt` files per request | `UNILLM_LOG_DIR` (+ `UNILLM_TERMINAL_LOG` for console) |
+| `logs/unify/` | Unify SDK HTTP traces | JSON files per request | `UNIFY_LOG_DIR` (+ `UNIFY_TERMINAL_LOG` for console) |
 | `logs/orchestra/` | Orchestra API traces (server-side) | Per-request JSON with spans | `ORCHESTRA_LOG_DIR` |
 | `logs/all/` | Cross-repo OpenTelemetry traces | `{trace_id}.jsonl` per trace | `*_OTEL_LOG_DIR` |
 
@@ -82,12 +82,12 @@ Each file contains the full request and response payloads:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `UNILLM_LOG` | `true` | Master switch for all logging (console + file) |
-| `UNILLM_LOG_DIR` | `""` (disabled) | Directory for file logging; if empty, console only |
+| `UNILLM_TERMINAL_LOG` | `true` | Terminal (console) output for LLM I/O |
+| `UNILLM_LOG_DIR` | `""` (disabled) | Directory for file-based traces (independent of terminal) |
 
-**Enabling file logging:**
+**Quiet terminal, verbose files (typical production):**
 ```bash
-export UNILLM_LOG=true
+export UNILLM_TERMINAL_LOG=false
 export UNILLM_LOG_DIR=/path/to/logs/unillm
 ```
 
@@ -153,12 +153,12 @@ Each JSON file contains the full request and response:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `UNIFY_LOG` | `true` | Master switch for all logging (console + file) |
-| `UNIFY_LOG_DIR` | `""` (disabled) | Directory for file logging; if empty, console only |
+| `UNIFY_TERMINAL_LOG` | `true` | Terminal (console) output for HTTP requests |
+| `UNIFY_LOG_DIR` | `""` (disabled) | Directory for file-based request traces (independent of terminal) |
 
-**Enabling file logging:**
+**Quiet terminal, verbose files:**
 ```bash
-export UNIFY_LOG=true
+export UNIFY_TERMINAL_LOG=false
 export UNIFY_LOG_DIR=/path/to/logs/unify
 ```
 
@@ -398,7 +398,7 @@ os.environ["UNILLM_OTEL_LOG_DIR"] = "/path/to/logs/all"
 
 ## Console Logging
 
-When `UNILLM_LOG=true` (the default), request/response payloads are logged to the console via Python's logging system. Console output is truncated for readability (500 chars max).
+When `UNILLM_TERMINAL_LOG=true` (the default), request/response payloads are logged to the console via Python's logging system. Console output is truncated for readability (500 chars max).
 
 To see console logs in pytest:
 ```bash

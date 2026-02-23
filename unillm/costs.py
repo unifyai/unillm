@@ -1,9 +1,31 @@
 """Cost computation using LiteLLM's pricing data."""
 
+import os
 from typing import Optional, Union
 
 import litellm
-import unify
+
+# Cost margin multiplier for billing users. Defaults to 2x to cover costs + profit.
+# Configurable via UNILLM_COST_MARGIN environment variable.
+_DEFAULT_COST_MARGIN = 2.0
+
+
+def get_cost_margin() -> float:
+    """Get the cost margin multiplier from environment or use default.
+
+    The margin is applied to provider costs to determine what users are billed.
+    Configurable via the UNILLM_COST_MARGIN environment variable.
+
+    Returns:
+        The cost margin multiplier (default: 5.0).
+    """
+    margin_str = os.environ.get("UNILLM_COST_MARGIN")
+    if margin_str is not None:
+        try:
+            return float(margin_str)
+        except ValueError:
+            pass
+    return _DEFAULT_COST_MARGIN
 
 
 def _normalize_model_name(model: str) -> str:
@@ -234,44 +256,3 @@ def compute_full_cost_from_usage(model: str, usage: Union[dict, object]) -> floa
     return (prompt_tokens * input_cost_per_token) + (
         completion_tokens * output_cost_per_token
     )
-
-
-def deduct_credits_for_usage(
-    model: str,
-    response: Union[dict, object],
-) -> float:
-    """
-    Compute the cost of an LLM response and deduct credits from the user's account.
-
-    This function extracts usage information from an API response, computes the
-    cost using LiteLLM's pricing data (including audio tokens for Realtime API),
-    and deducts the appropriate credits.
-
-    Supports:
-    - Standard chat completions (prompt_tokens, completion_tokens)
-    - Realtime API responses (input_token_details.audio_tokens, etc.)
-
-    Args:
-        model: The model identifier (e.g., 'gpt-4o', 'gpt-4o-realtime-preview').
-        response: The full API response object or dict containing usage information.
-
-    Returns:
-        The cost that was deducted in USD.
-
-    Raises:
-        ValueError: If the model is not found in LiteLLM's pricing data.
-        ValueError: If no usage information is found in the response.
-    """
-    # Extract usage from response
-    usage = _extract_usage_from_response(response)
-    if usage is None:
-        raise ValueError("No usage information found in response")
-
-    # Compute cost (this will raise ValueError if model not found)
-    cost = compute_full_cost_from_usage(model, usage)
-
-    # Deduct credits if cost is positive
-    if cost > 0:
-        unify.deduct_credits(cost)
-
-    return cost

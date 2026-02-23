@@ -2,6 +2,7 @@
 import abc
 import asyncio
 import inspect
+import logging
 
 from typing import (
     Any,
@@ -22,6 +23,15 @@ import litellm
 import unify
 from openai._types import Headers
 from ..costs import compute_cost_from_response
+from ..limit_hooks import (
+    check_limits,
+    check_limits_sync,
+    is_limit_check_enabled,
+    LimitCheckRequest,
+    SpendingLimitExceededError,
+)
+
+_LOGGER = logging.getLogger("unillm")
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionMessageParam,
@@ -35,7 +45,15 @@ from .provider_preprocessing import apply_provider_preprocessing
 
 from ..caching import _get_cache, _write_to_cache, is_caching_enabled
 from ..cache_events import _emit_cache_event
-from ..helpers import _default, get_seed
+from ..cost_tracker import CostEvent, _emit_cost_event
+from ..llm_events import _emit_llm_event, LLMEvent
+from ..helpers import (
+    _default,
+    get_seed,
+    retry_transient_400_async,
+    retry_transient_400_sync,
+    UNSET,
+)
 from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
 from ..logger import (
@@ -44,8 +62,9 @@ from ..logger import (
     llm_span,
     set_span_response,
 )
-from ..types import Prompt
-from .shared_session import SHARED_SESSION
+from ..types import Prompt, PromptCacheParam, VALID_CACHE_VALUES
+from .shared_session import get_shared_session
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 class _UniClient(_Client, abc.ABC):
@@ -80,6 +99,8 @@ class _UniClient(_Client, abc.ABC):
         return_full_completion: bool = False,
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
+        prompt_caching: Optional[PromptCacheParam] = UNSET,  # type: ignore[assignment]
+        origin: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         **kwargs,
@@ -200,6 +221,11 @@ class _UniClient(_Client, abc.ABC):
             will read the closest match from the cache, and overwrite it if cache writing
             is enabled. This argument only has any effect when stream=False.
 
+            origin: An optional string tag for identifying the origin of LLM
+            calls in log files, OTel spans, and events. Useful when multiple
+            agents or subsystems share the same process and you need to tell
+            their logs apart (e.g. ``"AgentA"``, ``"planner"``).
+
             extra_headers: Additional "passthrough" headers for the request which are
             provider-specific, and are not part of the OpenAI standard. They are handled
             by the provider-specific API.
@@ -239,6 +265,8 @@ class _UniClient(_Client, abc.ABC):
             return_full_completion=return_full_completion,
             cache=cache,
             cache_backend=cache_backend,
+            prompt_caching=None if prompt_caching is UNSET else prompt_caching,
+            origin=origin,
             # passthrough arguments
             extra_headers=extra_headers,
             **kwargs,
@@ -476,32 +504,34 @@ class _UniClient(_Client, abc.ABC):
                     raise
 
                 if stateful and placeholder_idx is not None:
-                    if return_full_completion:
-                        self._messages.insert(
-                            placeholder_idx,
-                            res.choices[0].message.model_dump(warnings=False),
-                        )
-                    else:
-                        self._messages.insert(
-                            placeholder_idx,
-                            {"role": "assistant", "content": str(res)},
-                        )
+                    # Always store full message (preserves thinking blocks for Claude, etc.)
+                    self._messages.insert(
+                        placeholder_idx,
+                        res.choices[0].message.model_dump(warnings=False),
+                    )
                 elif self._messages:
                     self._messages.clear()
+
+                # Extract content if caller doesn't want full completion
+                if not return_full_completion:
+                    content = res.choices[0].message.content
+                    return content.strip(" ") if content else ""
                 return res
 
             return _await_and_process(response)
 
         # ---------- non-streaming path ----------
         if stateful:
-            if return_full_completion:
-                assistant_dict = response.choices[0].message.model_dump(warnings=False)
-            else:
-                assistant_dict = {"role": "assistant", "content": str(response)}
+            # Always store full message (preserves thinking blocks for Claude, etc.)
+            assistant_dict = response.choices[0].message.model_dump(warnings=False)
             self._append_to_history(assistant_dict)
         elif self._messages:
             self._messages.clear()
 
+        # Extract content if caller doesn't want full completion
+        if not return_full_completion:
+            content = response.choices[0].message.content
+            return content.strip(" ") if content else ""
         return response
 
     # Generate #
@@ -511,12 +541,7 @@ class _UniClient(_Client, abc.ABC):
         self,
         user_message: Optional[str] = None,
         system_message: Optional[str] = None,
-        messages: Optional[
-            Union[
-                List[ChatCompletionMessageParam],
-                Dict[str, List[ChatCompletionMessageParam]],
-            ]
-        ] = None,
+        messages: Optional[List[ChatCompletionMessageParam]] = None,
         *,
         frequency_penalty: Optional[float] = None,
         logit_bias: Optional[Dict[str, int]] = None,
@@ -541,6 +566,8 @@ class _UniClient(_Client, abc.ABC):
         return_full_completion: Optional[bool] = None,
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
+        prompt_caching: Optional[PromptCacheParam] = None,
+        origin: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         service_tier: Optional[str] = None,
@@ -556,10 +583,9 @@ class _UniClient(_Client, abc.ABC):
             system_message: An optional string containing the system message. This
             always appears at the beginning of the list of messages.
 
-            messages: A list of messages comprising the conversation so far, or
-            optionally a dictionary of such messages, with clients as the keys in the
-            case of multi-llm clients. This will be appended to the system_message if it
-            is not None, and any user_message will be appended if it is not None.
+            messages: A list of messages comprising the conversation so far. This will
+            be appended to the system_message if it is not None, and any user_message
+            will be appended if it is not None.
 
             frequency_penalty: Number between -2.0 and 2.0. Positive values penalize new
             tokens based on their existing frequency in the text so far, decreasing the
@@ -663,6 +689,9 @@ class _UniClient(_Client, abc.ABC):
             will read the closest match from the cache, and overwrite it if cache writing
             is enabled. This argument only has any effect when stream=False.
 
+            origin: An optional string tag for identifying the origin of this
+            LLM call in log files, OTel spans, and events.
+
             extra_headers: Additional "passthrough" headers for the request which are
             provider-specific, and are not part of the OpenAI standard. They are handled
             by the provider-specific API.
@@ -703,12 +732,7 @@ class _UniClient(_Client, abc.ABC):
             else _default(return_full_completion, self._return_full_completion)
         )
         cache = _default(cache, self._cache)
-        _cache_modes = ["read", "read-only", "write", "both"]
-        assert cache in _cache_modes + [m + "-closest" for m in _cache_modes] + [
-            True,
-            False,
-            None,
-        ]
+        assert cache in VALID_CACHE_VALUES
         ret = self._generate(
             messages=messages,
             frequency_penalty=_default(frequency_penalty, self._frequency_penalty),
@@ -740,6 +764,8 @@ class _UniClient(_Client, abc.ABC):
             return_full_completion=return_full_completion,
             cache=_default(cache, is_caching_enabled()),
             cache_backend=_default(cache_backend, self._cache_backend),
+            prompt_caching=_default(prompt_caching, self._prompt_caching),
+            origin=_default(origin, self._origin),
             # passthrough arguments
             extra_headers=_default(extra_headers, self._extra_headers),
             **kwargs,
@@ -765,6 +791,8 @@ class Unify(_UniClient):
         stream_options: Optional[ChatCompletionStreamOptionsParam],
         # python client arguments
         return_full_completion: bool,
+        prompt_caching: Optional[PromptCacheParam],
+        origin: Optional[str] = None,
     ) -> Generator[str, None, None]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -773,13 +801,28 @@ class Unify(_UniClient):
             stream_options=stream_options,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider)
+        apply_provider_preprocessing(kw, self._provider, prompt_caching)
+
+        # Check spending limits before starting stream
+        if is_limit_check_enabled():
+            limit_request = LimitCheckRequest(
+                model=kw.get("model", endpoint),
+                endpoint=endpoint,
+            )
+            limit_result = check_limits_sync(limit_request)
+            if not limit_result.allowed:
+                raise SpendingLimitExceededError(limit_result)
 
         # Track usage from the stream for cost deduction
         usage_info = None
+        llm_error: BaseException | None = None
+        provider_cost: float | None = None
+        billed_cost: float | None = None
 
         try:
-            chat_completion = litellm.completion(shared_session=SHARED_SESSION, **kw)
+            chat_completion = retry_transient_400_sync(
+                lambda: litellm.completion(**kw),
+            )
             for chunk in chat_completion:
                 # Capture usage if present in the chunk (final chunk with include_usage)
                 if hasattr(chunk, "usage") and chunk.usage is not None:
@@ -792,18 +835,171 @@ class Unify(_UniClient):
                 if content is not None:
                     yield content
         except litellm.exceptions.APIError as e:
-            raise Exception(e.message)
+            llm_error = Exception(e.message)
+            raise llm_error
+        except Exception as e:
+            llm_error = e
+            raise
         finally:
             # Deduct credits based on usage after streaming completes
             if usage_info is not None:
                 prompt_tokens = getattr(usage_info, "prompt_tokens", 0) or 0
                 completion_tokens = getattr(usage_info, "completion_tokens", 0) or 0
                 if prompt_tokens > 0 or completion_tokens > 0:
-                    from ..costs import compute_cost
+                    from ..costs import compute_cost, get_cost_margin
 
-                    cost = compute_cost(endpoint, prompt_tokens, completion_tokens)
-                    if cost > 0:
-                        unify.deduct_credits(cost)
+                    provider_cost = compute_cost(
+                        kw["model"],
+                        prompt_tokens,
+                        completion_tokens,
+                    )
+                    if provider_cost > 0:
+                        billed_cost = provider_cost * get_cost_margin()
+                        unify.deduct_credits(billed_cost, api_key=self._api_key)
+
+            # Emit LLM event (after streaming completes)
+            _emit_llm_event(
+                LLMEvent(
+                    request=kw,
+                    response=None,  # No single response for streams
+                    provider_cost=provider_cost,
+                    billed_cost=billed_cost,
+                    origin=origin,
+                ),
+            )
+
+            _emit_cost_event(
+                CostEvent.from_completion(
+                    model=kw.get("model", ""),
+                    provider_cost=provider_cost,
+                    billed_cost=billed_cost,
+                    completion=usage_info,
+                    cache_status="disabled",  # Streaming bypasses cache
+                ),
+            )
+
+    def _execute_postprocessing_retry(
+        self,
+        retry_kw: dict,
+        endpoint: str,
+        label_suffix: str,
+        origin: Optional[str] = None,
+    ) -> "ChatCompletion":
+        """Execute a single postprocessing retry: LLM call + logging + cost deduction."""
+        label = f"{endpoint}-{label_suffix}"
+        pending = write_request_pending(
+            retry_kw,
+            label=label,
+            origin=origin,
+        )
+        completion = None
+        try:
+            with llm_span(
+                label,
+                self._model,
+                provider=self._provider,
+                origin=origin,
+            ):
+                completion = retry_transient_400_sync(
+                    lambda: litellm.completion(**retry_kw),
+                )
+        finally:
+            try:
+                body = (
+                    completion.model_dump(warnings=False)
+                    if completion is not None and hasattr(completion, "model_dump")
+                    else completion
+                )
+                final_path = append_response_and_finalize(
+                    pending,
+                    body,
+                    "retry",
+                    label=label,
+                    origin=origin,
+                )
+                if final_path and self._on_log_file:
+                    self._on_log_file(final_path)
+            except Exception:
+                pass
+        if completion is not None:
+            from ..costs import get_cost_margin
+
+            cost = compute_cost_from_response(retry_kw["model"], completion)
+            if cost is not None and cost > 0:
+                margin = get_cost_margin()
+                billed = cost * margin
+                unify.deduct_credits(billed, api_key=self._api_key)
+
+                _emit_cost_event(
+                    CostEvent.from_completion(
+                        model=retry_kw.get("model", ""),
+                        provider_cost=cost,
+                        billed_cost=billed,
+                        completion=completion,
+                        cache_status="miss",
+                    ),
+                )
+        return completion
+
+    def _run_postprocessing(
+        self,
+        chat_completion: "ChatCompletion",
+        kw: dict,
+        endpoint: str,
+        prompt: "Prompt",
+        original_tool_choice: Optional[str],
+        origin: Optional[str] = None,
+    ) -> "ChatCompletion":
+        """Run all postprocessing checks, retrying once per check if needed."""
+        from .provider_postprocessing import (
+            check_needs_postprocessing,
+            build_retry_kw,
+            check_response_format_compliance,
+            build_response_format_retry_kw,
+        )
+
+        # Step 1: Provider-specific postprocessing (tool retries)
+        raw_tools = kw.get("tools")
+        needs_retry, retry_reason = check_needs_postprocessing(
+            response=chat_completion,
+            provider=self._provider,
+            original_tool_choice=original_tool_choice,
+            reasoning_effort=prompt.components.get("reasoning_effort"),
+            tools=list(raw_tools) if raw_tools is not None else None,
+        )
+        if needs_retry:
+            retry_kw = build_retry_kw(
+                kw=kw,
+                response=chat_completion,
+                retry_reason=retry_reason,
+            )
+            chat_completion = self._execute_postprocessing_retry(
+                retry_kw,
+                endpoint,
+                "retry",
+                origin=origin,
+            )
+
+        # Step 2: response_format schema validation
+        rf_needs_retry, rf_error, rf_model = check_response_format_compliance(
+            response=chat_completion,
+            kw=kw,
+        )
+        if rf_needs_retry and rf_model is not None:
+            rf_retry_kw = build_response_format_retry_kw(
+                kw=kw,
+                response=chat_completion,
+                validation_error=rf_error,
+                pydantic_model=rf_model,
+            )
+            chat_completion = self._execute_postprocessing_retry(
+                rf_retry_kw,
+                endpoint,
+                "rf-retry",
+                origin=origin,
+            )
+
+        return chat_completion
 
     def _generate_non_stream(
         self,
@@ -813,6 +1009,8 @@ class Unify(_UniClient):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
+        prompt_caching: Optional[PromptCacheParam],
+        origin: Optional[str] = None,
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -820,11 +1018,18 @@ class Unify(_UniClient):
             stream=False,
             stream_options=None,
         )
+        # Capture original tool_choice before preprocessing may modify it
+        original_tool_choice = kw.get("tool_choice")
+
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider)
+        apply_provider_preprocessing(kw, self._provider, prompt_caching)
 
         # Write request to log file (before LLM call) so we don't lose it if call hangs
-        pending_path = write_request_pending(kw, label=endpoint)
+        pending_path = write_request_pending(
+            kw,
+            label=endpoint,
+            origin=origin,
+        )
 
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
@@ -832,81 +1037,165 @@ class Unify(_UniClient):
         else:
             read_closest = False
 
-        # Wrap in OTel span
-        with llm_span(endpoint, self._model, provider=self._provider) as span:
-            chat_completion = None
-            in_cache = False
-            if cache in [True, "both", "read", "read-only"]:
-                chat_completion = _get_cache(
-                    fn_name="chat.completions.create",
-                    kw=kw,
-                    raise_on_empty=cache == "read-only",
-                    read_closest=read_closest,
-                    delete_closest=read_closest,
-                    backend=cache_backend,
-                )
-                in_cache = True if chat_completion is not None else False
-            if chat_completion is None:
-                try:
-                    chat_completion = litellm.completion(
-                        shared_session=SHARED_SESSION,
-                        **kw,
-                    )
-                except litellm.exceptions.APIError as e:
-                    raise Exception(e.message)
+        # Initialize before try block so finally can access them
+        chat_completion = None
+        is_cache_enabled = cache in [True, "both", "read", "read-only"]
+        cache_status = "pending" if is_cache_enabled else "disabled"
+        in_cache = False
+        llm_error: BaseException | None = None
+        provider_cost: float | None = None
+        billed_cost: float | None = None
 
-            # Determine cache status and emit event
-            cache_status = "hit" if in_cache else "miss"
-
-            # Set span response attributes
-            set_span_response(span, cache_status, chat_completion)
-
-            _emit_cache_event(
-                {
-                    "cache_status": cache_status,
-                    "endpoint": endpoint,
-                    "request_kw": kw,
-                },
-            )
-
-        # Finalize log file with response and cache status
+        # Wrap in OTel span with try/finally to guarantee log finalization
         try:
-            resp_body = (
-                chat_completion.model_dump(warnings=False)
-                if hasattr(chat_completion, "model_dump")
-                else chat_completion
-            )
-            append_response_and_finalize(
-                pending_path,
-                resp_body,
-                cache_status,
-                label=endpoint,
-            )
-        except Exception:
-            pass
+            with llm_span(
+                endpoint,
+                self._model,
+                provider=self._provider,
+                origin=origin,
+            ) as span:
+                if is_cache_enabled:
+                    chat_completion = _get_cache(
+                        fn_name="chat.completions.create",
+                        kw=kw,
+                        raise_on_empty=cache == "read-only",
+                        read_closest=read_closest,
+                        delete_closest=read_closest,
+                        backend=cache_backend,
+                    )
+                    in_cache = True if chat_completion is not None else False
+                if chat_completion is None:
+                    # Check spending limits before making LLM call (cache miss)
+                    if is_limit_check_enabled():
+                        limit_request = LimitCheckRequest(
+                            model=kw.get("model", endpoint),
+                            endpoint=endpoint,
+                        )
+                        limit_result = check_limits_sync(limit_request)
+                        if not limit_result.allowed:
+                            raise SpendingLimitExceededError(limit_result)
 
+                    try:
+                        chat_completion = retry_transient_400_sync(
+                            lambda: litellm.completion(**kw),
+                        )
+                    except litellm.exceptions.APIError as e:
+                        llm_error = Exception(e.message)
+                        raise llm_error
+
+                # Determine cache status after resolution
+                if is_cache_enabled:
+                    cache_status = "hit" if in_cache else "miss"
+
+                # Set span response attributes
+                set_span_response(span, cache_status, chat_completion)
+
+                _emit_cache_event(
+                    {
+                        "cache_status": cache_status,
+                        "endpoint": endpoint,
+                        "request_kw": kw,
+                    },
+                )
+        except BaseException as e:
+            if llm_error is None:
+                llm_error = e
+            if cache_status == "pending":
+                cache_status = "error"
+            raise
+        finally:
+            # Finalize log file with response and cache status (always runs)
+            try:
+                resp_body = (
+                    chat_completion.model_dump(warnings=False)
+                    if chat_completion is not None
+                    and hasattr(chat_completion, "model_dump")
+                    else chat_completion
+                )
+                # For logging, include error info if present
+                log_body = resp_body
+                if llm_error is not None:
+                    error_info = {
+                        "type": type(llm_error).__name__,
+                        "message": str(llm_error),
+                    }
+                    log_body = {"response": resp_body, "error": error_info}
+                final_path = append_response_and_finalize(
+                    pending_path,
+                    log_body,
+                    cache_status,
+                    label=endpoint,
+                    origin=origin,
+                )
+                if final_path and self._on_log_file:
+                    self._on_log_file(final_path)
+            except Exception:
+                pass
+
+            # Compute costs for event (only for cache misses - cache hits are free)
+            if not in_cache and chat_completion is not None:
+                from ..costs import get_cost_margin
+
+                provider_cost = compute_cost_from_response(kw["model"], chat_completion)
+                if provider_cost is not None and provider_cost > 0:
+                    billed_cost = provider_cost * get_cost_margin()
+
+            # Emit LLM event (after LLM call, always runs)
+            # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
+            _emit_llm_event(
+                LLMEvent(
+                    request=kw,
+                    response=resp_body,
+                    provider_cost=provider_cost,
+                    billed_cost=billed_cost,
+                    origin=origin,
+                ),
+            )
+
+            _emit_cost_event(
+                CostEvent.from_completion(
+                    model=kw.get("model", ""),
+                    provider_cost=provider_cost,
+                    billed_cost=billed_cost,
+                    completion=chat_completion,
+                    cache_status=cache_status,
+                ),
+            )
+
+        # Deduct credits for cache misses (use already-computed billed_cost)
+        if billed_cost is not None and billed_cost > 0:
+            unify.deduct_credits(billed_cost, api_key=self._api_key)
+
+        # Apply postprocessing checks (tool retries + response_format validation)
+        original_completion = chat_completion
+        if chat_completion is not None:
+            chat_completion = self._run_postprocessing(
+                chat_completion,
+                kw,
+                endpoint,
+                prompt,
+                original_tool_choice,
+                origin=origin,
+            )
+
+        # Cache the FINAL response (after any post-processing), not intermediate ones
+        did_postprocess = chat_completion is not original_completion
         if (chat_completion is not None or read_closest) and cache in [
             True,
             "both",
             "write",
         ]:
-            if not in_cache or cache == "write":
+            # Write to cache if it wasn't a cache hit, or if post-processing changed it
+            if not in_cache or cache == "write" or did_postprocess:
                 _write_to_cache(
                     fn_name="chat.completions.create",
                     kw=kw,
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if not in_cache:
-            cost = compute_cost_from_response(endpoint, chat_completion)
-            if cost is not None and cost > 0:
-                unify.deduct_credits(cost)
-        if return_full_completion:
-            return chat_completion
-        content = chat_completion.choices[0].message.content
-        if content:
-            return content.strip(" ")
-        return ""
+
+        # Always return full completion; _apply_stateful_logic handles extraction
+        return chat_completion
 
     def _generate(  # noqa: WPS234, WPS211
         self,
@@ -935,6 +1224,8 @@ class Unify(_UniClient):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
+        prompt_caching: Optional[PromptCacheParam],
+        origin: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers],
         **kwargs,
@@ -968,6 +1259,8 @@ class Unify(_UniClient):
                 stream_options=stream_options,
                 # python client arguments
                 return_full_completion=return_full_completion,
+                prompt_caching=prompt_caching,
+                origin=origin,
             )
         return self._generate_non_stream(
             self._endpoint,
@@ -976,6 +1269,8 @@ class Unify(_UniClient):
             return_full_completion=return_full_completion,
             cache=cache,
             cache_backend=cache_backend,
+            prompt_caching=prompt_caching,
+            origin=origin,
         )
 
     def to_async_client(self):
@@ -994,6 +1289,31 @@ class AsyncUnify(_UniClient):
     """Class for interacting with the Unify chat completions endpoint in a synchronous
     manner."""
 
+    # Providers whose litellm handler expects an OpenAI SDK client (AsyncOpenAI)
+    # as the ``client`` kwarg.  We must NOT pass an AsyncHTTPHandler for these.
+    _OPENAI_SDK_PROVIDERS = frozenset({"openai", "azure", "azure_ai"})
+
+    _async_http_client: Optional[AsyncHTTPHandler] = None
+    _async_http_client_session = None  # tracks which aiohttp session the handler wraps
+
+    def _get_async_http_client(self) -> Optional[AsyncHTTPHandler]:
+        """Return an ``AsyncHTTPHandler`` backed by the shared aiohttp session,
+        but **only** for providers whose litellm handler accepts one (e.g.
+        Anthropic).  For OpenAI-SDK providers the ``client`` kwarg has a
+        different meaning (``AsyncOpenAI``), so we return ``None`` to avoid
+        interfering."""
+        if self._provider in self._OPENAI_SDK_PROVIDERS:
+            return None
+
+        session = get_shared_session()
+        if (
+            self._async_http_client is None
+            or self._async_http_client_session is not session
+        ):
+            self._async_http_client = AsyncHTTPHandler(shared_session=session)
+            self._async_http_client_session = session
+        return self._async_http_client
+
     async def _generate_stream(
         self,
         endpoint: str,
@@ -1002,6 +1322,8 @@ class AsyncUnify(_UniClient):
         stream_options: Optional[ChatCompletionStreamOptionsParam],
         # python client arguments
         return_full_completion: bool,
+        prompt_caching: Optional[PromptCacheParam],
+        origin: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -1010,16 +1332,64 @@ class AsyncUnify(_UniClient):
             stream_options=stream_options,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider)
+        apply_provider_preprocessing(kw, self._provider, prompt_caching)
+
+        # Write request to log file (before LLM call) so we don't lose it if call hangs
+        pending_path = write_request_pending(
+            kw,
+            label=endpoint,
+            origin=origin,
+        )
+
+        # Start limit check and stream connection in parallel for in-flight cancellation
+        limit_task: asyncio.Task | None = None
+        if is_limit_check_enabled():
+            limit_request = LimitCheckRequest(
+                model=kw.get("model", endpoint),
+                endpoint=endpoint,
+            )
+            limit_task = asyncio.create_task(
+                check_limits(limit_request),
+                name="spending_limit_check_stream",
+            )
 
         # Track usage from the stream for cost deduction
         usage_info = None
+        llm_error: BaseException | None = None
+        provider_cost: float | None = None
+        billed_cost: float | None = None
+        async_stream = None
+        collected_content: list[str] = []
 
         try:
-            async_stream = await litellm.acompletion(
-                shared_session=SHARED_SESSION,
-                **kw,
+            # Start stream connection (this initiates the LLM call)
+            stream_task = asyncio.create_task(
+                retry_transient_400_async(
+                    lambda: litellm.acompletion(
+                        shared_session=get_shared_session(),
+                        client=self._get_async_http_client(),
+                        **kw,
+                    ),
+                ),
+                name="llm_stream_init",
             )
+
+            # Wait for limit check (fast) while stream connects
+            if limit_task is not None:
+                limit_result = await limit_task
+                limit_task = None
+                if not limit_result.allowed:
+                    # Cancel in-flight stream connection
+                    stream_task.cancel()
+                    try:
+                        await stream_task
+                    except asyncio.CancelledError:
+                        pass
+                    raise SpendingLimitExceededError(limit_result)
+
+            # Limit passed, get the stream
+            async_stream = await stream_task
+
             async for chunk in async_stream:  # type: ignore[union-attr]
                 # Capture usage if present in the chunk (final chunk with include_usage)
                 if hasattr(chunk, "usage") and chunk.usage is not None:
@@ -1028,23 +1398,214 @@ class AsyncUnify(_UniClient):
                 if return_full_completion:
                     yield chunk
                 else:
-                    yield chunk.choices[0].delta.content or ""
+                    text = chunk.choices[0].delta.content or ""
+                    collected_content.append(text)
+                    yield text
         except litellm.exceptions.APIError as e:
-            raise Exception(e.message)
+            llm_error = Exception(e.message)
+            raise llm_error
+        except Exception as e:
+            llm_error = e
+            raise
         finally:
+            # Finalize log file with collected response content
+            try:
+                log_body: dict | str | None = "".join(collected_content) or None
+                if llm_error is not None:
+                    error_info = {
+                        "type": type(llm_error).__name__,
+                        "message": str(llm_error),
+                    }
+                    log_body = {"response": log_body, "error": error_info}
+                final_path = append_response_and_finalize(
+                    pending_path,
+                    log_body,
+                    "error" if llm_error else "disabled",
+                    label=endpoint,
+                    origin=origin,
+                )
+                if final_path and self._on_log_file:
+                    self._on_log_file(final_path)
+            except BaseException:
+                pass
+
             # Deduct credits based on usage after streaming completes
             if usage_info is not None:
                 prompt_tokens = getattr(usage_info, "prompt_tokens", 0) or 0
                 completion_tokens = getattr(usage_info, "completion_tokens", 0) or 0
                 if prompt_tokens > 0 or completion_tokens > 0:
-                    from ..costs import compute_cost
+                    from ..costs import compute_cost, get_cost_margin
 
-                    cost = compute_cost(endpoint, prompt_tokens, completion_tokens)
-                    if cost > 0:
+                    provider_cost = compute_cost(
+                        kw["model"],
+                        prompt_tokens,
+                        completion_tokens,
+                    )
+                    if provider_cost > 0:
+                        billed_cost = provider_cost * get_cost_margin()
                         asyncio.create_task(
-                            asyncio.to_thread(unify.deduct_credits, cost),
+                            asyncio.to_thread(
+                                unify.deduct_credits,
+                                billed_cost,
+                                api_key=self._api_key,
+                            ),
                             name="unillm_deduct_credits_stream",
                         )
+
+            # Emit LLM event (after streaming completes)
+            _emit_llm_event(
+                LLMEvent(
+                    request=kw,
+                    response=None,  # No single response for streams
+                    provider_cost=provider_cost,
+                    billed_cost=billed_cost,
+                    origin=origin,
+                ),
+            )
+
+            _emit_cost_event(
+                CostEvent.from_completion(
+                    model=kw.get("model", ""),
+                    provider_cost=provider_cost,
+                    billed_cost=billed_cost,
+                    completion=usage_info,
+                    cache_status="disabled",  # Streaming bypasses cache
+                ),
+            )
+
+    async def _execute_postprocessing_retry(
+        self,
+        retry_kw: dict,
+        endpoint: str,
+        label_suffix: str,
+        origin: Optional[str] = None,
+    ) -> "ChatCompletion":
+        """Execute a single postprocessing retry: LLM call + logging + cost deduction."""
+        label = f"{endpoint}-{label_suffix}"
+        pending = write_request_pending(
+            retry_kw,
+            label=label,
+            origin=origin,
+        )
+        completion = None
+        try:
+            with llm_span(
+                label,
+                self._model,
+                provider=self._provider,
+                origin=origin,
+            ):
+                completion = await retry_transient_400_async(
+                    lambda: litellm.acompletion(
+                        shared_session=get_shared_session(),
+                        client=self._get_async_http_client(),
+                        **retry_kw,
+                    ),
+                )
+        finally:
+            try:
+                body = (
+                    completion.model_dump(warnings=False)
+                    if completion is not None and hasattr(completion, "model_dump")
+                    else completion
+                )
+                final_path = append_response_and_finalize(
+                    pending,
+                    body,
+                    "retry",
+                    label=label,
+                    origin=origin,
+                )
+                if final_path and self._on_log_file:
+                    self._on_log_file(final_path)
+            except Exception:
+                pass
+        if completion is not None:
+            from ..costs import get_cost_margin
+
+            cost = compute_cost_from_response(retry_kw["model"], completion)
+            if cost is not None and cost > 0:
+                margin = get_cost_margin()
+                billed = cost * margin
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        unify.deduct_credits,
+                        billed,
+                        api_key=self._api_key,
+                    ),
+                    name=f"unillm_deduct_credits_{label_suffix}",
+                )
+
+                _emit_cost_event(
+                    CostEvent.from_completion(
+                        model=retry_kw.get("model", ""),
+                        provider_cost=cost,
+                        billed_cost=billed,
+                        completion=completion,
+                        cache_status="miss",
+                    ),
+                )
+        return completion
+
+    async def _run_postprocessing(
+        self,
+        chat_completion: "ChatCompletion",
+        kw: dict,
+        endpoint: str,
+        prompt: "Prompt",
+        original_tool_choice: Optional[str],
+        origin: Optional[str] = None,
+    ) -> "ChatCompletion":
+        """Run all postprocessing checks, retrying once per check if needed."""
+        from .provider_postprocessing import (
+            check_needs_postprocessing,
+            build_retry_kw,
+            check_response_format_compliance,
+            build_response_format_retry_kw,
+        )
+
+        # Step 1: Provider-specific postprocessing (tool retries)
+        raw_tools = kw.get("tools")
+        needs_retry, retry_reason = check_needs_postprocessing(
+            response=chat_completion,
+            provider=self._provider,
+            original_tool_choice=original_tool_choice,
+            reasoning_effort=prompt.components.get("reasoning_effort"),
+            tools=list(raw_tools) if raw_tools is not None else None,
+        )
+        if needs_retry:
+            retry_kw = build_retry_kw(
+                kw=kw,
+                response=chat_completion,
+                retry_reason=retry_reason,
+            )
+            chat_completion = await self._execute_postprocessing_retry(
+                retry_kw,
+                endpoint,
+                "retry",
+                origin=origin,
+            )
+
+        # Step 2: response_format schema validation
+        rf_needs_retry, rf_error, rf_model = check_response_format_compliance(
+            response=chat_completion,
+            kw=kw,
+        )
+        if rf_needs_retry and rf_model is not None:
+            rf_retry_kw = build_response_format_retry_kw(
+                kw=kw,
+                response=chat_completion,
+                validation_error=rf_error,
+                pydantic_model=rf_model,
+            )
+            chat_completion = await self._execute_postprocessing_retry(
+                rf_retry_kw,
+                endpoint,
+                "rf-retry",
+                origin=origin,
+            )
+
+        return chat_completion
 
     async def _generate_non_stream(
         self,
@@ -1054,6 +1615,8 @@ class AsyncUnify(_UniClient):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
+        prompt_caching: Optional[PromptCacheParam],
+        origin: Optional[str] = None,
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -1061,11 +1624,18 @@ class AsyncUnify(_UniClient):
             stream=False,
             stream_options=None,
         )
+        # Capture original tool_choice before preprocessing may modify it
+        original_tool_choice = kw.get("tool_choice")
+
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider)
+        apply_provider_preprocessing(kw, self._provider, prompt_caching)
 
         # Write request to log file (before LLM call) so we don't lose it if call hangs
-        pending_path = write_request_pending(kw, label=endpoint)
+        pending_path = write_request_pending(
+            kw,
+            label=endpoint,
+            origin=origin,
+        )
 
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
@@ -1073,84 +1643,214 @@ class AsyncUnify(_UniClient):
         else:
             read_closest = False
 
-        # Wrap in OTel span
-        with llm_span(endpoint, self._model, provider=self._provider) as span:
-            chat_completion = None
-            in_cache = False
-            if cache in [True, "both", "read", "read-only"]:
-                chat_completion = _get_cache(
-                    fn_name="chat.completions.create",
-                    kw=kw,
-                    raise_on_empty=cache == "read-only",
-                    read_closest=read_closest,
-                    delete_closest=read_closest,
-                    backend=cache_backend,
-                )
-                in_cache = True if chat_completion is not None else False
-            if chat_completion is None:
-                try:
-                    chat_completion = await litellm.acompletion(
-                        shared_session=SHARED_SESSION,
-                        **kw,
-                    )
-                except litellm.exceptions.APIError as e:
-                    raise Exception(e.message)
+        # Initialize before try block so finally can access them
+        chat_completion = None
+        is_cache_enabled = cache in [True, "both", "read", "read-only"]
+        cache_status = "pending" if is_cache_enabled else "disabled"
+        in_cache = False
+        llm_error: BaseException | None = None
+        provider_cost: float | None = None
+        billed_cost: float | None = None
 
-            # Determine cache status and emit event
-            cache_status = "hit" if in_cache else "miss"
+        # Task tracking for cleanup
+        limit_task: asyncio.Task | None = None
+        llm_task: asyncio.Task | None = None
 
-            # Set span response attributes
-            set_span_response(span, cache_status, chat_completion)
-
-            _emit_cache_event(
-                {
-                    "cache_status": cache_status,
-                    "endpoint": endpoint,
-                    "request_kw": kw,
-                },
-            )
-
-        # Finalize log file with response and cache status
+        # Wrap in OTel span with try/finally to guarantee log finalization
         try:
-            resp_body = (
-                chat_completion.model_dump(warnings=False)
-                if hasattr(chat_completion, "model_dump")
-                else chat_completion
-            )
-            append_response_and_finalize(
-                pending_path,
-                resp_body,
-                cache_status,
-                label=endpoint,
-            )
-        except Exception:
-            pass
+            with llm_span(
+                endpoint,
+                self._model,
+                provider=self._provider,
+                origin=origin,
+            ) as span:
+                if is_cache_enabled:
+                    chat_completion = _get_cache(
+                        fn_name="chat.completions.create",
+                        kw=kw,
+                        raise_on_empty=cache == "read-only",
+                        read_closest=read_closest,
+                        delete_closest=read_closest,
+                        backend=cache_backend,
+                    )
+                    in_cache = True if chat_completion is not None else False
+                if chat_completion is None:
+                    # Start limit check and LLM call in parallel for true in-flight
+                    # cancellation. Limit check is fast (~50ms), LLM call is slow.
+                    if is_limit_check_enabled():
+                        limit_request = LimitCheckRequest(
+                            model=kw.get("model", endpoint),
+                            endpoint=endpoint,
+                        )
+                        limit_task = asyncio.create_task(
+                            check_limits(limit_request),
+                            name="spending_limit_check",
+                        )
 
+                    # Start LLM call immediately (don't wait for limit check)
+                    llm_task = asyncio.create_task(
+                        retry_transient_400_async(
+                            lambda: litellm.acompletion(
+                                shared_session=get_shared_session(),
+                                client=self._get_async_http_client(),
+                                **kw,
+                            ),
+                        ),
+                        name="llm_call",
+                    )
+
+                    try:
+                        # Wait for limit check first (fast) while LLM runs in background
+                        if limit_task is not None:
+                            limit_result = await limit_task
+                            limit_task = None  # Mark as consumed
+                            if not limit_result.allowed:
+                                # Cancel in-flight LLM call
+                                llm_task.cancel()
+                                try:
+                                    await llm_task
+                                except asyncio.CancelledError:
+                                    pass
+                                llm_task = None
+                                raise SpendingLimitExceededError(limit_result)
+
+                        # Limit check passed (or disabled), wait for LLM result
+                        chat_completion = await llm_task
+                        llm_task = None  # Mark as consumed
+                    except litellm.exceptions.APIError as e:
+                        llm_error = Exception(e.message)
+                        raise llm_error
+
+                # Determine cache status after resolution
+                if is_cache_enabled:
+                    cache_status = "hit" if in_cache else "miss"
+
+                # Set span response attributes
+                set_span_response(span, cache_status, chat_completion)
+
+                _emit_cache_event(
+                    {
+                        "cache_status": cache_status,
+                        "endpoint": endpoint,
+                        "request_kw": kw,
+                    },
+                )
+        except BaseException as e:
+            # Capture the error for the response event
+            if llm_error is None:
+                llm_error = e
+            if cache_status == "pending":
+                cache_status = "error"
+            raise
+        finally:
+            # Cancel any unconsumed tasks (e.g., cache hit or error)
+            for task in [limit_task, llm_task]:
+                if task is not None and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+            # Finalize log file with response and cache status (always runs)
+            try:
+                resp_body = (
+                    chat_completion.model_dump(warnings=False)
+                    if chat_completion is not None
+                    and hasattr(chat_completion, "model_dump")
+                    else chat_completion
+                )
+                # For logging, include error info if present
+                log_body = resp_body
+                if llm_error is not None:
+                    error_info = {
+                        "type": type(llm_error).__name__,
+                        "message": str(llm_error),
+                    }
+                    log_body = {"response": resp_body, "error": error_info}
+                final_path = append_response_and_finalize(
+                    pending_path,
+                    log_body,
+                    cache_status,
+                    label=endpoint,
+                    origin=origin,
+                )
+                if final_path and self._on_log_file:
+                    self._on_log_file(final_path)
+            except BaseException:
+                pass
+
+            # Compute costs for event (only for cache misses - cache hits are free)
+            if not in_cache and chat_completion is not None:
+                from ..costs import get_cost_margin
+
+                provider_cost = compute_cost_from_response(kw["model"], chat_completion)
+                if provider_cost is not None and provider_cost > 0:
+                    billed_cost = provider_cost * get_cost_margin()
+
+            # Emit LLM event (after LLM call, always runs)
+            # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
+            _emit_llm_event(
+                LLMEvent(
+                    request=kw,
+                    response=resp_body,
+                    provider_cost=provider_cost,
+                    billed_cost=billed_cost,
+                    origin=origin,
+                ),
+            )
+
+            _emit_cost_event(
+                CostEvent.from_completion(
+                    model=kw.get("model", ""),
+                    provider_cost=provider_cost,
+                    billed_cost=billed_cost,
+                    completion=chat_completion,
+                    cache_status=cache_status,
+                ),
+            )
+
+        # Deduct credits for cache misses (use already-computed billed_cost)
+        if billed_cost is not None and billed_cost > 0:
+            asyncio.create_task(
+                asyncio.to_thread(
+                    unify.deduct_credits,
+                    billed_cost,
+                    api_key=self._api_key,
+                ),
+                name="unillm_deduct_credits",
+            )
+
+        # Apply postprocessing checks (tool retries + response_format validation)
+        original_completion = chat_completion
+        if chat_completion is not None:
+            chat_completion = await self._run_postprocessing(
+                chat_completion,
+                kw,
+                endpoint,
+                prompt,
+                original_tool_choice,
+                origin=origin,
+            )
+
+        # Cache the FINAL response (after any post-processing), not intermediate ones
+        did_postprocess = chat_completion is not original_completion
         if (chat_completion is not None or read_closest) and cache in [
             True,
             "both",
             "write",
         ]:
-            if not in_cache or cache == "write":
+            # Write to cache if it wasn't a cache hit, or if post-processing changed it
+            if not in_cache or cache == "write" or did_postprocess:
                 _write_to_cache(
                     fn_name="chat.completions.create",
                     kw=kw,
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if not in_cache:
-            cost = compute_cost_from_response(endpoint, chat_completion)
-            if cost is not None and cost > 0:
-                asyncio.create_task(
-                    asyncio.to_thread(unify.deduct_credits, cost),
-                    name="unillm_deduct_credits",
-                )
-        if return_full_completion:
-            return chat_completion
-        content = chat_completion.choices[0].message.content
-        if content:
-            return content.strip(" ")
-        return ""
+
+        # Always return full completion; _apply_stateful_logic handles extraction
+        return chat_completion
 
     async def _generate(  # noqa: WPS234, WPS211
         self,
@@ -1178,6 +1878,8 @@ class AsyncUnify(_UniClient):
         return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
+        prompt_caching: Optional[PromptCacheParam],
+        origin: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers],
         service_tier: Optional[str] = None,
@@ -1212,6 +1914,8 @@ class AsyncUnify(_UniClient):
                 stream_options=stream_options,
                 # python client arguments
                 return_full_completion=return_full_completion,
+                prompt_caching=prompt_caching,
+                origin=origin,
             )
         return await self._generate_non_stream(
             self._endpoint,
@@ -1220,6 +1924,8 @@ class AsyncUnify(_UniClient):
             return_full_completion=return_full_completion,
             cache=cache,
             cache_backend=cache_backend,
+            prompt_caching=prompt_caching,
+            origin=origin,
         )
 
     def to_sync_client(self):
