@@ -59,7 +59,7 @@ class _Client(ABC):
         cache: Union[bool, str],
         cache_backend: str,
         prompt_caching: PromptCacheParam,
-        debug_marker: Optional[str],
+        origin: Optional[str],
         # passthrough arguments
         extra_headers: Optional[Headers],
         **kwargs,
@@ -93,7 +93,7 @@ class _Client(ABC):
         self._cache = None
         self._cache_backend = None
         self._prompt_caching = None
-        self._debug_marker = None
+        self._origin = None
         self._extra_headers = None
 
         # set based on arguments
@@ -132,7 +132,7 @@ class _Client(ABC):
         self.set_cache(cache)
         self.set_cache_backend(cache_backend)
         self.set_prompt_caching(prompt_caching)
-        self.set_debug_marker(debug_marker)
+        self.set_origin(origin)
         # passthrough arguments
         self.set_extra_headers(extra_headers)
 
@@ -417,14 +417,14 @@ class _Client(ABC):
         return self._prompt_caching
 
     @property
-    def debug_marker(self) -> Optional[str]:
+    def origin(self) -> Optional[str]:
         """
-        Get the debug marker, if set.
+        Get the origin tag identifying the call site, if set.
 
         Returns:
-            The debug marker string, or None.
+            The origin string, or None.
         """
-        return self._debug_marker
+        return self._origin
 
     @property
     def extra_headers(self) -> Optional[Headers]:
@@ -828,17 +828,18 @@ class _Client(ABC):
         self._prompt_caching = value
         return self
 
-    def set_debug_marker(self, value: Optional[str]) -> Self:
+    def set_origin(self, value: Optional[str]) -> Self:
         """
-        Set the debug marker for identifying LLM call origins in logs and spans.
+        Set the origin tag for identifying LLM call sites in logs and spans.
 
         Args:
-            value: The debug marker string (e.g. ``"AgentA"``), or None to clear.
+            value: The origin string (e.g. ``"ConversationManager.decide"``),
+                or None to clear.
 
         Returns:
             This client, useful for chaining inplace calls.
         """
-        self._debug_marker = value
+        self._origin = value
         return self
 
     def set_extra_headers(self, value: Headers) -> Self:

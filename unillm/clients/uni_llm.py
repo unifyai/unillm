@@ -100,7 +100,7 @@ class _UniClient(_Client, abc.ABC):
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
         prompt_caching: Optional[PromptCacheParam] = UNSET,  # type: ignore[assignment]
-        debug_marker: Optional[str] = None,
+        origin: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         **kwargs,
@@ -221,7 +221,7 @@ class _UniClient(_Client, abc.ABC):
             will read the closest match from the cache, and overwrite it if cache writing
             is enabled. This argument only has any effect when stream=False.
 
-            debug_marker: An optional string tag for identifying the origin of LLM
+            origin: An optional string tag for identifying the origin of LLM
             calls in log files, OTel spans, and events. Useful when multiple
             agents or subsystems share the same process and you need to tell
             their logs apart (e.g. ``"AgentA"``, ``"planner"``).
@@ -266,7 +266,7 @@ class _UniClient(_Client, abc.ABC):
             cache=cache,
             cache_backend=cache_backend,
             prompt_caching=None if prompt_caching is UNSET else prompt_caching,
-            debug_marker=debug_marker,
+            origin=origin,
             # passthrough arguments
             extra_headers=extra_headers,
             **kwargs,
@@ -567,7 +567,7 @@ class _UniClient(_Client, abc.ABC):
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
         prompt_caching: Optional[PromptCacheParam] = None,
-        debug_marker: Optional[str] = None,
+        origin: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         service_tier: Optional[str] = None,
@@ -689,7 +689,7 @@ class _UniClient(_Client, abc.ABC):
             will read the closest match from the cache, and overwrite it if cache writing
             is enabled. This argument only has any effect when stream=False.
 
-            debug_marker: An optional string tag for identifying the origin of this
+            origin: An optional string tag for identifying the origin of this
             LLM call in log files, OTel spans, and events.
 
             extra_headers: Additional "passthrough" headers for the request which are
@@ -765,7 +765,7 @@ class _UniClient(_Client, abc.ABC):
             cache=_default(cache, is_caching_enabled()),
             cache_backend=_default(cache_backend, self._cache_backend),
             prompt_caching=_default(prompt_caching, self._prompt_caching),
-            debug_marker=_default(debug_marker, self._debug_marker),
+            origin=_default(origin, self._origin),
             # passthrough arguments
             extra_headers=_default(extra_headers, self._extra_headers),
             **kwargs,
@@ -792,7 +792,7 @@ class Unify(_UniClient):
         # python client arguments
         return_full_completion: bool,
         prompt_caching: Optional[PromptCacheParam],
-        debug_marker: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> Generator[str, None, None]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -864,7 +864,7 @@ class Unify(_UniClient):
                     response=None,  # No single response for streams
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
-                    debug_marker=debug_marker,
+                    origin=origin,
                 ),
             )
 
@@ -883,14 +883,14 @@ class Unify(_UniClient):
         retry_kw: dict,
         endpoint: str,
         label_suffix: str,
-        debug_marker: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> "ChatCompletion":
         """Execute a single postprocessing retry: LLM call + logging + cost deduction."""
         label = f"{endpoint}-{label_suffix}"
         pending = write_request_pending(
             retry_kw,
             label=label,
-            debug_marker=debug_marker,
+            origin=origin,
         )
         completion = None
         try:
@@ -898,7 +898,7 @@ class Unify(_UniClient):
                 label,
                 self._model,
                 provider=self._provider,
-                debug_marker=debug_marker,
+                origin=origin,
             ):
                 completion = retry_transient_400_sync(
                     lambda: litellm.completion(**retry_kw),
@@ -915,7 +915,7 @@ class Unify(_UniClient):
                     body,
                     "retry",
                     label=label,
-                    debug_marker=debug_marker,
+                    origin=origin,
                 )
             except Exception:
                 pass
@@ -946,7 +946,7 @@ class Unify(_UniClient):
         endpoint: str,
         prompt: "Prompt",
         original_tool_choice: Optional[str],
-        debug_marker: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> "ChatCompletion":
         """Run all postprocessing checks, retrying once per check if needed."""
         from .provider_postprocessing import (
@@ -975,7 +975,7 @@ class Unify(_UniClient):
                 retry_kw,
                 endpoint,
                 "retry",
-                debug_marker=debug_marker,
+                origin=origin,
             )
 
         # Step 2: response_format schema validation
@@ -994,7 +994,7 @@ class Unify(_UniClient):
                 rf_retry_kw,
                 endpoint,
                 "rf-retry",
-                debug_marker=debug_marker,
+                origin=origin,
             )
 
         return chat_completion
@@ -1008,7 +1008,7 @@ class Unify(_UniClient):
         cache: Union[bool, str],
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
-        debug_marker: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -1026,7 +1026,7 @@ class Unify(_UniClient):
         pending_path = write_request_pending(
             kw,
             label=endpoint,
-            debug_marker=debug_marker,
+            origin=origin,
         )
 
         if isinstance(cache, str) and cache.endswith("-closest"):
@@ -1050,7 +1050,7 @@ class Unify(_UniClient):
                 endpoint,
                 self._model,
                 provider=self._provider,
-                debug_marker=debug_marker,
+                origin=origin,
             ) as span:
                 if is_cache_enabled:
                     chat_completion = _get_cache(
@@ -1123,7 +1123,7 @@ class Unify(_UniClient):
                     log_body,
                     cache_status,
                     label=endpoint,
-                    debug_marker=debug_marker,
+                    origin=origin,
                 )
             except Exception:
                 pass
@@ -1144,7 +1144,7 @@ class Unify(_UniClient):
                     response=resp_body,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
-                    debug_marker=debug_marker,
+                    origin=origin,
                 ),
             )
 
@@ -1171,7 +1171,7 @@ class Unify(_UniClient):
                 endpoint,
                 prompt,
                 original_tool_choice,
-                debug_marker=debug_marker,
+                origin=origin,
             )
 
         # Cache the FINAL response (after any post-processing), not intermediate ones
@@ -1221,7 +1221,7 @@ class Unify(_UniClient):
         cache: Union[bool, str],
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
-        debug_marker: Optional[str] = None,
+        origin: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers],
         **kwargs,
@@ -1256,7 +1256,7 @@ class Unify(_UniClient):
                 # python client arguments
                 return_full_completion=return_full_completion,
                 prompt_caching=prompt_caching,
-                debug_marker=debug_marker,
+                origin=origin,
             )
         return self._generate_non_stream(
             self._endpoint,
@@ -1266,7 +1266,7 @@ class Unify(_UniClient):
             cache=cache,
             cache_backend=cache_backend,
             prompt_caching=prompt_caching,
-            debug_marker=debug_marker,
+            origin=origin,
         )
 
     def to_async_client(self):
@@ -1319,7 +1319,7 @@ class AsyncUnify(_UniClient):
         # python client arguments
         return_full_completion: bool,
         prompt_caching: Optional[PromptCacheParam],
-        debug_marker: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -1334,7 +1334,7 @@ class AsyncUnify(_UniClient):
         pending_path = write_request_pending(
             kw,
             label=endpoint,
-            debug_marker=debug_marker,
+            origin=origin,
         )
 
         # Start limit check and stream connection in parallel for in-flight cancellation
@@ -1418,7 +1418,7 @@ class AsyncUnify(_UniClient):
                     log_body,
                     "error" if llm_error else "disabled",
                     label=endpoint,
-                    debug_marker=debug_marker,
+                    origin=origin,
                 )
             except BaseException:
                 pass
@@ -1453,7 +1453,7 @@ class AsyncUnify(_UniClient):
                     response=None,  # No single response for streams
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
-                    debug_marker=debug_marker,
+                    origin=origin,
                 ),
             )
 
@@ -1472,14 +1472,14 @@ class AsyncUnify(_UniClient):
         retry_kw: dict,
         endpoint: str,
         label_suffix: str,
-        debug_marker: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> "ChatCompletion":
         """Execute a single postprocessing retry: LLM call + logging + cost deduction."""
         label = f"{endpoint}-{label_suffix}"
         pending = write_request_pending(
             retry_kw,
             label=label,
-            debug_marker=debug_marker,
+            origin=origin,
         )
         completion = None
         try:
@@ -1487,7 +1487,7 @@ class AsyncUnify(_UniClient):
                 label,
                 self._model,
                 provider=self._provider,
-                debug_marker=debug_marker,
+                origin=origin,
             ):
                 completion = await retry_transient_400_async(
                     lambda: litellm.acompletion(
@@ -1508,7 +1508,7 @@ class AsyncUnify(_UniClient):
                     body,
                     "retry",
                     label=label,
-                    debug_marker=debug_marker,
+                    origin=origin,
                 )
             except Exception:
                 pass
@@ -1546,7 +1546,7 @@ class AsyncUnify(_UniClient):
         endpoint: str,
         prompt: "Prompt",
         original_tool_choice: Optional[str],
-        debug_marker: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> "ChatCompletion":
         """Run all postprocessing checks, retrying once per check if needed."""
         from .provider_postprocessing import (
@@ -1575,7 +1575,7 @@ class AsyncUnify(_UniClient):
                 retry_kw,
                 endpoint,
                 "retry",
-                debug_marker=debug_marker,
+                origin=origin,
             )
 
         # Step 2: response_format schema validation
@@ -1594,7 +1594,7 @@ class AsyncUnify(_UniClient):
                 rf_retry_kw,
                 endpoint,
                 "rf-retry",
-                debug_marker=debug_marker,
+                origin=origin,
             )
 
         return chat_completion
@@ -1608,7 +1608,7 @@ class AsyncUnify(_UniClient):
         cache: Union[bool, str],
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
-        debug_marker: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -1626,7 +1626,7 @@ class AsyncUnify(_UniClient):
         pending_path = write_request_pending(
             kw,
             label=endpoint,
-            debug_marker=debug_marker,
+            origin=origin,
         )
 
         if isinstance(cache, str) and cache.endswith("-closest"):
@@ -1654,7 +1654,7 @@ class AsyncUnify(_UniClient):
                 endpoint,
                 self._model,
                 provider=self._provider,
-                debug_marker=debug_marker,
+                origin=origin,
             ) as span:
                 if is_cache_enabled:
                     chat_completion = _get_cache(
@@ -1765,7 +1765,7 @@ class AsyncUnify(_UniClient):
                     log_body,
                     cache_status,
                     label=endpoint,
-                    debug_marker=debug_marker,
+                    origin=origin,
                 )
             except BaseException:
                 pass
@@ -1786,7 +1786,7 @@ class AsyncUnify(_UniClient):
                     response=resp_body,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
-                    debug_marker=debug_marker,
+                    origin=origin,
                 ),
             )
 
@@ -1820,7 +1820,7 @@ class AsyncUnify(_UniClient):
                 endpoint,
                 prompt,
                 original_tool_choice,
-                debug_marker=debug_marker,
+                origin=origin,
             )
 
         # Cache the FINAL response (after any post-processing), not intermediate ones
@@ -1869,7 +1869,7 @@ class AsyncUnify(_UniClient):
         cache: Union[bool, str],
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
-        debug_marker: Optional[str] = None,
+        origin: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers],
         service_tier: Optional[str] = None,
@@ -1905,7 +1905,7 @@ class AsyncUnify(_UniClient):
                 # python client arguments
                 return_full_completion=return_full_completion,
                 prompt_caching=prompt_caching,
-                debug_marker=debug_marker,
+                origin=origin,
             )
         return await self._generate_non_stream(
             self._endpoint,
@@ -1915,7 +1915,7 @@ class AsyncUnify(_UniClient):
             cache=cache,
             cache_backend=cache_backend,
             prompt_caching=prompt_caching,
-            debug_marker=debug_marker,
+            origin=origin,
         )
 
     def to_sync_client(self):
