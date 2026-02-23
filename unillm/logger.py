@@ -640,12 +640,14 @@ def append_response_and_finalize(
     *,
     label: str | None = None,
     origin: str | None = None,
-) -> None:
+) -> Path | None:
     """Append the response to the pending file and rename to reflect cache status.
 
     Logs to console (if terminal logging enabled) and finalizes file (if path provided).
     The final filename will be: {timestamp}_hit.txt, {timestamp}_miss.txt,
     or {timestamp}_disabled.txt
+
+    Returns the finalized file path, or None if no file was written.
     """
     label_prefix = _make_label_prefix(label, origin)
     body_str = _normalize_body(response_body)
@@ -658,7 +660,7 @@ def append_response_and_finalize(
 
     # File log (only if we have a pending path)
     if pending_path is None or not pending_path.exists():
-        return
+        return None
 
     try:
         # Append response to the file
@@ -671,6 +673,7 @@ def append_response_and_finalize(
         new_name = pending_path.name.replace("_pending", f"_{cache_status}")
         new_path = pending_path.parent / new_name
         pending_path.rename(new_path)
+        return new_path
     except Exception:
         # Silent best-effort
-        pass
+        return None
