@@ -910,13 +910,15 @@ class Unify(_UniClient):
                     if completion is not None and hasattr(completion, "model_dump")
                     else completion
                 )
-                append_response_and_finalize(
+                final_path = append_response_and_finalize(
                     pending,
                     body,
                     "retry",
                     label=label,
                     origin=origin,
                 )
+                if final_path and self._on_log_file:
+                    self._on_log_file(final_path)
             except Exception:
                 pass
         if completion is not None:
@@ -1118,13 +1120,15 @@ class Unify(_UniClient):
                         "message": str(llm_error),
                     }
                     log_body = {"response": resp_body, "error": error_info}
-                append_response_and_finalize(
+                final_path = append_response_and_finalize(
                     pending_path,
                     log_body,
                     cache_status,
                     label=endpoint,
                     origin=origin,
                 )
+                if final_path and self._on_log_file:
+                    self._on_log_file(final_path)
             except Exception:
                 pass
 
@@ -1413,13 +1417,15 @@ class AsyncUnify(_UniClient):
                         "message": str(llm_error),
                     }
                     log_body = {"response": log_body, "error": error_info}
-                append_response_and_finalize(
+                final_path = append_response_and_finalize(
                     pending_path,
                     log_body,
                     "error" if llm_error else "disabled",
                     label=endpoint,
                     origin=origin,
                 )
+                if final_path and self._on_log_file:
+                    self._on_log_file(final_path)
             except BaseException:
                 pass
 
@@ -1503,13 +1509,15 @@ class AsyncUnify(_UniClient):
                     if completion is not None and hasattr(completion, "model_dump")
                     else completion
                 )
-                append_response_and_finalize(
+                final_path = append_response_and_finalize(
                     pending,
                     body,
                     "retry",
                     label=label,
                     origin=origin,
                 )
+                if final_path and self._on_log_file:
+                    self._on_log_file(final_path)
             except Exception:
                 pass
         if completion is not None:
@@ -1760,13 +1768,15 @@ class AsyncUnify(_UniClient):
                         "message": str(llm_error),
                     }
                     log_body = {"response": resp_body, "error": error_info}
-                append_response_and_finalize(
+                final_path = append_response_and_finalize(
                     pending_path,
                     log_body,
                     cache_status,
                     label=endpoint,
                     origin=origin,
                 )
+                if final_path and self._on_log_file:
+                    self._on_log_file(final_path)
             except BaseException:
                 pass
 

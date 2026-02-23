@@ -1,7 +1,8 @@
 # global
 import copy
 from abc import ABC, abstractmethod
-from typing import Dict, Iterable, List, Literal, Optional, Type, Union
+from pathlib import Path
+from typing import Callable, Dict, Iterable, List, Literal, Optional, Type, Union
 
 import requests
 
@@ -94,6 +95,7 @@ class _Client(ABC):
         self._cache_backend = None
         self._prompt_caching = None
         self._origin = None
+        self._on_log_file = None
         self._extra_headers = None
 
         # set based on arguments
@@ -840,6 +842,24 @@ class _Client(ABC):
             This client, useful for chaining inplace calls.
         """
         self._origin = value
+        return self
+
+    def set_on_log_file(self, callback: Optional[Callable[[Path], None]]) -> Self:
+        """
+        Set a callback invoked with the finalized log file path after each LLM call.
+
+        The callback fires once per generate() call, after the request+response
+        have been written and the file renamed from ``_pending`` to its final
+        name (e.g. ``_hit.txt``, ``_miss.txt``).  Only fires when
+        ``UNILLM_LOG_DIR`` is configured and a file was actually written.
+
+        Args:
+            callback: A callable receiving the final ``Path``, or None to clear.
+
+        Returns:
+            This client, useful for chaining inplace calls.
+        """
+        self._on_log_file = callback
         return self
 
     def set_extra_headers(self, value: Headers) -> Self:
