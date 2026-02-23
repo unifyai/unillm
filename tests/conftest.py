@@ -3,17 +3,20 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 from dotenv import load_dotenv
 
 # Look for .env in repo root (parent of tests/)
 _repo_root = Path(__file__).resolve().parent.parent
 load_dotenv(_repo_root / ".env", override=True)
 
+# Set UNILLM_CACHE_DIR to repo root so cache location is consistent regardless of cwd
+os.environ.setdefault("UNILLM_CACHE_DIR", str(_repo_root))
+
 import atexit
 import warnings
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
 
 # ---------------------------------------------------------------------------
 # Log directory configuration
@@ -93,3 +96,48 @@ def _flush_with_suppressed_warnings():
 
 # Register our wrapper instead
 atexit.register(_flush_with_suppressed_warnings)
+
+
+# ---------------------------------------------------------------------------
+# Per-test LLM cost tracking
+# ---------------------------------------------------------------------------
+
+from unillm.cost_tracker import capture_costs
+
+_session_costs: list[tuple[str, float]] = []
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    with capture_costs() as events:
+        yield
+    item._unillm_cost_events = events
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    if call.when == "call":
+        events = getattr(item, "_unillm_cost_events", [])
+        total = sum(e.provider_cost for e in events)
+        report._unillm_cost = total
+        _session_costs.append((report.nodeid, total))
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_report_teststatus(report, config):
+    outcome = yield
+    if report.when == "call":
+        result = outcome.get_result()
+        if result and len(result) >= 3:
+            category, shortletter, verbose = result
+            cost = getattr(report, "_unillm_cost", 0.0)
+            if isinstance(verbose, str):
+                verbose = f"{verbose} [${cost:.6g}]"
+            outcome.force_result((category, shortletter, verbose))
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    total = sum(cost for _, cost in _session_costs)
+    terminalreporter.write_sep("=", f"UNILLM Provider Cost Summary: ${total:.6g}")

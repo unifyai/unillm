@@ -2,9 +2,9 @@
 Cache Event Capture
 ===================
 
-Provides a scoped context manager for capturing cache hit/miss events during
-LLM requests. This allows external code to track exactly which requests hit
-the cache vs which required a live LLM call.
+Provides a scoped context manager for capturing cache hit/miss/disabled events
+during LLM requests. This allows external code to track exactly which requests
+hit the cache, missed the cache, or had caching disabled entirely.
 
 Uses Python's contextvars for thread-safety and async-safety.
 
@@ -14,12 +14,12 @@ Usage:
     # Sync usage
     with capture_cache_events() as events:
         client.generate(messages=[...])
-    print(events[0]["cache_status"])  # "hit" or "miss"
+    print(events[0]["cache_status"])  # "hit", "miss", or "disabled"
 
     # Async usage
     async with acapture_cache_events() as events:
         await client.generate(messages=[...])
-    print(events[0]["cache_status"])  # "hit" or "miss"
+    print(events[0]["cache_status"])  # "hit", "miss", or "disabled"
 """
 
 from __future__ import annotations
@@ -33,12 +33,13 @@ class CacheEvent(TypedDict):
     """Event emitted when a cache decision is made during an LLM request.
 
     Attributes:
-        cache_status: Whether the request was a cache "hit" or "miss".
+        cache_status: Whether the request was a cache "hit", "miss", or
+            "disabled" (cache reading was not attempted, e.g. cache=False).
         endpoint: The endpoint string (e.g., "gpt-4o@openai").
         request_kw: The full request kwargs sent to the LLM (model, messages, etc.).
     """
 
-    cache_status: Literal["hit", "miss"]
+    cache_status: Literal["hit", "miss", "disabled", "pending", "error"]
     endpoint: str
     request_kw: dict[str, Any]
 

@@ -10,6 +10,7 @@ models = {
     "claude-4.5-sonnet": "anthropic/claude-sonnet-4-5-20250929",
     "claude-4.5-haiku": "anthropic/claude-haiku-4-5-20251001",
     "claude-4.5-opus": "anthropic/claude-opus-4-5-20251101",
+    "claude-4.6-opus": "anthropic/claude-opus-4-6",
 }
 
 register_model_alias_map("anthropic", models)

@@ -1,0 +1,407 @@
+"""
+Provider-specific post-processing for LLM responses.
+
+This module handles response transformations and fixes that need to happen
+after the LLM call returns. It follows the same pattern as provider_preprocessing.py
+but operates on responses rather than requests.
+
+Currently handles:
+- Anthropic: tool_choice="required" compliance with thinking mode
+- Anthropic: invalid tool name detection (tool called not in schema)
+- response_format schema validation with retry (all providers)
+"""
+
+import json
+import logging
+from typing import List, Optional, Set, Tuple, Type, TYPE_CHECKING
+
+from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletion, ChatCompletionMessage
+
+logger = logging.getLogger(__name__)
+
+# Retry reason constants
+RETRY_REASON_TOOL_CHOICE_REQUIRED = "tool_choice_required"
+RETRY_REASON_INVALID_TOOL_NAME = "invalid_tool_name"
+
+# Nudge message for retrying when model ignores tool_choice="required" instruction
+TOOL_CHOICE_REQUIRED_RETRY_NUDGE = (
+    "I understand you may not think a tool call is necessary on this step, but "
+    "tool_choice is set to 'required' which means you MUST select the most "
+    "appropriate tool with the most appropriate arguments. Please call a tool now."
+)
+
+# Error message for valid tool calls that were not executed because
+# sibling tool calls in the same batch were invalid.
+_VALID_TOOL_NOT_EXECUTED_MSG = (
+    "Not executed because other tool calls in this batch "
+    "called tools not in the schema."
+)
+
+
+def check_needs_postprocessing(
+    *,
+    response: "ChatCompletion",
+    provider: str,
+    original_tool_choice: Optional[str],
+    reasoning_effort: Optional[str],
+    tools: Optional[List[dict]] = None,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Check if a response needs post-processing (retry).
+
+    Returns a tuple of (needs_retry, retry_reason).
+    If needs_retry is True, retry_reason is one of:
+        - RETRY_REASON_TOOL_CHOICE_REQUIRED
+        - RETRY_REASON_INVALID_TOOL_NAME
+    If needs_retry is False, retry_reason is None.
+
+    This design allows the caller to handle the retry (sync or async) themselves.
+    """
+    if provider == "anthropic":
+        return _check_anthropic_postprocessing(
+            response=response,
+            original_tool_choice=original_tool_choice,
+            reasoning_effort=reasoning_effort,
+            tools=tools,
+        )
+    return False, None
+
+
+def _get_valid_tool_names(tools: Optional[List[dict]]) -> List[str]:
+    """Extract tool names from the tools array."""
+    if not tools:
+        return []
+    names = []
+    for tool in tools:
+        if tool.get("type") == "function" and "function" in tool:
+            name = tool["function"].get("name")
+            if name:
+                names.append(name)
+    return names
+
+
+def _make_tool_error(
+    content: str,
+    *,
+    available_tools: Optional[Set[str]] = None,
+    json_schema: Optional[dict] = None,
+) -> dict:
+    """Build a structured error object for an invalid-tool-call tool result.
+
+    Returns a dict of the form ``{"error": {"content": ..., ...}}``.
+    Optional keys are omitted when ``None``.
+    """
+    inner: dict = {"content": content}
+    if available_tools is not None:
+        inner["available_tools"] = list(available_tools)
+    if json_schema is not None:
+        inner["json_schema"] = json_schema
+    return {"error": inner}
+
+
+def _build_invalid_tool_name_retry_messages(
+    *,
+    kw: dict,
+    msg: "ChatCompletionMessage",
+    assistant_content: Optional[str],
+) -> list:
+    """Build retry messages for the invalid-tool-name case.
+
+    Instead of a sanitised user-text nudge, this keeps the original tool_calls
+    in the assistant message (for context) and replies with structured
+    ``role: "tool"`` result messages containing a JSON error object.
+
+    Three cases are handled:
+
+    * **Case A** – at least one valid tool is available: each invalid tool
+      result includes ``available_tools``; valid tool results explain they
+      were not executed.
+    * **Case B** – no tools available, no ``response_format`` schema:
+      instruct the model to respond with text content only.
+    * **Case C** – no tools available, ``response_format`` schema present:
+      instruct the model to return JSON matching the schema and include the
+      schema in the error object.
+
+    Returns the full retry message list
+    (original messages + assistant w/ tool_calls + tool results).
+    """
+    retry_messages = list(kw.get("messages", []))
+    tool_calls = msg.tool_calls or []
+    valid_tool_names = set(_get_valid_tool_names(kw.get("tools", [])))
+
+    # --- assistant message: preserve tool_calls for model context ----------
+    retry_messages.append(
+        {
+            "role": "assistant",
+            "content": assistant_content,
+            "tool_calls": tool_calls,
+        },
+    )
+
+    # --- tool result messages for every tool call --------------------------
+    if valid_tool_names:
+        # Case A: at least one valid tool is available
+        for tc in tool_calls:
+            if tc.function.name not in valid_tool_names:
+                error_obj = _make_tool_error(
+                    f"'{tc.function.name}' is not callable on this turn. "
+                    "It may be mentioned in the system message but is "
+                    "not in the current tool schema. "
+                    "Please select from the available tools only.",
+                    available_tools=valid_tool_names,
+                )
+            else:
+                error_obj = _make_tool_error(
+                    _VALID_TOOL_NOT_EXECUTED_MSG,
+                    available_tools=valid_tool_names,
+                )
+            retry_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(error_obj),
+                },
+            )
+    else:
+        # No tools available — determine Case B vs Case C
+        rf_model = _get_response_format_model(kw)
+        schema = rf_model.model_json_schema() if rf_model is not None else None
+        for tc in tool_calls:
+            if schema is not None:
+                # Case C: response_format schema is set
+                error_obj = _make_tool_error(
+                    f"'{tc.function.name}' is not callable. "
+                    "No tools are available on this turn. "
+                    "Do not call any tools. "
+                    "Respond with valid JSON only, nothing else, "
+                    "conforming to the required schema.",
+                    json_schema=schema,
+                )
+            else:
+                # Case B: no schema, no tools
+                error_obj = _make_tool_error(
+                    f"'{tc.function.name}' is not callable. "
+                    "No tools are available on this turn. "
+                    "Do not call any tools. "
+                    "Respond with text content only.",
+                )
+            retry_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(error_obj),
+                },
+            )
+
+    return retry_messages
+
+
+def build_retry_kw(
+    *,
+    kw: dict,
+    response: "ChatCompletion",
+    retry_reason: Optional[str] = None,
+) -> dict:
+    """
+    Build the retry request kwargs with nudge messages appended.
+
+    Call this only when check_needs_postprocessing returns True.
+
+    Args:
+        kw: The original request kwargs
+        response: The non-compliant response
+        retry_reason: One of RETRY_REASON_* constants, or None for default behavior
+    """
+    msg = response.choices[0].message
+
+    # Anthropic rejects assistant messages whose text content is whitespace-only
+    # ("messages: text content blocks must contain non-whitespace text").
+    # Claude commonly returns content="\n\n" alongside tool_calls; sanitize
+    # it to None so the retry request stays valid.
+    assistant_content = msg.content if msg.content and msg.content.strip() else None
+
+    if retry_reason == RETRY_REASON_INVALID_TOOL_NAME:
+        retry_messages = _build_invalid_tool_name_retry_messages(
+            kw=kw,
+            msg=msg,
+            assistant_content=assistant_content,
+        )
+    else:
+        # Default: tool_choice_required case
+        retry_messages = list(kw.get("messages", []))
+        retry_messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_content,
+            },
+        )
+        retry_messages.append(
+            {
+                "role": "user",
+                "content": TOOL_CHOICE_REQUIRED_RETRY_NUDGE,
+            },
+        )
+
+    # Create retry request
+    retry_kw = dict(kw)
+    retry_kw["messages"] = retry_messages
+    return retry_kw
+
+
+def _check_anthropic_postprocessing(
+    *,
+    response: "ChatCompletion",
+    original_tool_choice: Optional[str],
+    reasoning_effort: Optional[str],
+    tools: Optional[List[dict]] = None,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Check if Anthropic response needs post-processing.
+
+    Handles two cases:
+    1. When thinking mode is enabled (reasoning_effort is set), Anthropic's API
+       doesn't support tool_choice="required". We work around this by:
+       - Preprocessing: downgrade to "auto" + add system instruction
+       - Postprocessing (here): if model ignored instruction, retry with nudge
+
+    2. Anthropic doesn't constrain tool names to the schema - the model can call
+       tools mentioned in the prompt even if they're not in the `tools` array.
+       We detect this and retry with a helpful error message.
+    """
+    msg = response.choices[0].message
+
+    # Check for invalid tool names first (applies regardless of thinking mode).
+    # This must run even when tools is [] or None — Anthropic can call tools
+    # mentioned in the system prompt even if they're not in the tools array.
+    if msg.tool_calls:
+        valid_names = set(_get_valid_tool_names(tools))
+        for tool_call in msg.tool_calls:
+            called_name = tool_call.function.name
+            if called_name not in valid_names:
+                # Model called a tool not in the schema
+                return True, RETRY_REASON_INVALID_TOOL_NAME
+
+    # Check for tool_choice="required" non-compliance with thinking mode
+    if reasoning_effort is not None and original_tool_choice == "required":
+        if not msg.tool_calls:
+            # Non-compliant: model responded with text only despite instruction
+            return True, RETRY_REASON_TOOL_CHOICE_REQUIRED
+
+    return False, None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# response_format schema validation retry
+# ─────────────────────────────────────────────────────────────────────────────
+
+RESPONSE_FORMAT_RETRY_NUDGE = (
+    "Your previous response did not conform to the required output schema.\n\n"
+    "Validation error:\n{error}\n\n"
+    "Your response was:\n{response}\n\n"
+    "You MUST respond with valid JSON that exactly matches this schema:\n{schema}\n\n"
+    "Return ONLY the JSON object — no markdown, no commentary, no code fences."
+)
+
+
+def _get_response_format_model(
+    kw: dict,
+) -> Optional[Type[BaseModel]]:
+    """Extract the Pydantic model from the request kwargs, if present."""
+    rf = kw.get("response_format")
+    if rf is None:
+        return None
+    # response_format may be the Pydantic class directly
+    if isinstance(rf, type) and issubclass(rf, BaseModel):
+        return rf
+    # Or it may be a dict with __pydantic_schema__ (unillm internal serialization)
+    if isinstance(rf, dict) and "__pydantic_schema__" in rf:
+        # We can't reconstruct the class from the schema dict alone, but the
+        # original Pydantic class is stored on the *prompt* by callers.  Return
+        # None here — validation will be skipped (no worse than today).
+        return None
+    return None
+
+
+def check_response_format_compliance(
+    *,
+    response: "ChatCompletion",
+    kw: dict,
+) -> Tuple[bool, Optional[str], Optional[Type[BaseModel]]]:
+    """Check whether the response satisfies the response_format Pydantic schema.
+
+    Returns (needs_retry, validation_error_message, pydantic_model).
+    If needs_retry is False the other values are None.
+    """
+    model_cls = _get_response_format_model(kw)
+    if model_cls is None:
+        return False, None, None
+
+    msg = response.choices[0].message
+    content = msg.content
+    if content is None:
+        # tool_calls response or empty — nothing to validate here
+        return False, None, None
+
+    # Try JSON parse then Pydantic validation
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return True, f"Response is not valid JSON: {exc}", model_cls
+
+    try:
+        model_cls.model_validate(parsed)
+    except Exception as exc:
+        return True, str(exc), model_cls
+
+    return False, None, None
+
+
+def build_response_format_retry_kw(
+    *,
+    kw: dict,
+    response: "ChatCompletion",
+    validation_error: str,
+    pydantic_model: Type[BaseModel],
+) -> dict:
+    """Build retry kwargs with a nudge explaining the schema violation."""
+    msg = response.choices[0].message
+
+    retry_messages = list(kw.get("messages", []))
+
+    # Append the non-compliant assistant reply
+    retry_messages.append(
+        {
+            "role": "assistant",
+            "content": msg.content,
+        },
+    )
+
+    # Build a compact schema representation for the nudge
+    schema_str = json.dumps(pydantic_model.model_json_schema(), indent=2)
+
+    nudge = RESPONSE_FORMAT_RETRY_NUDGE.format(
+        error=validation_error,
+        response=msg.content[:500] if msg.content else "(empty)",
+        schema=schema_str,
+    )
+    retry_messages.append(
+        {
+            "role": "user",
+            "content": nudge,
+        },
+    )
+
+    retry_kw = dict(kw)
+    retry_kw["messages"] = retry_messages
+    # Remove tools and response_format from the retry.  The presence of
+    # tools=[] interferes with response_format enforcement on some providers
+    # (notably Anthropic), and response_format itself can be silently ignored
+    # when the conversation context is tool-heavy.  We rely on the explicit
+    # text-based nudge above to enforce the schema instead.
+    retry_kw.pop("tools", None)
+    retry_kw.pop("tool_choice", None)
+    retry_kw.pop("response_format", None)
+    return retry_kw

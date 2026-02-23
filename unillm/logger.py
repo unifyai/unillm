@@ -5,17 +5,23 @@ LLM I/O Logging and OpenTelemetry Tracing
 Provides console and file-based logging for LLM request/response payloads,
 plus OpenTelemetry tracing for distributed observability.
 
-Logging is controlled by two environment variables:
-- UNILLM_LOG: Enable/disable all logging (default: true)
-- UNILLM_LOG_DIR: Directory for log files (default: console only)
+Terminal and file logging are independently controlled:
 
-When UNILLM_LOG_DIR is set, structured files are written:
+- UNILLM_TERMINAL_LOG: Enable/disable terminal (console) output (default: true)
+- UNILLM_LOG_DIR: Directory for file-based traces (independent of terminal)
+
+When UNILLM_LOG_DIR is set, structured files are written regardless of
+UNILLM_TERMINAL_LOG:
 - During the call: ``{timestamp}_pending.txt`` (contains request only)
 - After completion: ``{timestamp}_hit.txt`` or ``{timestamp}_miss.txt``
   (contains both request and response, with cache status in filename)
 
 If an LLM call hangs or crashes, the ``_pending.txt`` file remains as evidence
 of the incomplete request.
+
+Typical production configuration:
+- UNILLM_TERMINAL_LOG=false + UNILLM_LOG_DIR=/var/log/unillm/
+  → quiet terminal, verbose file traces
 
 OpenTelemetry tracing is controlled by:
 - UNILLM_OTEL: Enable/disable OTel tracing (default: false)
@@ -35,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -42,15 +49,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import unify
+
 from .settings import SETTINGS
 
 # ---------------------------------------------------------------------------
-# Console logging setup
+# Logging setup — terminal and file are independent
 # ---------------------------------------------------------------------------
 
 _LOGGER = logging.getLogger("unillm")
-_LOG_ENABLED = SETTINGS.UNILLM_LOG
-_LOGGER.setLevel(logging.DEBUG if _LOG_ENABLED else logging.WARNING)
+_TERMINAL_LOG_ENABLED = SETTINGS.UNILLM_TERMINAL_LOG
+_LOGGER.setLevel(logging.DEBUG if _TERMINAL_LOG_ENABLED else logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # OpenTelemetry setup
@@ -287,7 +296,7 @@ def set_span_response(span, cache_status: str, response: Any = None) -> None:
 
     Args:
         span: The OTel span (or None)
-        cache_status: "hit" or "miss"
+        cache_status: "hit", "miss", or "disabled"
         response: The LLM response object (optional)
     """
     if span is None:
@@ -354,11 +363,9 @@ def configure_log_dir(log_dir: Optional[str] = None) -> Optional[Path]:
 
 
 def _get_log_dir() -> Path | None:
-    """Get the log directory path, or None if logging is disabled.
+    """Get the log directory path, or None if not configured.
 
-    Returns None if:
-    - UNILLM_LOG is False (master switch off)
-    - UNILLM_LOG_DIR is not set
+    Returns None if UNILLM_LOG_DIR is not set.
     """
     global _LOG_DIR, _LOG_DIR_CHECKED
 
@@ -366,9 +373,6 @@ def _get_log_dir() -> Path | None:
         return _LOG_DIR
 
     _LOG_DIR_CHECKED = True
-
-    if not _LOG_ENABLED:
-        return None
 
     # Check env var first (allows runtime override), then settings
     log_dir_str = os.getenv("UNILLM_LOG_DIR", "").strip() or SETTINGS.UNILLM_LOG_DIR
@@ -432,28 +436,173 @@ def _truncate_for_console(body_str: str, max_len: int = 500) -> str:
     return body_str[:max_len] + "...(truncated)"
 
 
+def _sanitize_origin(origin: str) -> str:
+    """Sanitize an origin tag for safe use in filenames.
+
+    Replaces any character that is not a word char, hyphen, or dot with ``_``
+    and caps the result at 64 characters.
+    """
+    sanitized = re.sub(r"[^\w\-.]", "_", origin)
+    return sanitized[:64]
+
+
+def _make_label_prefix(
+    label: str | None = None,
+    origin: str | None = None,
+) -> str:
+    """Build the ``[...] `` prefix used in log lines and file headers.
+
+    Returns an empty string when neither *label* nor *origin* is set.
+    """
+    if origin and label:
+        return f"[{origin} :: {label}] "
+    if origin:
+        return f"[{origin}] "
+    if label:
+        return f"[{label}] "
+    return ""
+
+
+def log_usage(
+    model: str,
+    usage: dict,
+    *,
+    transcript: list[dict[str, str]] | None = None,
+    label: str | None = None,
+) -> float:
+    """Log usage for an externally-managed LLM session and deduct credits.
+
+    Designed for APIs that bypass the standard unillm generate() path (e.g.
+    OpenAI Realtime API via LiveKit), where the caller has real usage stats
+    but no unillm client involved in the actual inference.
+
+    This function:
+    1. Writes a log file (request context + usage) to the configured log dir
+    2. Computes the real cost from token counts (including audio tokens)
+    3. Deducts credits from the user's account
+    4. Emits an LLMEvent (so downstream hooks like cumulative spend tracking fire)
+    5. Logs to console
+
+    Args:
+        model: The model identifier (e.g. 'gpt-4o-realtime-preview').
+        usage: Usage dict with token counts. Expected shape::
+
+            {
+                "input_tokens": int,
+                "output_tokens": int,
+                "total_tokens": int,          # optional
+                "input_token_details": {       # optional
+                    "audio_tokens": int,
+                    "text_tokens": int,
+                    "cached_tokens": int,
+                },
+                "output_token_details": {      # optional
+                    "audio_tokens": int,
+                    "text_tokens": int,
+                },
+            }
+
+        transcript: Conversation transcript as a list of
+            ``{"role": "user"|"assistant"|"system", "content": "..."}`` dicts.
+            Included in the log file for debuggability.
+        label: Label for the log entry (e.g. 'gpt-4o-realtime-preview').
+
+    Returns:
+        The billed cost (provider_cost * margin) that was deducted, in USD.
+    """
+    from .costs import compute_full_cost_from_usage, get_cost_margin
+
+    label = label or model
+    label_prefix = f"[{label}] "
+
+    # Build a synthetic request body for the log file
+    request_body = {"model": model}
+    if transcript:
+        request_body["messages"] = transcript
+
+    # Build the response body (usage stats + cost)
+    provider_cost = compute_full_cost_from_usage(model, usage)
+    billed_cost = provider_cost * get_cost_margin()
+
+    response_body = {
+        "usage": usage,
+        "provider_cost": provider_cost,
+        "billed_cost": billed_cost,
+    }
+
+    if _TERMINAL_LOG_ENABLED:
+        _LOGGER.debug(
+            f"🔄 {label_prefix}usage log\n"
+            f"  usage: {json.dumps(usage, default=str)}\n"
+            f"  provider_cost: ${provider_cost:.6f}, billed: ${billed_cost:.6f}",
+        )
+
+    # File log (write a complete file in one shot — no pending phase)
+    log_dir = _get_log_dir()
+    if log_dir is not None:
+        try:
+            now = datetime.now(timezone.utc)
+            hhmmss = now.strftime("%H%M%S")
+            ns = time.time_ns() % 1_000_000_000
+            path = log_dir / f"{hhmmss}_{ns:09d}_usage.txt"
+
+            i = 1
+            while path.exists():
+                path = log_dir / f"{hhmmss}_{ns:09d}_usage_{i}.txt"
+                i += 1
+
+            with path.open("w", encoding="utf-8") as f:
+                f.write(f"🔄 {label_prefix}LLM request ➡️\n")
+                f.write(_normalize_body(_serialize_kw(request_body)).rstrip())
+                f.write("\n")
+                f.write(f"\n🔄 {label_prefix}LLM response ⬅️ [usage]\n")
+                f.write(_normalize_body(response_body).rstrip())
+                f.write("\n")
+        except Exception:
+            pass
+
+    # Deduct credits
+    if billed_cost > 0:
+        try:
+            unify.deduct_credits(billed_cost)
+        except Exception:
+            _LOGGER.warning(f"Failed to deduct credits: ${billed_cost:.6f}")
+
+    # Emit LLM event so downstream hooks (e.g. cumulative spend tracking) fire
+    from .llm_events import LLMEvent, _emit_llm_event
+
+    _emit_llm_event(
+        LLMEvent(
+            request=request_body,
+            response=response_body,
+            provider_cost=provider_cost,
+            billed_cost=billed_cost,
+        ),
+    )
+
+    return billed_cost
+
+
 def write_request_pending(
     request_kw: dict,
     *,
     label: str | None = None,
+    origin: str | None = None,
 ) -> Path | None:
     """Write the request payload immediately with a _pending suffix.
 
-    Logs to console (always when enabled) and to file (if directory set).
+    Logs to console (if terminal logging enabled) and to file (if directory set).
     Returns the file path so we can append the response and rename later.
     If the LLM call hangs/crashes, the _pending file remains as evidence.
     """
-    if not _LOG_ENABLED:
-        return None
-
-    label_prefix = f"[{label}] " if label else ""
+    label_prefix = _make_label_prefix(label, origin)
     serialized = _serialize_kw(request_kw)
     body_str = _normalize_body(serialized)
 
-    # Console log (always when enabled)
-    _LOGGER.debug(
-        f"🔄 {label_prefix}LLM request ➡️\n{_truncate_for_console(body_str)}",
-    )
+    if _TERMINAL_LOG_ENABLED:
+        _LOGGER.debug(
+            f"🔄 {label_prefix}LLM request ➡️\n{_truncate_for_console(body_str)}",
+        )
 
     # File log (only if directory set)
     log_dir = _get_log_dir()
@@ -464,7 +613,8 @@ def write_request_pending(
         now = datetime.now(timezone.utc)
         hhmmss = now.strftime("%H%M%S")
         ns = time.time_ns() % 1_000_000_000
-        base = f"{hhmmss}_{ns:09d}_pending"
+        origin_part = f"_{_sanitize_origin(origin)}" if origin else ""
+        base = f"{hhmmss}_{ns:09d}{origin_part}_pending"
         path = log_dir / f"{base}.txt"
 
         # Handle filename collision
@@ -489,27 +639,28 @@ def append_response_and_finalize(
     cache_status: str,
     *,
     label: str | None = None,
-) -> None:
+    origin: str | None = None,
+) -> Path | None:
     """Append the response to the pending file and rename to reflect cache status.
 
-    Logs to console (always when enabled) and finalizes file (if path provided).
-    The final filename will be: {timestamp}_hit.txt or {timestamp}_miss.txt
-    """
-    if not _LOG_ENABLED:
-        return
+    Logs to console (if terminal logging enabled) and finalizes file (if path provided).
+    The final filename will be: {timestamp}_hit.txt, {timestamp}_miss.txt,
+    or {timestamp}_disabled.txt
 
-    label_prefix = f"[{label}] " if label else ""
+    Returns the finalized file path, or None if no file was written.
+    """
+    label_prefix = _make_label_prefix(label, origin)
     body_str = _normalize_body(response_body)
 
-    # Console log (always when enabled)
-    _LOGGER.debug(
-        f"🔄 {label_prefix}LLM response ⬅️ [cache: {cache_status}]\n"
-        f"{_truncate_for_console(body_str)}",
-    )
+    if _TERMINAL_LOG_ENABLED:
+        _LOGGER.debug(
+            f"🔄 {label_prefix}LLM response ⬅️ [cache: {cache_status}]\n"
+            f"{_truncate_for_console(body_str)}",
+        )
 
     # File log (only if we have a pending path)
     if pending_path is None or not pending_path.exists():
-        return
+        return None
 
     try:
         # Append response to the file
@@ -522,6 +673,7 @@ def append_response_and_finalize(
         new_name = pending_path.name.replace("_pending", f"_{cache_status}")
         new_path = pending_path.parent / new_name
         pending_path.rename(new_path)
+        return new_path
     except Exception:
         # Silent best-effort
-        pass
+        return None
