@@ -19,6 +19,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from pydantic import BaseModel
 
 from unillm.logger import (
+    _expand_string_newlines,
+    _normalize_body,
     _serialize_kw,
     write_request_pending,
     append_response_and_finalize,
@@ -861,6 +863,106 @@ class TestStreamingFileLogging:
             f"Non-streaming calls write a _pending → _hit/_miss file, "
             f"but the streaming path skips write_request_pending entirely."
         )
+
+
+class TestExpandStringNewlines:
+    """Tests for newline expansion in JSON string values."""
+
+    def test_normalize_body_expands_newlines(self):
+        """_normalize_body expands \\n in string values into real newlines."""
+        body = {
+            "role": "system",
+            "content": "Line one\nLine two\nLine three",
+        }
+        result = _normalize_body(body)
+        lines = result.split("\n")
+
+        content_line = next(l for l in lines if "Line one" in l)
+        assert '"content"' in content_line
+
+        idx = lines.index(content_line)
+        assert "Line two" in lines[idx + 1]
+        assert "Line three" in lines[idx + 2]
+
+    def test_continuation_lines_aligned_to_content_start(self):
+        """Expanded newlines produce continuation lines aligned to content start."""
+        body = {"key": "aaa\nbbb"}
+        result = _normalize_body(body)
+        lines = result.split("\n")
+
+        key_line = next(l for l in lines if "aaa" in l)
+        idx = lines.index(key_line)
+        cont_line = lines[idx + 1]
+
+        aaa_col = key_line.index("aaa")
+        bbb_col = cont_line.index("bbb")
+        assert aaa_col == bbb_col
+
+    def test_escaped_backslash_n_not_expanded(self):
+        r"""Literal backslash+n in values (\\n in JSON) is not expanded."""
+        import json
+
+        body = {"text": "before\\nafter"}
+        json_text = json.dumps(body, indent=4)
+        result = _expand_string_newlines(json_text)
+
+        for line in result.split("\n"):
+            if "before" in line:
+                assert "after" in line
+                break
+
+    def test_preserves_json_structure(self):
+        """Expansion only affects string interiors, not JSON structure."""
+        body = {
+            "messages": [
+                {"role": "system", "content": "Hello\nWorld"},
+                {"role": "user", "content": "No newlines here"},
+            ],
+        }
+        result = _normalize_body(body)
+
+        assert '"messages"' in result
+        assert '"role"' in result
+        assert '"system"' in result
+        assert '"user"' in result
+        assert '"No newlines here"' in result
+
+    def test_empty_strings_unchanged(self):
+        """Empty string values pass through without issue."""
+        body = {"key": ""}
+        result = _normalize_body(body)
+        assert '"key": ""' in result
+
+    def test_deeply_nested_string_indent(self):
+        """Strings at deeper nesting levels get correct continuation indent."""
+        body = {"outer": {"inner": {"deep": "first\nsecond"}}}
+        result = _normalize_body(body)
+        lines = result.split("\n")
+
+        first_line = next(l for l in lines if "first" in l)
+        idx = lines.index(first_line)
+        cont_line = lines[idx + 1]
+
+        first_col = first_line.index("first")
+        second_col = cont_line.index("second")
+        assert first_col == second_col
+
+    def test_multiple_strings_with_newlines(self):
+        """Multiple string values with newlines are each expanded independently."""
+        body = {
+            "a": "x\ny",
+            "b": "p\nq",
+        }
+        result = _normalize_body(body)
+        lines = result.split("\n")
+
+        x_line = next(l for l in lines if '"a"' in l)
+        x_idx = lines.index(x_line)
+        assert "y" in lines[x_idx + 1]
+
+        p_line = next(l for l in lines if '"b"' in l)
+        p_idx = lines.index(p_line)
+        assert "q" in lines[p_idx + 1]
 
 
 class TestSettingsValidation:
