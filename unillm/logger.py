@@ -419,12 +419,61 @@ def _serialize_kw(kw: dict) -> dict:
     return _convert(kw)
 
 
+def _expand_string_newlines(json_text: str) -> str:
+    r"""Expand \n escapes inside JSON string values into real newlines.
+
+    After json.dumps produces indented JSON, string values containing \n
+    are unreadable because the entire text sits on one line. This walks
+    the output and replaces \n inside strings with a real newline plus
+    spaces aligning continuation text to the string's content start column.
+
+    All other JSON escapes (\\, \", \t, \uXXXX, etc.) pass through
+    unchanged, and the structural JSON indentation is untouched.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(json_text)
+    in_string = False
+    indent = 0
+
+    while i < n:
+        ch = json_text[i]
+
+        if not in_string:
+            out.append(ch)
+            if ch == '"':
+                in_string = True
+                last_nl = json_text.rfind("\n", 0, i)
+                indent = i - last_nl
+            i += 1
+            continue
+
+        if ch == "\\" and i + 1 < n:
+            nxt = json_text[i + 1]
+            if nxt == "n":
+                out.append("\n")
+                out.append(" " * indent)
+                i += 2
+                continue
+            out.append(ch)
+            out.append(nxt)
+            i += 2
+            continue
+
+        out.append(ch)
+        if ch == '"':
+            in_string = False
+        i += 1
+
+    return "".join(out)
+
+
 def _normalize_body(body: Any) -> str:
     """Normalize a body payload to a string for writing."""
     if isinstance(body, str):
         return body
     try:
-        return json.dumps(body, indent=4, default=str)
+        return _expand_string_newlines(json.dumps(body, indent=4, default=str))
     except Exception:
         return str(body)
 

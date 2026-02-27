@@ -1162,10 +1162,6 @@ class Unify(_UniClient):
                 ),
             )
 
-        # Deduct credits for cache misses (use already-computed billed_cost)
-        if billed_cost is not None and billed_cost > 0:
-            unify.deduct_credits(billed_cost, api_key=self._api_key)
-
         # Apply postprocessing checks (tool retries + response_format validation)
         original_completion = chat_completion
         if chat_completion is not None:
@@ -1193,6 +1189,10 @@ class Unify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
+
+        # Deduct credits for cache misses (use already-computed billed_cost).
+        if billed_cost is not None and billed_cost > 0:
+            unify.deduct_credits(billed_cost, api_key=self._api_key)
 
         # Always return full completion; _apply_stateful_logic handles extraction
         return chat_completion
