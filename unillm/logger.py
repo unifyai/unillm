@@ -488,10 +488,10 @@ def _truncate_for_console(body_str: str, max_len: int = 500) -> str:
 def _sanitize_origin(origin: str) -> str:
     """Sanitize an origin tag for safe use in filenames.
 
-    Replaces any character that is not a word char, hyphen, or dot with ``_``
+    Replaces any character that is not a word char or hyphen with ``_``
     and caps the result at 64 characters.
     """
-    sanitized = re.sub(r"[^\w\-.]", "_", origin)
+    sanitized = re.sub(r"[^\w\-]", "_", origin)
     return sanitized[:64]
 
 
