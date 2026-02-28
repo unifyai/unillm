@@ -165,7 +165,7 @@ def test_write_request_pending_creates_file(tmp_path, monkeypatch):
 
     assert path is not None
     assert path.exists()
-    assert "_pending" in path.name
+    assert ".cache_pending." in path.name
 
     content = path.read_text()
     assert "🔄 [test] LLM request ➡️" in content
@@ -200,8 +200,7 @@ def test_append_response_and_finalize(tmp_path, monkeypatch):
     # Pending file should be gone
     assert not pending_path.exists()
 
-    # Should have a _hit file now
-    hit_files = list(tmp_path.glob("*_hit.txt"))
+    hit_files = list(tmp_path.glob("*.cache_hit.txt"))
     assert len(hit_files) == 1
 
     content = hit_files[0].read_text()
@@ -237,14 +236,41 @@ def test_append_response_and_finalize_with_none_response(tmp_path, monkeypatch):
     # Pending file should be gone
     assert not pending_path.exists()
 
-    # Should have an _error file now
-    error_files = list(tmp_path.glob("*_error.txt"))
+    error_files = list(tmp_path.glob("*.cache_error.txt"))
     assert len(error_files) == 1
 
     content = error_files[0].read_text()
     assert "LLM request ➡️" in content
     assert "LLM response ⬅️" in content
     assert "[cache: error]" in content
+
+
+def test_append_response_disabled_drops_cache_extension(tmp_path, monkeypatch):
+    """When cache is disabled the final file has no .cache_* extension."""
+    from unillm import settings
+    from unillm import logger
+
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+    pending_path = write_request_pending({"model": "gpt-4"}, label="test")
+    assert pending_path is not None
+
+    final_path = append_response_and_finalize(
+        pending_path,
+        {"choices": [{"message": {"content": "Hello"}}]},
+        "disabled",
+        label="test",
+    )
+
+    assert not pending_path.exists()
+    assert final_path is not None
+    assert ".cache_" not in final_path.name
+    assert final_path.name.endswith(".txt")
 
 
 def test_write_request_without_label(tmp_path, monkeypatch):
@@ -861,7 +887,7 @@ class TestStreamingFileLogging:
         log_files = list(tmp_path.glob("*.txt"))
         assert len(log_files) >= 1, (
             f"Streaming call produced no log files in {tmp_path}. "
-            f"Non-streaming calls write a _pending → _hit/_miss file, "
+            f"Non-streaming calls write a .cache_pending → .cache_hit/.cache_miss file, "
             f"but the streaming path skips write_request_pending entirely."
         )
 
