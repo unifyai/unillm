@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from unillm.logger import (
     _expand_string_newlines,
     _normalize_body,
+    _sanitize_origin,
     _serialize_kw,
     write_request_pending,
     append_response_and_finalize,
@@ -862,6 +863,18 @@ class TestStreamingFileLogging:
             f"Streaming call produced no log files in {tmp_path}. "
             f"Non-streaming calls write a _pending → _hit/_miss file, "
             f"but the streaming path skips write_request_pending entirely."
+        )
+
+
+class TestSanitizeOrigin:
+    """Tests for _sanitize_origin filename safety."""
+
+    def test_dots_replaced_with_underscores(self):
+        """Dots in origin must become underscores so they don't look like file extensions."""
+        assert "." not in _sanitize_origin("ConversationManager.decide")
+        assert (
+            _sanitize_origin("ConversationManager.decide")
+            == "ConversationManager_decide"
         )
 
 
