@@ -849,9 +849,9 @@ class _Client(ABC):
         Set a callback invoked with the finalized log file path after each LLM call.
 
         The callback fires once per generate() call, after the request+response
-        have been written and the file renamed from ``_pending`` to its final
-        name (e.g. ``_hit.txt``, ``_miss.txt``).  Only fires when
-        ``UNILLM_LOG_DIR`` is configured and a file was actually written.
+        have been written and the file renamed from ``.cache_pending`` to its
+        final name (e.g. ``.cache_hit.txt``, ``.cache_miss.txt``).  Only fires
+        when ``UNILLM_LOG_DIR`` is configured and a file was actually written.
 
         Args:
             callback: A callable receiving the final ``Path``, or None to clear.

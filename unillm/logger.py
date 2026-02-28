@@ -12,12 +12,13 @@ Terminal and file logging are independently controlled:
 
 When UNILLM_LOG_DIR is set, structured files are written regardless of
 UNILLM_TERMINAL_LOG:
-- During the call: ``{timestamp}_pending.txt`` (contains request only)
-- After completion: ``{timestamp}_hit.txt`` or ``{timestamp}_miss.txt``
+- During the call: ``{base}.cache_pending.txt`` (contains request only)
+- After completion: ``{base}.cache_hit.txt`` or ``{base}.cache_miss.txt``
   (contains both request and response, with cache status in filename)
+- When caching is disabled: ``{base}.txt`` (no cache extension)
 
-If an LLM call hangs or crashes, the ``_pending.txt`` file remains as evidence
-of the incomplete request.
+If an LLM call hangs or crashes, the ``.cache_pending.txt`` file remains as
+evidence of the incomplete request.
 
 Typical production configuration:
 - UNILLM_TERMINAL_LOG=false + UNILLM_LOG_DIR=/var/log/unillm/
@@ -663,13 +664,13 @@ def write_request_pending(
         hhmmss = now.strftime("%H%M%S")
         ns = time.time_ns() % 1_000_000_000
         origin_part = f"_{_sanitize_origin(origin)}" if origin else ""
-        base = f"{hhmmss}_{ns:09d}{origin_part}_pending"
-        path = log_dir / f"{base}.txt"
+        base = f"{hhmmss}_{ns:09d}{origin_part}"
+        path = log_dir / f"{base}.cache_pending.txt"
 
         # Handle filename collision
         i = 1
         while path.exists():
-            path = log_dir / f"{base}_{i}.txt"
+            path = log_dir / f"{base}_{i}.cache_pending.txt"
             i += 1
 
         with path.open("w", encoding="utf-8") as f:
@@ -693,8 +694,8 @@ def append_response_and_finalize(
     """Append the response to the pending file and rename to reflect cache status.
 
     Logs to console (if terminal logging enabled) and finalizes file (if path provided).
-    The final filename will be: {timestamp}_hit.txt, {timestamp}_miss.txt,
-    or {timestamp}_disabled.txt
+    The final filename will be ``{base}.cache_hit.txt``, ``{base}.cache_miss.txt``,
+    etc.  When caching is disabled the extension is simply ``.txt``.
 
     Returns the finalized file path, or None if no file was written.
     """
@@ -718,8 +719,13 @@ def append_response_and_finalize(
             f.write(body_str.rstrip())
             f.write("\n")
 
-        # Rename from _pending to _hit or _miss
-        new_name = pending_path.name.replace("_pending", f"_{cache_status}")
+        if cache_status == "disabled":
+            new_name = pending_path.name.replace(".cache_pending.", ".")
+        else:
+            new_name = pending_path.name.replace(
+                ".cache_pending.",
+                f".cache_{cache_status}.",
+            )
         new_path = pending_path.parent / new_name
         pending_path.rename(new_path)
         return new_path
