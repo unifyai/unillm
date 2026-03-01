@@ -193,8 +193,9 @@ export UNILLM_LOG_DIR=/path/to/logs
 ```
 
 When `UNILLM_LOG_DIR` is set, structured log files are written:
-- During call: `{timestamp}_pending.txt` (request only)
-- After completion: `{timestamp}_hit.txt` or `{timestamp}_miss.txt` (request + response)
+- During call (cache enabled): `{base}.cache_pending.txt`
+- During call (cache disabled): `{base}.pending.txt`
+- After completion: `{base}.cache_hit.txt` or `{base}.cache_miss.txt` (cache enabled), or `{base}.txt` (cache disabled)
 
 Pending files remain as evidence if an LLM call hangs or crashes.
 

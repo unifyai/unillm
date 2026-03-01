@@ -27,21 +27,25 @@ LLM request/response traces capture the raw I/O for each LLM call. These are inv
 
 ```
 logs/unillm/
-├── 142536_123456789_hit.txt      # Cache hit - response from cache
-├── 142537_987654321_miss.txt     # Cache miss - fresh LLM call
-├── 142538_111222333_pending.txt  # In-progress (or crashed) request
+├── 142536_123456789.cache_hit.txt      # Cache hit - response from cache
+├── 142537_987654321.cache_miss.txt     # Cache miss - fresh LLM call
+├── 142538_111222333.cache_pending.txt  # In-progress (cache enabled, or crashed)
+├── 142539_444555666.pending.txt        # In-progress (cache disabled, or crashed)
+├── 142540_777888999.txt                # Completed (cache disabled)
 └── ...
 ```
 
 ### Log File Naming
 
-Files follow the format: `{HHMMSS}_{nanoseconds}_{status}.txt`
+Files use compound extensions to encode cache status: `{HHMMSS}_{nanoseconds}[_{origin}].{ext}`
 
-| Status | Meaning |
-|--------|---------|
-| `pending` | Request started, waiting for response (file remains if call hangs/crashes) |
-| `hit` | Response served from cache |
-| `miss` | Fresh LLM call completed |
+| Extension | Meaning |
+|-----------|---------|
+| `.cache_pending.txt` | Request started (cache enabled), waiting for response |
+| `.pending.txt` | Request started (cache disabled), waiting for response |
+| `.cache_hit.txt` | Response served from cache |
+| `.cache_miss.txt` | Fresh LLM call completed |
+| `.txt` | Completed with caching disabled |
 
 ### Log File Contents
 
@@ -93,7 +97,7 @@ export UNILLM_LOG_DIR=/path/to/logs/unillm
 
 ### Debugging Hung Requests
 
-If an LLM call hangs or crashes, the `_pending.txt` file remains as evidence of the incomplete request. This is useful for:
+If an LLM call hangs or crashes, the `.pending.txt` or `.cache_pending.txt` file remains as evidence of the incomplete request. This is useful for:
 - Identifying which requests are timing out
 - Debugging network issues
 - Spotting malformed requests that cause provider errors
