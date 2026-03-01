@@ -872,9 +872,11 @@ class _Client(ABC):
         each LLM call.
 
         The callback fires once per generate() call, immediately after
-        ``write_request_pending`` creates the ``.cache_pending.txt`` file —
-        before the actual LLM inference begins. This allows callers to know
-        the log file path at call-start time rather than waiting for completion.
+        ``write_request_pending`` creates the pending file — before the
+        actual LLM inference begins. This allows callers to know the log
+        file path at call-start time rather than waiting for completion.
+        The file is ``.cache_pending.txt`` when caching is active, or
+        ``.pending.txt`` when caching is disabled.
 
         Only fires when ``UNILLM_LOG_DIR`` is configured and a file was
         actually written.

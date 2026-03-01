@@ -149,7 +149,7 @@ def test_serialize_kw_non_json_serializable():
 
 
 def test_write_request_pending_creates_file(tmp_path, monkeypatch):
-    """Writing a pending request creates a timestamped file."""
+    """Writing a pending request creates a timestamped file with cache marker."""
     from unillm import settings
     from unillm import logger
 
@@ -166,6 +166,30 @@ def test_write_request_pending_creates_file(tmp_path, monkeypatch):
     assert path is not None
     assert path.exists()
     assert ".cache_pending." in path.name
+
+    content = path.read_text()
+    assert "🔄 [test] LLM request ➡️" in content
+    assert '"model": "gpt-4"' in content
+
+
+def test_write_request_pending_no_cache_marker(tmp_path, monkeypatch):
+    """When cache_enabled=False the pending file uses .pending.txt (no cache marker)."""
+    from unillm import settings
+    from unillm import logger
+
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+    path = write_request_pending({"model": "gpt-4"}, label="test", cache_enabled=False)
+
+    assert path is not None
+    assert path.exists()
+    assert ".cache_pending." not in path.name
+    assert path.name.endswith(".pending.txt")
 
     content = path.read_text()
     assert "🔄 [test] LLM request ➡️" in content
@@ -246,7 +270,7 @@ def test_append_response_and_finalize_with_none_response(tmp_path, monkeypatch):
 
 
 def test_append_response_disabled_drops_cache_extension(tmp_path, monkeypatch):
-    """When cache is disabled the final file has no .cache_* extension."""
+    """When cache_pending file gets finalized with 'disabled', cache marker is removed."""
     from unillm import settings
     from unillm import logger
 
@@ -257,6 +281,8 @@ def test_append_response_disabled_drops_cache_extension(tmp_path, monkeypatch):
     monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
     monkeypatch.setattr(logger, "_LOG_DIR", None)
 
+    # Even if pending was created with cache_enabled=True (default), finalizing
+    # with "disabled" strips the cache marker.
     pending_path = write_request_pending({"model": "gpt-4"}, label="test")
     assert pending_path is not None
 
@@ -270,7 +296,47 @@ def test_append_response_disabled_drops_cache_extension(tmp_path, monkeypatch):
     assert not pending_path.exists()
     assert final_path is not None
     assert ".cache_" not in final_path.name
+    assert ".pending." not in final_path.name
     assert final_path.name.endswith(".txt")
+
+
+def test_full_flow_cache_disabled(tmp_path, monkeypatch):
+    """Full flow with caching disabled: .pending.txt → .txt (no cache marker anywhere)."""
+    from unillm import settings
+    from unillm import logger
+
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+    pending_path = write_request_pending(
+        {"model": "gpt-4"},
+        label="test",
+        cache_enabled=False,
+    )
+    assert pending_path is not None
+    assert ".cache_" not in pending_path.name
+    assert pending_path.name.endswith(".pending.txt")
+
+    final_path = append_response_and_finalize(
+        pending_path,
+        {"choices": [{"message": {"content": "Hello"}}]},
+        "disabled",
+        label="test",
+    )
+
+    assert not pending_path.exists()
+    assert final_path is not None
+    assert ".cache_" not in final_path.name
+    assert ".pending." not in final_path.name
+    assert final_path.name.endswith(".txt")
+
+    content = final_path.read_text()
+    assert "LLM request ➡️" in content
+    assert "LLM response ⬅️" in content
 
 
 def test_write_request_without_label(tmp_path, monkeypatch):
@@ -939,10 +1005,12 @@ class TestOnLogFilePendingCallback:
             await client.generate(messages=[{"role": "user", "content": "Hi"}])
 
         assert len(pending_paths) == 1
-        assert ".cache_pending." in pending_paths[0].name
+        # cache=False → no cache marker on the pending file
+        assert ".cache_pending." not in pending_paths[0].name
+        assert pending_paths[0].name.endswith(".pending.txt")
 
         assert len(final_paths) == 1
-        assert ".cache_pending." not in final_paths[0].name
+        assert ".pending." not in final_paths[0].name
 
         assert pending_paths[0].stem.split(".")[0] == final_paths[0].stem.split(".")[0]
 
@@ -989,7 +1057,9 @@ class TestOnLogFilePendingCallback:
                 pass
 
         assert len(pending_paths) == 1
-        assert ".cache_pending." in pending_paths[0].name
+        # cache=False + streaming → no cache marker on the pending file
+        assert ".cache_pending." not in pending_paths[0].name
+        assert pending_paths[0].name.endswith(".pending.txt")
 
         assert len(final_paths) == 1
 
