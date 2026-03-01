@@ -892,6 +892,8 @@ class Unify(_UniClient):
             label=label,
             origin=origin,
         )
+        if pending and self._on_log_file_pending:
+            self._on_log_file_pending(pending)
         completion = None
         try:
             with llm_span(
@@ -1030,6 +1032,8 @@ class Unify(_UniClient):
             label=endpoint,
             origin=origin,
         )
+        if pending_path and self._on_log_file_pending:
+            self._on_log_file_pending(pending_path)
 
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
@@ -1340,6 +1344,8 @@ class AsyncUnify(_UniClient):
             label=endpoint,
             origin=origin,
         )
+        if pending_path and self._on_log_file_pending:
+            self._on_log_file_pending(pending_path)
 
         # Start limit check and stream connection in parallel for in-flight cancellation
         limit_task: asyncio.Task | None = None
@@ -1487,6 +1493,8 @@ class AsyncUnify(_UniClient):
             label=label,
             origin=origin,
         )
+        if pending and self._on_log_file_pending:
+            self._on_log_file_pending(pending)
         completion = None
         try:
             with llm_span(
@@ -1636,6 +1644,8 @@ class AsyncUnify(_UniClient):
             label=endpoint,
             origin=origin,
         )
+        if pending_path and self._on_log_file_pending:
+            self._on_log_file_pending(pending_path)
 
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")

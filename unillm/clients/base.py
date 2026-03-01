@@ -96,6 +96,7 @@ class _Client(ABC):
         self._prompt_caching = None
         self._origin = None
         self._on_log_file = None
+        self._on_log_file_pending = None
         self._extra_headers = None
 
         # set based on arguments
@@ -860,6 +861,31 @@ class _Client(ABC):
             This client, useful for chaining inplace calls.
         """
         self._on_log_file = callback
+        return self
+
+    def set_on_log_file_pending(
+        self,
+        callback: Optional[Callable[[Path], None]],
+    ) -> Self:
+        """
+        Set a callback invoked with the pending log file path at the start of
+        each LLM call.
+
+        The callback fires once per generate() call, immediately after
+        ``write_request_pending`` creates the ``.cache_pending.txt`` file —
+        before the actual LLM inference begins. This allows callers to know
+        the log file path at call-start time rather than waiting for completion.
+
+        Only fires when ``UNILLM_LOG_DIR`` is configured and a file was
+        actually written.
+
+        Args:
+            callback: A callable receiving the pending ``Path``, or None to clear.
+
+        Returns:
+            This client, useful for chaining inplace calls.
+        """
+        self._on_log_file_pending = callback
         return self
 
     def set_extra_headers(self, value: Headers) -> Self:
