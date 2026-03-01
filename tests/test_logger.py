@@ -892,6 +892,149 @@ class TestStreamingFileLogging:
         )
 
 
+class TestOnLogFilePendingCallback:
+    """Tests for the set_on_log_file_pending callback on clients."""
+
+    @pytest.mark.asyncio
+    async def test_async_non_stream_fires_pending_callback(self, tmp_path, monkeypatch):
+        """AsyncUnify non-streaming calls should fire the pending callback before inference."""
+        from unittest.mock import patch, MagicMock
+        from unillm import settings
+        from unillm import logger
+        import unillm
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Hi"
+        mock_response.model_dump = MagicMock(
+            return_value={"choices": [{"message": {"content": "Hi"}}]},
+        )
+
+        pending_paths: list = []
+        final_paths: list = []
+
+        async def mock_acompletion(*args, **kwargs):
+            return mock_response
+
+        with (
+            patch(
+                "unillm.clients.uni_llm.litellm.acompletion",
+                side_effect=mock_acompletion,
+            ),
+            patch(
+                "unillm.clients.uni_llm.compute_cost_from_response",
+                return_value=None,
+            ),
+        ):
+            client = unillm.AsyncUnify("gpt-4@openai", cache=False)
+            client.set_on_log_file_pending(lambda p: pending_paths.append(p))
+            client.set_on_log_file(lambda p: final_paths.append(p))
+            await client.generate(messages=[{"role": "user", "content": "Hi"}])
+
+        assert len(pending_paths) == 1
+        assert ".cache_pending." in pending_paths[0].name
+
+        assert len(final_paths) == 1
+        assert ".cache_pending." not in final_paths[0].name
+
+        assert pending_paths[0].stem.split(".")[0] == final_paths[0].stem.split(".")[0]
+
+    @pytest.mark.asyncio
+    async def test_async_stream_fires_pending_callback(self, tmp_path, monkeypatch):
+        """AsyncUnify streaming calls should fire the pending callback before inference."""
+        from unittest.mock import patch, MagicMock
+        from unillm import settings
+        from unillm import logger
+        import unillm
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        mock_chunk = MagicMock()
+        mock_chunk.choices = [MagicMock()]
+        mock_chunk.choices[0].delta.content = "Hello"
+        mock_chunk.usage = None
+
+        pending_paths: list = []
+        final_paths: list = []
+
+        async def mock_acompletion(*args, **kwargs):
+            async def async_gen():
+                yield mock_chunk
+
+            return async_gen()
+
+        with patch(
+            "unillm.clients.uni_llm.litellm.acompletion",
+            side_effect=mock_acompletion,
+        ):
+            client = unillm.AsyncUnify("gpt-4@openai", stream=True, cache=False)
+            client.set_on_log_file_pending(lambda p: pending_paths.append(p))
+            client.set_on_log_file(lambda p: final_paths.append(p))
+            gen = await client.generate(
+                messages=[{"role": "user", "content": "Hi"}],
+            )
+            async for _ in gen:
+                pass
+
+        assert len(pending_paths) == 1
+        assert ".cache_pending." in pending_paths[0].name
+
+        assert len(final_paths) == 1
+
+    @pytest.mark.asyncio
+    async def test_pending_callback_not_fired_when_no_log_dir(self, monkeypatch):
+        """When UNILLM_LOG_DIR is unset, pending callback should not fire."""
+        from unittest.mock import patch, MagicMock
+        from unillm import settings
+        from unillm import logger
+        import unillm
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", "")
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Hi"
+        mock_response.model_dump = MagicMock(
+            return_value={"choices": [{"message": {"content": "Hi"}}]},
+        )
+
+        pending_paths: list = []
+
+        async def mock_acompletion(*args, **kwargs):
+            return mock_response
+
+        with (
+            patch(
+                "unillm.clients.uni_llm.litellm.acompletion",
+                side_effect=mock_acompletion,
+            ),
+            patch(
+                "unillm.clients.uni_llm.compute_cost_from_response",
+                return_value=None,
+            ),
+        ):
+            client = unillm.AsyncUnify("gpt-4@openai", cache=False)
+            client.set_on_log_file_pending(lambda p: pending_paths.append(p))
+            await client.generate(messages=[{"role": "user", "content": "Hi"}])
+
+        assert len(pending_paths) == 0
+
+
 class TestSanitizeOrigin:
     """Tests for _sanitize_origin filename safety."""
 
