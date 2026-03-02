@@ -1,6 +1,7 @@
 from .helpers import new_llm_client
 from unillm.clients.provider_preprocessing import (
     apply_provider_preprocessing,
+    _convert_prefill_to_system_message,
     _has_prefilled_assistant_before_real,
     _is_non_compliant_assistant_tool_call,
     _has_non_compliant_tool_calls,
@@ -274,6 +275,196 @@ class TestPreprocessingPrefillRefinement:
             )
             is False
         )
+
+
+class TestPrefillToSystemMessageImageExtraction:
+    """
+    Tests for extracting image blocks from messages during prefill-to-system
+    conversion. Without extraction, base64 image data gets JSON-serialized as
+    text tokens in the system message, causing massive context window bloat.
+    """
+
+    def test_images_extracted_from_prefilled_messages(self):
+        """
+        Image blocks in prefilled messages should be extracted and sent as native
+        image content, not JSON-serialized as text in the system message.
+        """
+        base64_image = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,SGVsbG8gV29ybGQh"},
+        }
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "What do you see?"},
+            {"role": "assistant", "content": "I see something."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "[Screenshot] User said: look"},
+                    base64_image,
+                ],
+            },
+        ]
+
+        result = _convert_prefill_to_system_message(messages)
+
+        # System message should contain JSON-serialized text but NOT base64 data
+        system_msg = result[0]
+        assert system_msg["role"] == "system"
+        assert "SGVsbG8gV29ybGQh" not in system_msg["content"]
+        assert "[Screenshot]" in system_msg["content"]
+
+        # Follow-up user message should contain the extracted image as native content
+        user_msg = result[1]
+        assert user_msg["role"] == "user"
+        assert isinstance(user_msg["content"], list)
+
+        image_blocks = [b for b in user_msg["content"] if b.get("type") == "image_url"]
+        assert len(image_blocks) == 1
+        assert image_blocks[0] == base64_image
+
+        text_blocks = [b for b in user_msg["content"] if b.get("type") == "text"]
+        assert any("[continue]" in b["text"] for b in text_blocks)
+
+    def test_multiple_images_all_extracted(self):
+        """Multiple images from different messages should all be extracted."""
+        img1 = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,aW1hZ2Ux"},
+        }
+        img2 = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,aW1hZ2Uy"},
+        }
+        messages = [
+            {"role": "system", "content": "System prompt."},
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "[Webcam]"},
+                    img1,
+                    {"type": "text", "text": "[Screen]"},
+                    img2,
+                ],
+            },
+        ]
+
+        result = _convert_prefill_to_system_message(messages)
+
+        system_msg = result[0]
+        assert "aW1hZ2Ux" not in system_msg["content"]
+        assert "aW1hZ2Uy" not in system_msg["content"]
+
+        user_msg = result[1]
+        image_blocks = [b for b in user_msg["content"] if b.get("type") == "image_url"]
+        assert len(image_blocks) == 2
+
+    def test_no_images_unchanged_behavior(self):
+        """When there are no images, behavior is identical to before."""
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+
+        result = _convert_prefill_to_system_message(messages)
+
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+        assert result[1]["role"] == "user"
+        assert result[1]["content"] == "[continue]"
+
+    def test_images_with_real_response_after(self):
+        """Images in prefilled messages are extracted when real responses follow."""
+        base64_image = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,dGVzdA=="},
+        }
+        messages = [
+            {"role": "user", "content": "Look at this"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "[Screenshot]"},
+                    base64_image,
+                ],
+            },
+            {"role": "assistant", "content": "prefilled response"},
+            {
+                "role": "assistant",
+                "content": "Real response",
+                "thinking_blocks": [{"type": "thinking", "thinking": "..."}],
+            },
+            {"role": "user", "content": "Continue"},
+        ]
+
+        result = _convert_prefill_to_system_message(messages)
+
+        system_msg = result[0]
+        assert system_msg["role"] == "system"
+        assert "dGVzdA==" not in system_msg["content"]
+
+        # Image user message should be inserted before real messages
+        image_msg = result[1]
+        assert image_msg["role"] == "user"
+        assert isinstance(image_msg["content"], list)
+        image_blocks = [b for b in image_msg["content"] if b.get("type") == "image_url"]
+        assert len(image_blocks) == 1
+
+        # Real messages should follow
+        assert result[2]["role"] == "assistant"
+        assert result[2].get("thinking_blocks") is not None
+        assert result[3]["role"] == "user"
+        assert result[3]["content"] == "Continue"
+
+    def test_integration_with_full_preprocessing(self):
+        """
+        End-to-end: images in prefilled conversation with reasoning_effort
+        should be preserved as native image blocks, not text-serialized.
+        """
+        base64_image = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,SGVsbG8="},
+        }
+        messages = [
+            {"role": "system", "content": "System prompt"},
+            {"role": "assistant", "content": "Hey!"},
+            {"role": "user", "content": "Look at my screen"},
+            {"role": "assistant", "content": "I see it."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "[User Screen]"},
+                    base64_image,
+                ],
+            },
+        ]
+
+        kw = {"messages": messages, "reasoning_effort": "low"}
+        result = apply_provider_preprocessing(kw, "anthropic")
+
+        result_messages = result["messages"]
+
+        # System message should NOT contain base64 data as text
+        system_msgs = [m for m in result_messages if m["role"] == "system"]
+        for msg in system_msgs:
+            content = msg["content"]
+            if isinstance(content, str):
+                assert "SGVsbG8=" not in content
+
+        # There should be a user message with native image content
+        user_msgs = [m for m in result_messages if m["role"] == "user"]
+        found_image = False
+        for msg in user_msgs:
+            content = msg["content"]
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "image_url":
+                        found_image = True
+                        assert block == base64_image
+        assert found_image, "Image should be preserved as native content block"
 
 
 def test_prefill_assistant_message(model):

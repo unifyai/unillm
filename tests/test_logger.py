@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from unillm.logger import (
     _expand_string_newlines,
     _normalize_body,
+    _sanitize_origin,
     _serialize_kw,
     write_request_pending,
     append_response_and_finalize,
@@ -148,7 +149,7 @@ def test_serialize_kw_non_json_serializable():
 
 
 def test_write_request_pending_creates_file(tmp_path, monkeypatch):
-    """Writing a pending request creates a timestamped file."""
+    """Writing a pending request creates a timestamped file with cache marker."""
     from unillm import settings
     from unillm import logger
 
@@ -164,7 +165,31 @@ def test_write_request_pending_creates_file(tmp_path, monkeypatch):
 
     assert path is not None
     assert path.exists()
-    assert "_pending" in path.name
+    assert ".cache_pending." in path.name
+
+    content = path.read_text()
+    assert "🔄 [test] LLM request ➡️" in content
+    assert '"model": "gpt-4"' in content
+
+
+def test_write_request_pending_no_cache_marker(tmp_path, monkeypatch):
+    """When cache_enabled=False the pending file uses .pending.txt (no cache marker)."""
+    from unillm import settings
+    from unillm import logger
+
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+    path = write_request_pending({"model": "gpt-4"}, label="test", cache_enabled=False)
+
+    assert path is not None
+    assert path.exists()
+    assert ".cache_pending." not in path.name
+    assert path.name.endswith(".pending.txt")
 
     content = path.read_text()
     assert "🔄 [test] LLM request ➡️" in content
@@ -199,8 +224,7 @@ def test_append_response_and_finalize(tmp_path, monkeypatch):
     # Pending file should be gone
     assert not pending_path.exists()
 
-    # Should have a _hit file now
-    hit_files = list(tmp_path.glob("*_hit.txt"))
+    hit_files = list(tmp_path.glob("*.cache_hit.txt"))
     assert len(hit_files) == 1
 
     content = hit_files[0].read_text()
@@ -236,14 +260,83 @@ def test_append_response_and_finalize_with_none_response(tmp_path, monkeypatch):
     # Pending file should be gone
     assert not pending_path.exists()
 
-    # Should have an _error file now
-    error_files = list(tmp_path.glob("*_error.txt"))
+    error_files = list(tmp_path.glob("*.cache_error.txt"))
     assert len(error_files) == 1
 
     content = error_files[0].read_text()
     assert "LLM request ➡️" in content
     assert "LLM response ⬅️" in content
     assert "[cache: error]" in content
+
+
+def test_append_response_disabled_drops_cache_extension(tmp_path, monkeypatch):
+    """When cache_pending file gets finalized with 'disabled', cache marker is removed."""
+    from unillm import settings
+    from unillm import logger
+
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+    # Even if pending was created with cache_enabled=True (default), finalizing
+    # with "disabled" strips the cache marker.
+    pending_path = write_request_pending({"model": "gpt-4"}, label="test")
+    assert pending_path is not None
+
+    final_path = append_response_and_finalize(
+        pending_path,
+        {"choices": [{"message": {"content": "Hello"}}]},
+        "disabled",
+        label="test",
+    )
+
+    assert not pending_path.exists()
+    assert final_path is not None
+    assert ".cache_" not in final_path.name
+    assert ".pending." not in final_path.name
+    assert final_path.name.endswith(".txt")
+
+
+def test_full_flow_cache_disabled(tmp_path, monkeypatch):
+    """Full flow with caching disabled: .pending.txt → .txt (no cache marker anywhere)."""
+    from unillm import settings
+    from unillm import logger
+
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+    pending_path = write_request_pending(
+        {"model": "gpt-4"},
+        label="test",
+        cache_enabled=False,
+    )
+    assert pending_path is not None
+    assert ".cache_" not in pending_path.name
+    assert pending_path.name.endswith(".pending.txt")
+
+    final_path = append_response_and_finalize(
+        pending_path,
+        {"choices": [{"message": {"content": "Hello"}}]},
+        "disabled",
+        label="test",
+    )
+
+    assert not pending_path.exists()
+    assert final_path is not None
+    assert ".cache_" not in final_path.name
+    assert ".pending." not in final_path.name
+    assert final_path.name.endswith(".txt")
+
+    content = final_path.read_text()
+    assert "LLM request ➡️" in content
+    assert "LLM response ⬅️" in content
 
 
 def test_write_request_without_label(tmp_path, monkeypatch):
@@ -860,8 +953,167 @@ class TestStreamingFileLogging:
         log_files = list(tmp_path.glob("*.txt"))
         assert len(log_files) >= 1, (
             f"Streaming call produced no log files in {tmp_path}. "
-            f"Non-streaming calls write a _pending → _hit/_miss file, "
+            f"Non-streaming calls write a .cache_pending → .cache_hit/.cache_miss file, "
             f"but the streaming path skips write_request_pending entirely."
+        )
+
+
+class TestOnLogFilePendingCallback:
+    """Tests for the set_on_log_file_pending callback on clients."""
+
+    @pytest.mark.asyncio
+    async def test_async_non_stream_fires_pending_callback(self, tmp_path, monkeypatch):
+        """AsyncUnify non-streaming calls should fire the pending callback before inference."""
+        from unittest.mock import patch, MagicMock
+        from unillm import settings
+        from unillm import logger
+        import unillm
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Hi"
+        mock_response.model_dump = MagicMock(
+            return_value={"choices": [{"message": {"content": "Hi"}}]},
+        )
+
+        pending_paths: list = []
+        final_paths: list = []
+
+        async def mock_acompletion(*args, **kwargs):
+            return mock_response
+
+        with (
+            patch(
+                "unillm.clients.uni_llm.litellm.acompletion",
+                side_effect=mock_acompletion,
+            ),
+            patch(
+                "unillm.clients.uni_llm.compute_cost_from_response",
+                return_value=None,
+            ),
+        ):
+            client = unillm.AsyncUnify("gpt-4@openai", cache=False)
+            client.set_on_log_file_pending(lambda p: pending_paths.append(p))
+            client.set_on_log_file(lambda p: final_paths.append(p))
+            await client.generate(messages=[{"role": "user", "content": "Hi"}])
+
+        assert len(pending_paths) == 1
+        # cache=False → no cache marker on the pending file
+        assert ".cache_pending." not in pending_paths[0].name
+        assert pending_paths[0].name.endswith(".pending.txt")
+
+        assert len(final_paths) == 1
+        assert ".pending." not in final_paths[0].name
+
+        assert pending_paths[0].stem.split(".")[0] == final_paths[0].stem.split(".")[0]
+
+    @pytest.mark.asyncio
+    async def test_async_stream_fires_pending_callback(self, tmp_path, monkeypatch):
+        """AsyncUnify streaming calls should fire the pending callback before inference."""
+        from unittest.mock import patch, MagicMock
+        from unillm import settings
+        from unillm import logger
+        import unillm
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+        monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        mock_chunk = MagicMock()
+        mock_chunk.choices = [MagicMock()]
+        mock_chunk.choices[0].delta.content = "Hello"
+        mock_chunk.usage = None
+
+        pending_paths: list = []
+        final_paths: list = []
+
+        async def mock_acompletion(*args, **kwargs):
+            async def async_gen():
+                yield mock_chunk
+
+            return async_gen()
+
+        with patch(
+            "unillm.clients.uni_llm.litellm.acompletion",
+            side_effect=mock_acompletion,
+        ):
+            client = unillm.AsyncUnify("gpt-4@openai", stream=True, cache=False)
+            client.set_on_log_file_pending(lambda p: pending_paths.append(p))
+            client.set_on_log_file(lambda p: final_paths.append(p))
+            gen = await client.generate(
+                messages=[{"role": "user", "content": "Hi"}],
+            )
+            async for _ in gen:
+                pass
+
+        assert len(pending_paths) == 1
+        # cache=False + streaming → no cache marker on the pending file
+        assert ".cache_pending." not in pending_paths[0].name
+        assert pending_paths[0].name.endswith(".pending.txt")
+
+        assert len(final_paths) == 1
+
+    @pytest.mark.asyncio
+    async def test_pending_callback_not_fired_when_no_log_dir(self, monkeypatch):
+        """When UNILLM_LOG_DIR is unset, pending callback should not fire."""
+        from unittest.mock import patch, MagicMock
+        from unillm import settings
+        from unillm import logger
+        import unillm
+
+        monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+        monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", "")
+        monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+        monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Hi"
+        mock_response.model_dump = MagicMock(
+            return_value={"choices": [{"message": {"content": "Hi"}}]},
+        )
+
+        pending_paths: list = []
+
+        async def mock_acompletion(*args, **kwargs):
+            return mock_response
+
+        with (
+            patch(
+                "unillm.clients.uni_llm.litellm.acompletion",
+                side_effect=mock_acompletion,
+            ),
+            patch(
+                "unillm.clients.uni_llm.compute_cost_from_response",
+                return_value=None,
+            ),
+        ):
+            client = unillm.AsyncUnify("gpt-4@openai", cache=False)
+            client.set_on_log_file_pending(lambda p: pending_paths.append(p))
+            await client.generate(messages=[{"role": "user", "content": "Hi"}])
+
+        assert len(pending_paths) == 0
+
+
+class TestSanitizeOrigin:
+    """Tests for _sanitize_origin filename safety."""
+
+    def test_dots_replaced_with_underscores(self):
+        """Dots in origin must become underscores so they don't look like file extensions."""
+        assert "." not in _sanitize_origin("ConversationManager.decide")
+        assert (
+            _sanitize_origin("ConversationManager.decide")
+            == "ConversationManager_decide"
         )
 
 

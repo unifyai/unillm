@@ -243,6 +243,10 @@ def _convert_prefill_to_system_message(
 
     Only messages BEFORE the first real assistant response (one with thinking_blocks)
     are converted. Messages from the first real response onwards are kept intact.
+
+    Image blocks are extracted before JSON serialization and reattached as native
+    image content in the follow-up user message. Without this, base64 image data
+    would be serialized as text tokens, causing massive context window bloat.
     """
     first_real_idx = _find_first_real_assistant_index(messages)
 
@@ -268,20 +272,49 @@ def _convert_prefill_to_system_message(
     # Build result
     result = []
 
+    # Extract image blocks before JSON serialization so they are sent as native
+    # image tokens instead of being embedded as text in the system prompt.
+    all_extracted_images: List[Dict[str, Any]] = []
+    cleaned_messages: List[Dict[str, Any]] = []
+    for msg in non_system_to_convert:
+        non_image_content, image_blocks = _extract_image_blocks(
+            msg.get("content", ""),
+        )
+        if image_blocks:
+            all_extracted_images.extend(image_blocks)
+            if isinstance(non_image_content, list) and not non_image_content:
+                continue
+            cleaned_messages.append({**msg, "content": non_image_content})
+        else:
+            cleaned_messages.append(msg)
+
     # Add system message with converted content (if any non-system messages to convert)
-    if non_system_to_convert:
+    if cleaned_messages:
         if system_content:
             system_content += "\n\n"
         system_content += THINKING_PREFILL_EXPLANATION
-        system_content += json.dumps(non_system_to_convert, indent=4)
+        system_content += json.dumps(cleaned_messages, indent=4)
 
     if system_content:
         result.append({"role": "system", "content": system_content})
 
     # Add continuation prompt if we converted everything (no real messages to keep)
     if not to_keep:
-        result.append({"role": "user", "content": "[continue]"})
+        if all_extracted_images:
+            user_content: Any = [
+                {"type": "text", "text": "[continue]"},
+                *all_extracted_images,
+            ]
+            result.append({"role": "user", "content": user_content})
+        else:
+            result.append({"role": "user", "content": "[continue]"})
     else:
+        if all_extracted_images:
+            user_content = [
+                {"type": "text", "text": "[Visual context from prior conversation]"},
+                *all_extracted_images,
+            ]
+            result.append({"role": "user", "content": user_content})
         # Keep real messages intact
         result.extend(to_keep)
 
