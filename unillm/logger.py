@@ -12,12 +12,14 @@ Terminal and file logging are independently controlled:
 
 When UNILLM_LOG_DIR is set, structured files are written regardless of
 UNILLM_TERMINAL_LOG:
-- During the call: ``{timestamp}_pending.txt`` (contains request only)
-- After completion: ``{timestamp}_hit.txt`` or ``{timestamp}_miss.txt``
+- During the call (cache enabled): ``{base}.cache_pending.txt``
+- During the call (cache disabled): ``{base}.pending.txt``
+- After completion: ``{base}.cache_hit.txt`` or ``{base}.cache_miss.txt``
   (contains both request and response, with cache status in filename)
+- When caching is disabled: ``{base}.txt`` (no cache extension)
 
-If an LLM call hangs or crashes, the ``_pending.txt`` file remains as evidence
-of the incomplete request.
+If an LLM call hangs or crashes, the pending file remains as evidence of the
+incomplete request.
 
 Typical production configuration:
 - UNILLM_TERMINAL_LOG=false + UNILLM_LOG_DIR=/var/log/unillm/
@@ -488,10 +490,10 @@ def _truncate_for_console(body_str: str, max_len: int = 500) -> str:
 def _sanitize_origin(origin: str) -> str:
     """Sanitize an origin tag for safe use in filenames.
 
-    Replaces any character that is not a word char, hyphen, or dot with ``_``
+    Replaces any character that is not a word char or hyphen with ``_``
     and caps the result at 64 characters.
     """
-    sanitized = re.sub(r"[^\w\-.]", "_", origin)
+    sanitized = re.sub(r"[^\w\-]", "_", origin)
     return sanitized[:64]
 
 
@@ -637,12 +639,17 @@ def write_request_pending(
     *,
     label: str | None = None,
     origin: str | None = None,
+    cache_enabled: bool = True,
 ) -> Path | None:
-    """Write the request payload immediately with a _pending suffix.
+    """Write the request payload immediately with a pending suffix.
 
     Logs to console (if terminal logging enabled) and to file (if directory set).
     Returns the file path so we can append the response and rename later.
-    If the LLM call hangs/crashes, the _pending file remains as evidence.
+    If the LLM call hangs/crashes, the pending file remains as evidence.
+
+    When *cache_enabled* is True the file uses ``.cache_pending.txt`` so the
+    pending → hit/miss rename keeps the cache marker.  When False the file
+    uses plain ``.pending.txt`` (and finalization produces ``.txt``).
     """
     label_prefix = _make_label_prefix(label, origin)
     serialized = _serialize_kw(request_kw)
@@ -663,13 +670,14 @@ def write_request_pending(
         hhmmss = now.strftime("%H%M%S")
         ns = time.time_ns() % 1_000_000_000
         origin_part = f"_{_sanitize_origin(origin)}" if origin else ""
-        base = f"{hhmmss}_{ns:09d}{origin_part}_pending"
-        path = log_dir / f"{base}.txt"
+        base = f"{hhmmss}_{ns:09d}{origin_part}"
+        ext = ".cache_pending.txt" if cache_enabled else ".pending.txt"
+        path = log_dir / f"{base}{ext}"
 
         # Handle filename collision
         i = 1
         while path.exists():
-            path = log_dir / f"{base}_{i}.txt"
+            path = log_dir / f"{base}_{i}{ext}"
             i += 1
 
         with path.open("w", encoding="utf-8") as f:
@@ -693,8 +701,8 @@ def append_response_and_finalize(
     """Append the response to the pending file and rename to reflect cache status.
 
     Logs to console (if terminal logging enabled) and finalizes file (if path provided).
-    The final filename will be: {timestamp}_hit.txt, {timestamp}_miss.txt,
-    or {timestamp}_disabled.txt
+    The final filename will be ``{base}.cache_hit.txt``, ``{base}.cache_miss.txt``,
+    etc.  When caching is disabled the extension is simply ``.txt``.
 
     Returns the finalized file path, or None if no file was written.
     """
@@ -718,8 +726,17 @@ def append_response_and_finalize(
             f.write(body_str.rstrip())
             f.write("\n")
 
-        # Rename from _pending to _hit or _miss
-        new_name = pending_path.name.replace("_pending", f"_{cache_status}")
+        if ".cache_pending." in pending_path.name:
+            if cache_status == "disabled":
+                new_name = pending_path.name.replace(".cache_pending.", ".")
+            else:
+                new_name = pending_path.name.replace(
+                    ".cache_pending.",
+                    f".cache_{cache_status}.",
+                )
+        else:
+            # .pending.txt (cache was disabled at write time)
+            new_name = pending_path.name.replace(".pending.", ".")
         new_path = pending_path.parent / new_name
         pending_path.rename(new_path)
         return new_path
