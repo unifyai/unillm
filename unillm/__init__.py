@@ -28,6 +28,11 @@ from .costs import (
     compute_full_cost_from_usage,
 )
 from .helpers import get_seed, set_seed
+from .tokens import (
+    count_tokens,
+    fills_context_window,
+    get_max_input_tokens,
+)
 from .llm_events import (
     LLMEvent,
     set_llm_event_hook,
