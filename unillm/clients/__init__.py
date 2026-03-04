@@ -7,3 +7,4 @@ import litellm
 from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 
 litellm.drop_params = True
+litellm.suppress_debug_info = True
