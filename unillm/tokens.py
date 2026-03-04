@@ -36,7 +36,7 @@ def get_max_input_tokens(endpoint: str) -> int:
 
 def count_tokens(
     endpoint: str,
-    messages: Optional[List[ChatCompletionMessageParam]] = None,
+    messages: List[ChatCompletionMessageParam],
     tools: Optional[Iterable[ChatCompletionToolParam]] = None,
 ) -> int:
     """Count the number of tokens in a request payload.
@@ -61,7 +61,7 @@ def count_tokens(
 def fills_context_window(
     threshold: float,
     endpoint: str,
-    messages: Optional[List[ChatCompletionMessageParam]] = None,
+    messages: List[ChatCompletionMessageParam],
     tools: Optional[Iterable[ChatCompletionToolParam]] = None,
 ) -> bool:
     """Check whether a request's token usage meets or exceeds a fraction of the context window.
