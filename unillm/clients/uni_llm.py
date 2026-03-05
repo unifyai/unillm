@@ -1009,7 +1009,6 @@ class Unify(_UniClient):
         endpoint: str,
         prompt: Prompt,
         # python client arguments
-        return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
@@ -1272,7 +1271,6 @@ class Unify(_UniClient):
             self._endpoint,
             prompt,
             # python client arguments
-            return_full_completion=return_full_completion,
             cache=cache,
             cache_backend=cache_backend,
             prompt_caching=prompt_caching,
@@ -1624,7 +1622,6 @@ class AsyncUnify(_UniClient):
         endpoint: str,
         prompt: Prompt,
         # python client arguments
-        return_full_completion: bool,
         cache: Union[bool, str],
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
@@ -1936,7 +1933,6 @@ class AsyncUnify(_UniClient):
             self._endpoint,
             prompt,
             # python client arguments
-            return_full_completion=return_full_completion,
             cache=cache,
             cache_backend=cache_backend,
             prompt_caching=prompt_caching,

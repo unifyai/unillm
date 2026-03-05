@@ -9,12 +9,12 @@ class TestGetMaxInputTokens:
     """Tests for the get_max_input_tokens function."""
 
     def test_returns_positive_int_gpt(self):
-        result = get_max_input_tokens("gpt-5.2")
+        result = get_max_input_tokens("gpt-5.2@openai")
         assert isinstance(result, int)
         assert result > 0
 
     def test_returns_positive_int_claude(self):
-        result = get_max_input_tokens("claude-opus-4-6")
+        result = get_max_input_tokens("claude-4.6-opus@anthropic")
         assert isinstance(result, int)
         assert result > 0
 
@@ -24,7 +24,10 @@ class TestGetMaxInputTokens:
         assert with_suffix == without_suffix
 
     def test_unknown_model_raises(self):
-        with pytest.raises(ValueError, match="Could not find model info"):
+        with pytest.raises(
+            ValueError,
+            match="Model non-existent-model-xyz-12345 not found",
+        ):
             get_max_input_tokens("non-existent-model-xyz-12345")
 
 
