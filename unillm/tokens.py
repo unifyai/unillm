@@ -5,6 +5,8 @@ from typing import Iterable, List, Optional
 import litellm
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
 
+from .endpoints.utils import get_model_alias
+
 
 def _normalize_model_name(endpoint: str) -> str:
     """Strip the ``@provider`` suffix (e.g. ``"gpt-4o@openai"`` -> ``"gpt-4o"``)."""
@@ -26,7 +28,7 @@ def get_max_input_tokens(endpoint: str) -> int:
     Raises:
         ValueError: If the model is not found in LiteLLM's model data.
     """
-    model = _normalize_model_name(endpoint)
+    model = get_model_alias(endpoint)
     try:
         info = litellm.get_model_info(model)
     except Exception as e:
