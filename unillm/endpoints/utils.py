@@ -2,14 +2,14 @@ from typing import Any, Dict
 
 import litellm
 
-_MODEL_ALIAS_MAP = {}
+_MODEL_ALIAS_MAP: Dict[str, str] = {}
 _MODEL_INFO_MAP: Dict[str, Dict[str, Any]] = {}
 
 
 def register_model_alias_map(
     provider: str,
     model_map: Dict[str, Any],
-) -> Dict[str, str]:
+) -> None:
     _MODEL_ALIAS_MAP.update(
         {f"{model}@{provider}": alias for model, alias in model_map.items()},
     )
