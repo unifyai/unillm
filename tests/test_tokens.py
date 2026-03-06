@@ -18,6 +18,10 @@ class TestGetMaxInputTokens:
         assert isinstance(result, int)
         assert result > 0
 
+    def test_local_override_takes_priority(self):
+        result = get_max_input_tokens("claude-4.6-opus@anthropic")
+        assert result == 200_000
+
     def test_with_provider_suffix(self):
         with_suffix = get_max_input_tokens("gpt-5.2@openai")
         without_suffix = get_max_input_tokens("gpt-5.2")
