@@ -5,7 +5,7 @@ from typing import Iterable, List, Optional
 import litellm
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
 
-from .endpoints.utils import get_model_alias
+from .endpoints.utils import get_model_info
 
 
 def _normalize_model_name(endpoint: str) -> str:
@@ -26,13 +26,10 @@ def get_max_input_tokens(endpoint: str) -> int:
         Maximum number of input tokens the model accepts.
 
     Raises:
-        ValueError: If the model is not found in LiteLLM's model data.
+        ValueError: If the model is not found in either our overrides
+                    or LiteLLM's model data.
     """
-    model = get_model_alias(endpoint)
-    try:
-        info = litellm.get_model_info(model)
-    except Exception as e:
-        raise ValueError(f"Could not find model info for '{endpoint}': {e}")
+    info = get_model_info(endpoint)
     return info["max_input_tokens"]
 
 
