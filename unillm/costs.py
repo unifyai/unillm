@@ -17,7 +17,7 @@ def get_cost_margin() -> float:
     Configurable via the UNILLM_COST_MARGIN environment variable.
 
     Returns:
-        The cost margin multiplier (default: 5.0).
+        The cost margin multiplier.
     """
     margin_str = os.environ.get("UNILLM_COST_MARGIN")
     if margin_str is not None:
