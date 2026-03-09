@@ -229,6 +229,79 @@ class TestComputeCostFromResponse:
         assert cost is None
 
 
+class TestTieredLongContextPricing:
+    """Tests for tiered pricing when prompts exceed 200k tokens.
+
+    Anthropic charges higher rates for input/output tokens when the prompt
+    exceeds 200k tokens:
+      - Input:  2x standard rate for tokens above 200k
+      - Output: 1.5x standard rate when prompt > 200k
+
+    LiteLLM provides these rates as `input_cost_per_token_above_200k_tokens`
+    and `output_cost_per_token_above_200k_tokens`. Our cost functions must
+    use them for accurate billing.
+    """
+
+    def test_compute_cost_applies_tiered_input_pricing(self):
+        """Input tokens above 200k should be billed at the higher rate."""
+        # claude-opus-4-6: $5/M standard, $10/M above 200k
+        cost = compute_cost(
+            "claude-opus-4-6",
+            prompt_tokens=300_000,
+            completion_tokens=0,
+        )
+        # First 200k at $5/M  = $1.00
+        # Next  100k at $10/M = $1.00
+        # Total                = $2.00
+        expected = (200_000 * 5e-6) + (100_000 * 10e-6)
+        assert abs(cost - expected) < 1e-9, (
+            f"Expected ${expected:.4f} (tiered) but got ${cost:.4f} "
+            f"(flat rate would give ${300_000 * 5e-6:.4f})"
+        )
+
+    def test_compute_cost_applies_tiered_output_pricing(self):
+        """Output tokens should be billed at the higher rate when prompt > 200k."""
+        # claude-opus-4-6: $25/M standard output, $37.50/M when prompt > 200k
+        cost = compute_cost(
+            "claude-opus-4-6",
+            prompt_tokens=250_000,
+            completion_tokens=10_000,
+        )
+        # Input:  200k × $5/M + 50k × $10/M  = $1.00 + $0.50 = $1.50
+        # Output: 10k × $37.50/M (prompt > 200k) = $0.375
+        # Total = $1.875
+        expected = (200_000 * 5e-6) + (50_000 * 10e-6) + (10_000 * 37.5e-6)
+        assert (
+            abs(cost - expected) < 1e-9
+        ), f"Expected ${expected:.4f} (tiered) but got ${cost:.4f}"
+
+    def test_compute_cost_no_tiered_pricing_under_200k(self):
+        """Requests under 200k should use standard rates only."""
+        cost = compute_cost(
+            "claude-opus-4-6",
+            prompt_tokens=150_000,
+            completion_tokens=5_000,
+        )
+        # All standard: 150k × $5/M + 5k × $25/M = $0.75 + $0.125 = $0.875
+        expected = (150_000 * 5e-6) + (5_000 * 25e-6)
+        assert abs(cost - expected) < 1e-9
+
+    def test_compute_full_cost_tiered_pricing(self):
+        """compute_full_cost_from_usage should also apply tiered pricing."""
+        usage = {
+            "prompt_tokens": 300_000,
+            "completion_tokens": 10_000,
+        }
+        cost = compute_full_cost_from_usage("claude-opus-4-6", usage)
+        # Input:  200k × $5/M + 100k × $10/M  = $1.00 + $1.00 = $2.00
+        # Output: 10k × $37.50/M = $0.375
+        # Total = $2.375
+        expected = (200_000 * 5e-6) + (100_000 * 10e-6) + (10_000 * 37.5e-6)
+        assert (
+            abs(cost - expected) < 1e-9
+        ), f"Expected ${expected:.4f} (tiered) but got ${cost:.4f}"
+
+
 class TestComputeFullCostFromUsage:
     """Tests for compute_full_cost_from_usage with audio tokens."""
 
