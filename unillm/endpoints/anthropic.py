@@ -15,8 +15,16 @@ models = {
 }
 
 model_info = {
-    "claude-4.6-opus": {"max_input_tokens": 200_000},
+    "claude-4.6-opus": {"max_input_tokens": 1_000_000},
     "claude-4.6-sonnet": {"max_input_tokens": 1_000_000},
+}
+
+CONTEXT_1M_BETA = "context-1m-2025-08-07"
+CONTEXT_1M_MODELS = {
+    models["claude-4-sonnet"],
+    models["claude-4.5-sonnet"],
+    models["claude-4.6-opus"],
+    models["claude-4.6-sonnet"],
 }
 
 register_model_alias_map(provider, models)
