@@ -487,6 +487,21 @@ def _strip_internal_annotations(kw: Dict[str, Any]) -> None:
                         del block[key]
 
 
+def _apply_context_1m_beta(kw: Dict[str, Any]) -> None:
+    """Inject the 1M context window beta header for supported models."""
+    from ..endpoints.anthropic import CONTEXT_1M_BETA, CONTEXT_1M_MODELS
+
+    if kw.get("model") not in CONTEXT_1M_MODELS:
+        return
+    headers = kw.get("extra_headers") or {}
+    existing = headers.get("anthropic-beta", "")
+    if CONTEXT_1M_BETA not in existing:
+        headers["anthropic-beta"] = (
+            f"{existing},{CONTEXT_1M_BETA}" if existing else CONTEXT_1M_BETA
+        )
+        kw["extra_headers"] = headers
+
+
 def apply_provider_preprocessing(
     kw: Dict[str, Any],
     provider: Optional[str],
@@ -563,6 +578,8 @@ def apply_provider_preprocessing(
             {"role": "system", "content": TOOL_CHOICE_REQUIRED_INSTRUCTION},
         )
         kw["messages"] = messages
+
+    _apply_context_1m_beta(kw)
 
     if prompt_caching:
         _apply_anthropic_caching(kw, prompt_caching)

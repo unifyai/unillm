@@ -65,6 +65,74 @@ def _get_model_info(model: str) -> dict:
         raise ValueError(f"Could not find pricing info for model '{model}': {e}")
 
 
+import re
+
+_TIER_RE = re.compile(r"^(.+)_above_(\d+)k?_tokens$")
+
+
+def _get_tiered_rate(model_info: dict, base_key: str, prompt_tokens: int) -> float:
+    """Return the effective per-token rate, accounting for tier thresholds.
+
+    LiteLLM encodes tiered pricing as ``{base_key}_above_{N}k_tokens``
+    (e.g. ``input_cost_per_token_above_200k_tokens``).  If the prompt
+    exceeds a tier threshold *and* a higher rate is defined for that tier,
+    the higher rate applies.  When multiple tiers exist, the highest
+    applicable threshold wins.
+    """
+    base_rate = model_info.get(base_key, 0)
+    best_threshold = None
+    best_rate = None
+    for key, value in model_info.items():
+        if value is None:
+            continue
+        m = _TIER_RE.match(key)
+        if m and m.group(1) == base_key:
+            threshold = int(m.group(2)) * 1_000
+            if prompt_tokens > threshold:
+                if best_threshold is None or threshold > best_threshold:
+                    best_threshold = threshold
+                    best_rate = value
+    if best_rate is not None:
+        return best_rate, best_threshold
+    return base_rate, None
+
+
+def _compute_text_token_cost(
+    model_info: dict,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> float:
+    """Compute text token cost with tiered long-context pricing.
+
+    Some providers charge higher rates when the prompt exceeds a threshold
+    (e.g. Anthropic at 200k tokens).  This function discovers tier
+    boundaries from the model_info keys automatically.
+    """
+    input_rate = model_info.get("input_cost_per_token", 0)
+    input_rate_tier, input_threshold = _get_tiered_rate(
+        model_info,
+        "input_cost_per_token",
+        prompt_tokens,
+    )
+    output_rate_tier, _ = _get_tiered_rate(
+        model_info,
+        "output_cost_per_token",
+        prompt_tokens,
+    )
+
+    if input_threshold is not None:
+        input_cost = (
+            input_threshold * input_rate
+            + (prompt_tokens - input_threshold) * input_rate_tier
+        )
+    else:
+        input_cost = prompt_tokens * input_rate
+
+    output_cost = completion_tokens * output_rate_tier
+
+    return input_cost + output_cost
+
+
 def compute_cost(
     model: str,
     prompt_tokens: int,
@@ -85,14 +153,7 @@ def compute_cost(
         ValueError: If the model is not found in LiteLLM's pricing data.
     """
     model_info = _get_model_info(model)
-
-    input_cost_per_token = model_info.get("input_cost_per_token", 0)
-    output_cost_per_token = model_info.get("output_cost_per_token", 0)
-
-    cost = (prompt_tokens * input_cost_per_token) + (
-        completion_tokens * output_cost_per_token
-    )
-    return cost
+    return _compute_text_token_cost(model_info, prompt_tokens, completion_tokens)
 
 
 def compute_cost_from_response(
@@ -253,6 +314,4 @@ def compute_full_cost_from_usage(model: str, usage: Union[dict, object]) -> floa
         prompt_tokens = _get_nested_attr(usage, "input_tokens")
         completion_tokens = _get_nested_attr(usage, "output_tokens")
 
-    return (prompt_tokens * input_cost_per_token) + (
-        completion_tokens * output_cost_per_token
-    )
+    return _compute_text_token_cost(model_info, prompt_tokens, completion_tokens)
