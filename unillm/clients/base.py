@@ -1,5 +1,6 @@
 # global
 import copy
+import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Literal, Optional, Type, Union
@@ -67,6 +68,7 @@ class _Client(ABC):
     ) -> None:
 
         # initial values
+        self._client_id = uuid.uuid4().hex
         self._api_key = _validate_api_key(api_key)
         self._system_message = None
         self._messages = None
