@@ -892,6 +892,7 @@ class Unify(_UniClient):
             label=label,
             origin=origin,
             cache_enabled=False,
+            client_id=self._client_id,
         )
         if pending and self._on_log_file_pending:
             self._on_log_file_pending(pending)
@@ -1032,6 +1033,7 @@ class Unify(_UniClient):
             label=endpoint,
             origin=origin,
             cache_enabled=cache not in (False, None),
+            client_id=self._client_id,
         )
         if pending_path and self._on_log_file_pending:
             self._on_log_file_pending(pending_path)
@@ -1344,6 +1346,7 @@ class AsyncUnify(_UniClient):
             label=endpoint,
             origin=origin,
             cache_enabled=False,
+            client_id=self._client_id,
         )
         if pending_path and self._on_log_file_pending:
             self._on_log_file_pending(pending_path)
@@ -1494,6 +1497,7 @@ class AsyncUnify(_UniClient):
             label=label,
             origin=origin,
             cache_enabled=False,
+            client_id=self._client_id,
         )
         if pending and self._on_log_file_pending:
             self._on_log_file_pending(pending)
@@ -1645,6 +1649,7 @@ class AsyncUnify(_UniClient):
             label=endpoint,
             origin=origin,
             cache_enabled=cache not in (False, None),
+            client_id=self._client_id,
         )
         if pending_path and self._on_log_file_pending:
             self._on_log_file_pending(pending_path)

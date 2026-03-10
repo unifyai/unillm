@@ -640,6 +640,7 @@ def write_request_pending(
     label: str | None = None,
     origin: str | None = None,
     cache_enabled: bool = True,
+    client_id: str | None = None,
 ) -> Path | None:
     """Write the request payload immediately with a pending suffix.
 
@@ -670,7 +671,8 @@ def write_request_pending(
         hhmmss = now.strftime("%H%M%S")
         ns = time.time_ns() % 1_000_000_000
         origin_part = f"_{_sanitize_origin(origin)}" if origin else ""
-        base = f"{hhmmss}_{ns:09d}{origin_part}"
+        client_part = f"_{client_id[-4:]}" if client_id else ""
+        base = f"{hhmmss}_{ns:09d}{origin_part}{client_part}"
         ext = ".cache_pending.txt" if cache_enabled else ".pending.txt"
         path = log_dir / f"{base}{ext}"
 
