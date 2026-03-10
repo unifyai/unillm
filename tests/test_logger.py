@@ -196,6 +196,58 @@ def test_write_request_pending_no_cache_marker(tmp_path, monkeypatch):
     assert '"model": "gpt-4"' in content
 
 
+def test_write_request_pending_client_id_in_filename(tmp_path, monkeypatch):
+    """When client_id is provided, it appears in the filename."""
+    from unillm import settings
+    from unillm import logger
+
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+    path = write_request_pending(
+        {"model": "gpt-4"},
+        label="test",
+        client_id="beef",
+    )
+
+    assert path is not None
+    assert path.exists()
+    assert "_beef." in path.name
+    assert ".cache_pending." in path.name
+
+
+def test_write_request_pending_no_client_id_no_segment(tmp_path, monkeypatch):
+    """When client_id is omitted, no client segment appears in the filename."""
+    from unillm import settings
+    from unillm import logger
+
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+    path_with = write_request_pending(
+        {"model": "gpt-4"},
+        label="a",
+        client_id="ab12",
+    )
+    path_without = write_request_pending(
+        {"model": "gpt-4"},
+        label="b",
+    )
+
+    assert path_with is not None
+    assert path_without is not None
+    assert "_ab12." in path_with.name
+    assert "_ab12" not in path_without.name
+
+
 def test_append_response_and_finalize(tmp_path, monkeypatch):
     """Appending response and finalizing renames the file."""
     from unillm import settings
@@ -231,6 +283,38 @@ def test_append_response_and_finalize(tmp_path, monkeypatch):
     assert "LLM request ➡️" in content
     assert "LLM response ⬅️" in content
     assert "[cache: hit]" in content
+
+
+def test_finalize_preserves_client_id_in_filename(tmp_path, monkeypatch):
+    """Client ID in pending filename survives the rename during finalization."""
+    from unillm import settings
+    from unillm import logger
+
+    monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
+    monkeypatch.setattr(settings.SETTINGS, "UNILLM_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
+    monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
+    monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+    pending_path = write_request_pending(
+        {"model": "gpt-4"},
+        label="test",
+        client_id="f1a2",
+    )
+    assert pending_path is not None
+    assert "_f1a2." in pending_path.name
+
+    final_path = append_response_and_finalize(
+        pending_path,
+        {"choices": [{"message": {"content": "Hello"}}]},
+        "miss",
+        label="test",
+    )
+
+    assert final_path is not None
+    assert "_f1a2." in final_path.name
+    assert ".cache_miss." in final_path.name
 
 
 def test_append_response_and_finalize_with_none_response(tmp_path, monkeypatch):
