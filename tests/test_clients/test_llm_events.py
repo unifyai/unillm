@@ -63,7 +63,7 @@ class TestCostMargin:
         with patch.dict(os.environ, {}, clear=True):
             # Remove UNILLM_COST_MARGIN if it exists
             os.environ.pop("UNILLM_COST_MARGIN", None)
-            assert get_cost_margin() == 2.0
+            assert get_cost_margin() == 1.2
 
     def test_margin_from_env_var(self):
         from unillm.costs import get_cost_margin
@@ -75,7 +75,7 @@ class TestCostMargin:
         from unillm.costs import get_cost_margin
 
         with patch.dict(os.environ, {"UNILLM_COST_MARGIN": "not_a_number"}):
-            assert get_cost_margin() == 2.0
+            assert get_cost_margin() == 1.2
 
 
 class TestSetLLMEventHook:
@@ -595,8 +595,8 @@ class TestLLMEventCosts:
         # Provider cost should be set
         assert event.provider_cost == 0.001
 
-        # Billed cost should be provider_cost * margin (default 2)
-        assert event.billed_cost == 0.002
+        # Billed cost should be provider_cost * margin (default 1.2)
+        assert event.billed_cost == pytest.approx(0.0012)
 
     def test_costs_with_custom_margin(self):
         """Billed cost should respect UNILLM_COST_MARGIN env var."""
