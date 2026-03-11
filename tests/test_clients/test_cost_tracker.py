@@ -318,7 +318,9 @@ class TestCostEventEmissionMocked:
         event = events[0]
         assert event.cache_status == "miss"
         assert event.provider_cost == 0.001
-        assert event.billed_cost == 0.002  # 0.001 * 2 (default margin)
+        assert event.billed_cost == pytest.approx(
+            0.0012,
+        )  # 0.001 * 1.2 (default margin)
         assert event.prompt_tokens == 10
         assert event.completion_tokens == 5
 
