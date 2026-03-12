@@ -1,8 +1,14 @@
 """Tests for provider-specific preprocessing, particularly Anthropic caching."""
 
+import json
+
 from unillm.clients.provider_preprocessing import (
     CACHE_CONTROL_EPHEMERAL,
+    THINKING_COMPLIANCE_CONTEXT_HEADER,
+    THINKING_COMPLIANCE_CONTEXT_FOOTER,
     _apply_anthropic_caching,
+    _apply_thinking_compliance,
+    _transform_tool_calls_to_context,
     apply_provider_preprocessing,
 )
 
@@ -400,3 +406,205 @@ class TestInternalAnnotationStripping:
                         f"Internal annotation leaked on content block: "
                         f"{[k for k in block if k.startswith('_')]}"
                     )
+
+
+# A short stand-in for a real base64 screenshot (~200 chars).
+# Production images are 100K+ chars; even this toy payload should never be
+# serialized as text tokens.
+_FAKE_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk" * 3
+
+_IMAGE_BLOCK = {
+    "type": "image_url",
+    "image_url": {"url": f"data:image/png;base64,{_FAKE_B64}"},
+}
+
+
+def _make_image_tool_result_messages():
+    """Build a minimal non-compliant assistant→tool sequence with an image.
+
+    The assistant message has tool_calls but no thinking_blocks (non-compliant
+    when extended thinking is enabled).  The tool result contains an image_url
+    block — a screenshot returned by execute_code in CodeActActor.
+    """
+    return [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Take a screenshot of the page."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "execute_code",
+                        "arguments": json.dumps(
+                            {
+                                "code": "display(session.screenshot())",
+                                "language": "python",
+                            },
+                        ),
+                    },
+                },
+            ],
+            # No thinking_blocks → non-compliant under extended thinking
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "name": "execute_code",
+            "content": [
+                {"type": "text", "text": "Screenshot captured:"},
+                _IMAGE_BLOCK,
+            ],
+        },
+    ]
+
+
+class TestThinkingComplianceImageExtraction:
+    """Images in tool results must not be JSON-serialized as text.
+
+    When _transform_tool_calls_to_context collapses a non-compliant
+    assistant+tool sequence into a user context message, any image_url
+    blocks in tool results should be extracted and reattached as native
+    image content blocks — the same pattern _convert_prefill_to_system_message
+    already uses.  Serializing base64 data as text tokens causes massive
+    context window bloat.
+    """
+
+    def test_image_blocks_not_serialized_as_text(self):
+        """The base64 payload must NOT appear as text in the context message."""
+        messages = _make_image_tool_result_messages()
+        result = _transform_tool_calls_to_context(messages)
+
+        # The system and user messages pass through unchanged
+        assert result[0]["role"] == "system"
+        assert result[1]["role"] == "user"
+
+        # The third message is the collapsed context (was assistant+tool)
+        ctx_msg = result[2]
+        assert ctx_msg["role"] == "user"
+
+        # Flatten all text content to check for leaked base64
+        content = ctx_msg["content"]
+        if isinstance(content, str):
+            all_text = content
+        elif isinstance(content, list):
+            all_text = " ".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in content
+                if not isinstance(block, dict) or block.get("type") != "image_url"
+            )
+        else:
+            all_text = str(content)
+
+        assert _FAKE_B64 not in all_text, (
+            "Base64 image data was serialized as text in the context message. "
+            "Image blocks should be extracted and preserved as native image_url "
+            "content blocks, not dumped into a JSON text string."
+        )
+
+    def test_image_blocks_preserved_as_native_content(self):
+        """Extracted images must appear as native image_url blocks."""
+        messages = _make_image_tool_result_messages()
+        result = _transform_tool_calls_to_context(messages)
+
+        ctx_msg = result[2]
+        content = ctx_msg["content"]
+
+        # Content should be a list with at least one image_url block
+        assert isinstance(content, list), (
+            "Context message content should be a list (mixed text + image blocks), "
+            f"got {type(content).__name__}"
+        )
+
+        image_blocks = [
+            b for b in content if isinstance(b, dict) and b.get("type") == "image_url"
+        ]
+        assert (
+            len(image_blocks) >= 1
+        ), "Expected at least one native image_url block in the context message"
+
+        # The image data should match the original
+        assert image_blocks[0] == _IMAGE_BLOCK
+
+    def test_no_images_unchanged_behavior(self):
+        """When no images are present, the function should work as before."""
+        messages = [
+            {"role": "user", "content": "Do something."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_xyz",
+                        "type": "function",
+                        "function": {
+                            "name": "search",
+                            "arguments": '{"q": "test"}',
+                        },
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_xyz",
+                "name": "search",
+                "content": "Found 3 results.",
+            },
+        ]
+        result = _transform_tool_calls_to_context(messages)
+
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "Do something."
+
+        ctx_msg = result[1]
+        assert ctx_msg["role"] == "user"
+        # Plain string content (no images to extract)
+        assert isinstance(ctx_msg["content"], str)
+        assert THINKING_COMPLIANCE_CONTEXT_HEADER in ctx_msg["content"]
+        assert THINKING_COMPLIANCE_CONTEXT_FOOTER in ctx_msg["content"]
+
+    def test_apply_thinking_compliance_extracts_images(self):
+        """End-to-end: _apply_thinking_compliance should not leak base64."""
+        messages = _make_image_tool_result_messages()
+        result = _apply_thinking_compliance(messages)
+
+        # Find the context message (the collapsed one)
+        ctx_msgs = [
+            m
+            for m in result
+            if m.get("role") == "user"
+            and isinstance(m.get("content"), (str, list))
+            and (
+                (
+                    isinstance(m["content"], str)
+                    and THINKING_COMPLIANCE_CONTEXT_HEADER in m["content"]
+                )
+                or (
+                    isinstance(m["content"], list)
+                    and any(
+                        isinstance(b, dict)
+                        and THINKING_COMPLIANCE_CONTEXT_HEADER in b.get("text", "")
+                        for b in m["content"]
+                    )
+                )
+            )
+        ]
+        assert (
+            len(ctx_msgs) == 1
+        ), f"Expected exactly one context message, found {len(ctx_msgs)}"
+
+        content = ctx_msgs[0]["content"]
+        if isinstance(content, str):
+            all_text = content
+        else:
+            all_text = " ".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in content
+                if not isinstance(block, dict) or block.get("type") != "image_url"
+            )
+
+        assert (
+            _FAKE_B64 not in all_text
+        ), "Base64 image data leaked as text through _apply_thinking_compliance"
