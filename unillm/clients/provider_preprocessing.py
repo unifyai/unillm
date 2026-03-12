@@ -268,9 +268,13 @@ def _convert_prefill_to_system_message(
     are converted. Messages from the first real response onwards are kept intact.
 
     Image blocks are extracted before JSON serialization and replaced with
-    ``[image]`` placeholders in the JSON. The native image blocks are appended
-    to the system message's content list so the LLM receives them as image
-    tokens rather than text-serialized base64.
+    ``[image]`` placeholders in the JSON. The native image blocks are placed
+    in a follow-up user message so the LLM receives them as image tokens
+    rather than text-serialized base64. Images cannot go in the system
+    message because Anthropic's ``system`` parameter only accepts text
+    blocks — placing image blocks there causes a 400 error on code paths
+    that don't use tool calling (e.g., ProactiveSpeech with
+    ``response_format``).
     """
     first_real_idx = _find_first_real_assistant_index(messages)
 
@@ -320,20 +324,25 @@ def _convert_prefill_to_system_message(
         system_content += json.dumps(cleaned_messages, indent=4)
 
     if system_content:
-        if all_extracted_images:
-            # Mixed content: text JSON + native image blocks in the same message
-            sys_content_list: Any = [
-                {"type": "text", "text": system_content},
-                *all_extracted_images,
-            ]
-            result.append({"role": "system", "content": sys_content_list})
-        else:
-            result.append({"role": "system", "content": system_content})
+        result.append({"role": "system", "content": system_content})
 
     # Add continuation prompt if we converted everything (no real messages to keep)
     if not to_keep:
-        result.append({"role": "user", "content": "[continue]"})
+        if all_extracted_images:
+            user_content: Any = [
+                {"type": "text", "text": "[continue]"},
+                *all_extracted_images,
+            ]
+            result.append({"role": "user", "content": user_content})
+        else:
+            result.append({"role": "user", "content": "[continue]"})
     else:
+        if all_extracted_images:
+            user_content = [
+                {"type": "text", "text": "[Visual context from prior conversation]"},
+                *all_extracted_images,
+            ]
+            result.append({"role": "user", "content": user_content})
         result.extend(to_keep)
 
     return result
