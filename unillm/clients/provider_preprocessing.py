@@ -286,14 +286,30 @@ def _convert_prefill_to_system_message(
         to_convert = messages
         to_keep = []
 
-    # Extract existing system message content from the portion to convert
+    # Extract existing system message content from the portion to convert.
+    # System messages may have list content (text + image blocks) when
+    # Unity's prompt builder embeds screenshots.  Extract text as string
+    # and collect any images so they can be routed to a user message.
     system_content = ""
+    system_images: List[Dict[str, Any]] = []
     non_system_to_convert = []
     for msg in to_convert:
         if msg.get("role") == "system":
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "image_url":
+                            system_images.append(block)
+                        elif block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                    elif isinstance(block, str):
+                        text_parts.append(block)
+                content = "\n".join(text_parts)
             if system_content:
                 system_content += "\n\n"
-            system_content += msg.get("content", "")
+            system_content += content
         else:
             non_system_to_convert.append(msg)
 
@@ -303,7 +319,7 @@ def _convert_prefill_to_system_message(
     # Extract image blocks before JSON serialization. Each extracted image
     # is replaced with an [image] placeholder in the message content so the
     # JSON still shows where images appeared.
-    all_extracted_images: List[Dict[str, Any]] = []
+    all_extracted_images: List[Dict[str, Any]] = list(system_images)
     cleaned_messages: List[Dict[str, Any]] = []
     for msg in non_system_to_convert:
         non_image_content, image_blocks = _extract_image_blocks(
