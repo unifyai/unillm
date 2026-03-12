@@ -138,11 +138,34 @@ def _transform_tool_calls_to_context(
                 context_messages.append(messages[j])
                 j += 1
 
-            # Transform to user context message
-            context_json = json.dumps(context_messages, indent=2)
-            context_content = f"{context_header}\n{context_json}\n{context_footer}"
+            # Extract images from collected messages before JSON serialization.
+            # Each image is replaced with an [image] placeholder so the JSON
+            # still shows where images appeared in the tool results.
+            all_images: List[Dict[str, Any]] = []
+            cleaned: List[Dict[str, Any]] = []
+            for cm in context_messages:
+                non_image, images = _extract_image_blocks(
+                    cm.get("content", ""),
+                    placeholder=True,
+                )
+                if images:
+                    all_images.extend(images)
+                    cleaned.append({**cm, "content": non_image})
+                else:
+                    cleaned.append(cm)
 
-            result.append({"role": "user", "content": context_content})
+            context_json = json.dumps(cleaned, indent=2)
+            context_text = f"{context_header}\n{context_json}\n{context_footer}"
+
+            if all_images:
+                content: Any = [
+                    {"type": "text", "text": context_text},
+                    *all_images,
+                ]
+                result.append({"role": "user", "content": content})
+            else:
+                result.append({"role": "user", "content": context_text})
+
             i = j  # Skip past all collected messages
         else:
             result.append(msg)
@@ -244,9 +267,10 @@ def _convert_prefill_to_system_message(
     Only messages BEFORE the first real assistant response (one with thinking_blocks)
     are converted. Messages from the first real response onwards are kept intact.
 
-    Image blocks are extracted before JSON serialization and reattached as native
-    image content in the follow-up user message. Without this, base64 image data
-    would be serialized as text tokens, causing massive context window bloat.
+    Image blocks are extracted before JSON serialization and replaced with
+    ``[image]`` placeholders in the JSON. The native image blocks are appended
+    to the system message's content list so the LLM receives them as image
+    tokens rather than text-serialized base64.
     """
     first_real_idx = _find_first_real_assistant_index(messages)
 
@@ -272,18 +296,18 @@ def _convert_prefill_to_system_message(
     # Build result
     result = []
 
-    # Extract image blocks before JSON serialization so they are sent as native
-    # image tokens instead of being embedded as text in the system prompt.
+    # Extract image blocks before JSON serialization. Each extracted image
+    # is replaced with an [image] placeholder in the message content so the
+    # JSON still shows where images appeared.
     all_extracted_images: List[Dict[str, Any]] = []
     cleaned_messages: List[Dict[str, Any]] = []
     for msg in non_system_to_convert:
         non_image_content, image_blocks = _extract_image_blocks(
             msg.get("content", ""),
+            placeholder=True,
         )
         if image_blocks:
             all_extracted_images.extend(image_blocks)
-            if isinstance(non_image_content, list) and not non_image_content:
-                continue
             cleaned_messages.append({**msg, "content": non_image_content})
         else:
             cleaned_messages.append(msg)
@@ -296,37 +320,42 @@ def _convert_prefill_to_system_message(
         system_content += json.dumps(cleaned_messages, indent=4)
 
     if system_content:
-        result.append({"role": "system", "content": system_content})
+        if all_extracted_images:
+            # Mixed content: text JSON + native image blocks in the same message
+            sys_content_list: Any = [
+                {"type": "text", "text": system_content},
+                *all_extracted_images,
+            ]
+            result.append({"role": "system", "content": sys_content_list})
+        else:
+            result.append({"role": "system", "content": system_content})
 
     # Add continuation prompt if we converted everything (no real messages to keep)
     if not to_keep:
-        if all_extracted_images:
-            user_content: Any = [
-                {"type": "text", "text": "[continue]"},
-                *all_extracted_images,
-            ]
-            result.append({"role": "user", "content": user_content})
-        else:
-            result.append({"role": "user", "content": "[continue]"})
+        result.append({"role": "user", "content": "[continue]"})
     else:
-        if all_extracted_images:
-            user_content = [
-                {"type": "text", "text": "[Visual context from prior conversation]"},
-                *all_extracted_images,
-            ]
-            result.append({"role": "user", "content": user_content})
-        # Keep real messages intact
         result.extend(to_keep)
 
     return result
 
 
-def _extract_image_blocks(content: Any) -> Tuple[Any, List[Dict[str, Any]]]:
+_IMAGE_PLACEHOLDER_BLOCK = {"type": "text", "text": "[image]"}
+
+
+def _extract_image_blocks(
+    content: Any,
+    *,
+    placeholder: bool = False,
+) -> Tuple[Any, List[Dict[str, Any]]]:
     """
     Extract image blocks from content, returning (non-image content, image blocks).
 
     If content is a list, separates image blocks from other blocks.
     If content is a string or other type, returns it unchanged with empty image list.
+
+    When *placeholder* is True, each extracted image is replaced in-situ with
+    an ``[image]`` text block so the surrounding context still shows that an
+    image existed at that position.
     """
     if not isinstance(content, list):
         return content, []
@@ -337,12 +366,15 @@ def _extract_image_blocks(content: Any) -> Tuple[Any, List[Dict[str, Any]]]:
     for block in content:
         if isinstance(block, dict) and block.get("type") == "image_url":
             image_blocks.append(block)
+            if placeholder:
+                other_blocks.append(dict(_IMAGE_PLACEHOLDER_BLOCK))
         else:
             other_blocks.append(block)
 
-    # If all blocks were images, return empty list for other_blocks
-    # If no images, return original list
-    return other_blocks if other_blocks else [], image_blocks
+    # If all blocks were images and no placeholders, return empty list
+    if not other_blocks:
+        return [], image_blocks
+    return other_blocks, image_blocks
 
 
 def _combine_adjacent_user_messages(
