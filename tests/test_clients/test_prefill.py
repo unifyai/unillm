@@ -287,7 +287,8 @@ class TestPrefillToSystemMessageImageExtraction:
     def test_images_extracted_from_prefilled_messages(self):
         """
         Image blocks in prefilled messages should be extracted and sent as native
-        image content in the same system message, not JSON-serialized as text.
+        image content in a user message, not JSON-serialized as text in the
+        system message (Anthropic rejects non-text blocks in the system param).
         """
         base64_image = {
             "type": "image_url",
@@ -309,29 +310,25 @@ class TestPrefillToSystemMessageImageExtraction:
 
         result = _convert_prefill_to_system_message(messages)
 
-        # System message content should be a list (text + native image blocks)
+        # System message should be a plain string (no image blocks)
         system_msg = result[0]
         assert system_msg["role"] == "system"
-        assert isinstance(system_msg["content"], list)
+        assert isinstance(system_msg["content"], str)
+        assert "SGVsbG8gV29ybGQh" not in system_msg["content"]
+        assert "[Screenshot]" in system_msg["content"]
+        assert "[image]" in system_msg["content"]
 
-        # Text block should contain JSON with [image] placeholder, not base64
-        text_block = system_msg["content"][0]
-        assert text_block["type"] == "text"
-        assert "SGVsbG8gV29ybGQh" not in text_block["text"]
-        assert "[Screenshot]" in text_block["text"]
-        assert "[image]" in text_block["text"]
+        # User message should contain [continue] + native image blocks
+        user_msg = result[1]
+        assert user_msg["role"] == "user"
+        assert isinstance(user_msg["content"], list)
 
-        # Native image block should follow the text
-        image_blocks = [
-            b for b in system_msg["content"] if b.get("type") == "image_url"
-        ]
+        image_blocks = [b for b in user_msg["content"] if b.get("type") == "image_url"]
         assert len(image_blocks) == 1
         assert image_blocks[0] == base64_image
 
-        # Continuation prompt should be a plain user message (no images)
-        user_msg = result[1]
-        assert user_msg["role"] == "user"
-        assert user_msg["content"] == "[continue]"
+        text_blocks = [b for b in user_msg["content"] if b.get("type") == "text"]
+        assert any("[continue]" in b["text"] for b in text_blocks)
 
     def test_multiple_images_all_extracted(self):
         """Multiple images from different messages should all be extracted."""
@@ -360,16 +357,16 @@ class TestPrefillToSystemMessageImageExtraction:
 
         result = _convert_prefill_to_system_message(messages)
 
-        # System message should be a list with text + both native images
+        # System message should be a plain string without base64 data
         system_msg = result[0]
-        assert isinstance(system_msg["content"], list)
-        text_block = system_msg["content"][0]
-        assert "aW1hZ2Ux" not in text_block["text"]
-        assert "aW1hZ2Uy" not in text_block["text"]
+        assert isinstance(system_msg["content"], str)
+        assert "aW1hZ2Ux" not in system_msg["content"]
+        assert "aW1hZ2Uy" not in system_msg["content"]
 
-        image_blocks = [
-            b for b in system_msg["content"] if b.get("type") == "image_url"
-        ]
+        # User message should contain [continue] + both native images
+        user_msg = result[1]
+        assert isinstance(user_msg["content"], list)
+        image_blocks = [b for b in user_msg["content"] if b.get("type") == "image_url"]
         assert len(image_blocks) == 2
 
     def test_no_images_unchanged_behavior(self):
@@ -412,23 +409,24 @@ class TestPrefillToSystemMessageImageExtraction:
 
         result = _convert_prefill_to_system_message(messages)
 
-        # System message should contain images as native blocks, not text
+        # System message should be a plain string without base64 data
         system_msg = result[0]
         assert system_msg["role"] == "system"
-        assert isinstance(system_msg["content"], list)
-        text_block = system_msg["content"][0]
-        assert "dGVzdA==" not in text_block["text"]
+        assert isinstance(system_msg["content"], str)
+        assert "dGVzdA==" not in system_msg["content"]
 
-        image_blocks = [
-            b for b in system_msg["content"] if b.get("type") == "image_url"
-        ]
+        # Image user message should be inserted before real messages
+        image_msg = result[1]
+        assert image_msg["role"] == "user"
+        assert isinstance(image_msg["content"], list)
+        image_blocks = [b for b in image_msg["content"] if b.get("type") == "image_url"]
         assert len(image_blocks) == 1
 
-        # Real messages should follow directly (no separate image user message)
-        assert result[1]["role"] == "assistant"
-        assert result[1].get("thinking_blocks") is not None
-        assert result[2]["role"] == "user"
-        assert result[2]["content"] == "Continue"
+        # Real messages should follow
+        assert result[2]["role"] == "assistant"
+        assert result[2].get("thinking_blocks") is not None
+        assert result[3]["role"] == "user"
+        assert result[3]["content"] == "Continue"
 
     def test_integration_with_full_preprocessing(self):
         """
@@ -458,22 +456,26 @@ class TestPrefillToSystemMessageImageExtraction:
 
         result_messages = result["messages"]
 
-        # Base64 data should NOT appear as text anywhere
-        # Images should be native content blocks in the system message
-        found_image = False
-        for msg in result_messages:
+        # System message should be a plain string without base64 data
+        system_msgs = [m for m in result_messages if m["role"] == "system"]
+        for msg in system_msgs:
             content = msg["content"]
             if isinstance(content, str):
                 assert "SGVsbG8=" not in content
-            elif isinstance(content, list):
+
+        # Images should be in a user message as native content blocks
+        found_image = False
+        user_msgs = [m for m in result_messages if m["role"] == "user"]
+        for msg in user_msgs:
+            content = msg["content"]
+            if isinstance(content, list):
                 for block in content:
-                    if isinstance(block, dict):
-                        if block.get("type") == "image_url":
-                            found_image = True
-                            assert block == base64_image
-                        elif block.get("type") == "text":
-                            assert "SGVsbG8=" not in block.get("text", "")
-        assert found_image, "Image should be preserved as native content block"
+                    if isinstance(block, dict) and block.get("type") == "image_url":
+                        found_image = True
+                        assert block == base64_image
+        assert (
+            found_image
+        ), "Image should be preserved as native content block in user message"
 
 
 def test_prefill_assistant_message(model):
