@@ -383,6 +383,43 @@ class TestPrefillToSystemMessageImageExtraction:
         assert result[1]["role"] == "user"
         assert result[1]["content"] == "[continue]"
 
+    def test_system_message_with_list_content(self):
+        """System messages with list content (text + images from prompt builder)
+        must not crash with TypeError when concatenating to string."""
+        base64_image = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,c3lzdGVtSW1n"},
+        }
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are a helpful assistant."},
+                    {"type": "text", "text": "[Screenshot from screen share]"},
+                    base64_image,
+                ],
+            },
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "What do you see?"},
+        ]
+
+        result = _convert_prefill_to_system_message(messages)
+
+        # System message should be a plain string (list content flattened)
+        system_msg = result[0]
+        assert system_msg["role"] == "system"
+        assert isinstance(system_msg["content"], str)
+        assert "c3lzdGVtSW1n" not in system_msg["content"]
+        assert "helpful assistant" in system_msg["content"]
+
+        # Image from system message should be in user message
+        user_msg = result[1]
+        assert user_msg["role"] == "user"
+        assert isinstance(user_msg["content"], list)
+        image_blocks = [b for b in user_msg["content"] if b.get("type") == "image_url"]
+        assert len(image_blocks) == 1
+        assert image_blocks[0] == base64_image
+
     def test_images_with_real_response_after(self):
         """Images in prefilled messages are extracted when real responses follow."""
         base64_image = {
