@@ -32,6 +32,16 @@ from ..limit_hooks import (
 )
 
 _LOGGER = logging.getLogger("unillm")
+
+
+def _safe_deduct_credits(amount: float, *, api_key: str | None = None) -> None:
+    """Deduct credits, logging on failure instead of propagating the exception."""
+    try:
+        unify.deduct_credits(amount, api_key=api_key)
+    except Exception:
+        _LOGGER.warning("Failed to deduct credits: $%.6f", amount, exc_info=True)
+
+
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionMessageParam,
@@ -855,7 +865,7 @@ class Unify(_UniClient):
                     )
                     if provider_cost > 0:
                         billed_cost = provider_cost * get_cost_margin()
-                        unify.deduct_credits(billed_cost, api_key=self._api_key)
+                        _safe_deduct_credits(billed_cost, api_key=self._api_key)
 
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
@@ -932,7 +942,7 @@ class Unify(_UniClient):
             if cost is not None and cost > 0:
                 margin = get_cost_margin()
                 billed = cost * margin
-                unify.deduct_credits(billed, api_key=self._api_key)
+                _safe_deduct_credits(billed, api_key=self._api_key)
 
                 _emit_cost_event(
                     CostEvent.from_completion(
@@ -1199,7 +1209,7 @@ class Unify(_UniClient):
 
         # Deduct credits for cache misses (use already-computed billed_cost).
         if billed_cost is not None and billed_cost > 0:
-            unify.deduct_credits(billed_cost, api_key=self._api_key)
+            _safe_deduct_credits(billed_cost, api_key=self._api_key)
 
         # Always return full completion; _apply_stateful_logic handles extraction
         return chat_completion
@@ -1455,7 +1465,7 @@ class AsyncUnify(_UniClient):
                         billed_cost = provider_cost * get_cost_margin()
                         asyncio.create_task(
                             asyncio.to_thread(
-                                unify.deduct_credits,
+                                _safe_deduct_credits,
                                 billed_cost,
                                 api_key=self._api_key,
                             ),
@@ -1543,7 +1553,7 @@ class AsyncUnify(_UniClient):
                 billed = cost * margin
                 asyncio.create_task(
                     asyncio.to_thread(
-                        unify.deduct_credits,
+                        _safe_deduct_credits,
                         billed,
                         api_key=self._api_key,
                     ),
@@ -1831,7 +1841,7 @@ class AsyncUnify(_UniClient):
         if billed_cost is not None and billed_cost > 0:
             asyncio.create_task(
                 asyncio.to_thread(
-                    unify.deduct_credits,
+                    _safe_deduct_credits,
                     billed_cost,
                     api_key=self._api_key,
                 ),
