@@ -833,7 +833,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.81.8"
+version = "1.82.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -849,9 +849,9 @@ dependencies = [
     { name = "tiktoken" },
     { name = "tokenizers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/eb/1d/e8f95dd1fc0eed36f2698ca82d8a0693d5388c6f2f1718f3f5ed472daaf4/litellm-1.81.8.tar.gz", hash = "sha256:5cc6547697748b8ca38d17d755662871da125df6e378cc987eaf2208a15626fb", size = 14066801, upload-time = "2026-02-05T05:56:03.37Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d7/f0/ec42ee14b388ce1d08a1df638f894ed7f1e6ac35b9daf0588ff7f7d52262/litellm-1.82.5.tar.gz", hash = "sha256:7988a9b48c8ccd9e5ebced80a4dfce9ce87083b303c3f67082450a4ad6dd312f", size = 17406156, upload-time = "2026-03-21T00:03:53.239Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/5a/6f391c2f251553dae98b6edca31c070d7e2291cef6153ae69e0688159093/litellm-1.81.8-py3-none-any.whl", hash = "sha256:78cca92f36bc6c267c191d1fe1e2630c812bff6daec32c58cade75748c2692f6", size = 12286316, upload-time = "2026-02-05T05:56:00.248Z" },
+    { url = "https://files.pythonhosted.org/packages/68/1f/b6c8043eec81eade53a4d0e15a50b788ab0e82661e01a25e0b8536a4dca0/litellm-1.82.5-py3-none-any.whl", hash = "sha256:e1012ab816352215c4e00776dd48b0c68058b537888a8ff82cca62af19e6fb11", size = 15589652, upload-time = "2026-03-21T00:03:48.87Z" },
 ]
 
 [[package]]
@@ -1983,7 +1983,6 @@ dependencies = [
     { name = "aiohttp" },
     { name = "google-genai" },
     { name = "jsonlines" },
-    { name = "litellm" },
     { name = "openai" },
     { name = "requests" },
     { name = "requests-toolbelt" },
@@ -1996,7 +1995,6 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.12.14" },
     { name = "google-genai", specifier = ">=1.52.0" },
     { name = "jsonlines", specifier = ">=3.1.0" },
-    { name = "litellm", specifier = ">=1.80.7" },
     { name = "openai", specifier = ">=2.8.1" },
     { name = "requests", specifier = ">=2.32.4" },
     { name = "requests-toolbelt", specifier = ">=1.0.0" },
@@ -2051,7 +2049,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "litellm", specifier = ">=1.81.8" },
+    { name = "litellm", specifier = "==1.82.5" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "unifyai", editable = "../unify" },
