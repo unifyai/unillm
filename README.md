@@ -37,10 +37,14 @@ Related repositories:
 ## Installation
 
 ```bash
-pip install unillm
+pip install git+https://github.com/unifyai/unillm.git
 ```
 
-Or add to your project's dependencies pointing to this repo.
+Or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add unillm --git https://github.com/unifyai/unillm.git
+```
 
 ## Configuration
 
@@ -212,7 +216,11 @@ export UNILLM_OTEL_ENDPOINT=http://localhost:4317
 export UNILLM_OTEL_LOG_DIR=/path/to/traces
 ```
 
-LLM calls create OTel spans that can be correlated with parent spans (from Unity) and propagated to child services (Unify).
+LLM calls create OTel spans that can be correlated with parent application spans and propagated to child services.
+
+### Privacy Note
+
+When `UNILLM_LOG_DIR` is set, full request and response payloads are written to disk. This includes user messages, tool arguments, and model responses — which may contain PII or sensitive data. Be mindful of this when enabling file logging in production environments.
 
 ## Supported Providers
 
@@ -231,22 +239,34 @@ LLM calls create OTel spans that can be correlated with parent spans (from Unity
 
 ```
 unillm/
-├── __init__.py           # Public API exports
-├── cache_events.py       # Cache event capture system
-├── logger.py             # Logging and OTel tracing
-├── settings.py           # Configuration via env vars
-├── helpers.py            # Utility functions
-├── clients/              # LLM client implementations
-│   ├── base.py          # Base client class
-│   ├── uni_llm.py       # Unify and AsyncUnify clients
-│   ├── provider_preprocessing.py
-│   └── shared_session.py
-├── endpoints/            # Provider-specific model mappings
+├── __init__.py              # Public API exports
+├── settings.py              # Configuration via env vars
+├── helpers.py               # Utility functions
+├── costs.py                 # Provider cost computation
+├── cost_tracker.py          # Per-call cost event capture
+├── tokens.py                # Token counting and context window utilities
+├── cache_events.py          # Cache hit/miss event capture
+├── llm_events.py            # LLM event hooks for observability
+├── limit_hooks.py           # Spending limit check callbacks
+├── logger.py                # File logging and OTel tracing
+├── clients/                 # LLM client implementations
+│   ├── base.py              # Base client class
+│   ├── uni_llm.py           # Unify (sync) and AsyncUnify clients
+│   ├── provider_preprocessing.py   # Provider-specific request normalization
+│   ├── provider_postprocessing.py  # Response validation and retries
+│   └── shared_session.py    # Shared aiohttp session management
+├── caching/                 # Response caching system
+│   ├── base_cache.py        # Abstract cache backend
+│   ├── local_cache.py       # File-based NDJSON cache
+│   └── local_separate_cache.py  # Split read/write cache (for CI)
+├── endpoints/               # Provider-specific model mappings
 │   ├── openai.py
 │   ├── anthropic.py
 │   └── ...
-└── types/                # Type definitions
-    └── prompt.py
+└── types/                   # Type definitions
+    ├── cache.py
+    ├── prompt.py
+    └── prompt_caching.py
 ```
 
 ## Local Development
@@ -261,9 +281,13 @@ uv sync
 
 ### Running Tests
 
+Tests require at minimum an `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` set in your environment (or a `.env` file). With a populated `.cache.ndjson`, cached LLM responses are replayed — so tests run fast and deterministically without making real LLM calls.
+
 ```bash
 uv run pytest tests/ -v
 ```
+
+`UNIFY_KEY` is optional. If set, credit deduction runs against the [Unify API](https://unify.ai). If unset, credit deduction silently warns and tests continue normally.
 
 ### Running Tests in CI
 
@@ -284,6 +308,8 @@ git commit -m "Update README"
 
 Note: The `black` formatting check always runs on every push.
 
+Some CI steps (local Orchestra deployment, GCP authentication) are internal infrastructure for the Unify team and are automatically skipped on external forks.
+
 ### Pre-commit Hooks
 
 Pre-commit hooks run automatically on `git commit` (Black, isort, autoflake). If a commit fails due to auto-formatting, re-run the commit.
@@ -291,3 +317,7 @@ Pre-commit hooks run automatically on `git commit` (Black, isort, autoflake). If
 ```bash
 pre-commit install
 ```
+
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE) for details.

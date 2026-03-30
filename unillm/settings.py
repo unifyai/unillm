@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     # File-based span export:
     # When UNILLM_OTEL_LOG_DIR is set, spans are written to JSONL files keyed
     # by trace_id. This enables standalone trace logging without a parent
-    # TracerProvider (Unity) or external collector (Tempo/Jaeger).
+    # TracerProvider or external collector (Tempo/Jaeger).
     UNILLM_OTEL: bool = False
     UNILLM_OTEL_ENDPOINT: str = ""
     UNILLM_OTEL_LOG_DIR: str = ""

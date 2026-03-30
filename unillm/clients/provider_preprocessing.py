@@ -288,7 +288,7 @@ def _convert_prefill_to_system_message(
 
     # Extract existing system message content from the portion to convert.
     # System messages may have list content (text + image blocks) when
-    # Unity's prompt builder embeds screenshots.  Extract text as string
+    # Some prompt builders embed screenshots.  Extract text as string
     # and collect any images so they can be routed to a user message.
     system_content = ""
     system_images: List[Dict[str, Any]] = []

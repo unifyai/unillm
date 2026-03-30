@@ -1,7 +1,7 @@
 [project]
 name = "unillm"
 version = "0.1.0"
-description = ""
+description = "Lightweight LLM client wrapper with provider normalization, caching, and observability."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -29,4 +29,4 @@ dev = [
 include = ["unillm", "unillm.*"]
 
 [tool.uv.sources]
-unify = { path = "../unify", editable = true }
+unify = { git = "https://github.com/unifyai/unify.git", branch = "main" }

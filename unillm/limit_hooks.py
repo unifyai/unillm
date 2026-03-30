@@ -1,7 +1,7 @@
 """
 Limit check hooks for UniLLM.
 
-Provides a callback mechanism for host applications (like Unity) to implement
+Provides a callback mechanism for host applications to implement
 spending limit checks. UniLLM invokes the registered callback before each LLM
 call and uses the response to decide whether to proceed.
 
@@ -9,7 +9,7 @@ This follows the same pattern as the existing LLM event hook - UniLLM is
 agnostic to how limits are checked; it just invokes the callback.
 
 Usage:
-    # In host application (e.g., Unity):
+    # In host application:
     async def check_limits(request: LimitCheckRequest) -> LimitCheckResponse:
         # Check limits against your backend
         return LimitCheckResponse(allowed=True)
@@ -19,7 +19,7 @@ Usage:
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Awaitable, Callable, Optional
 
@@ -186,7 +186,6 @@ def check_limits_sync(request: LimitCheckRequest) -> LimitCheckResponse:
     try:
         loop = asyncio.get_running_loop()
         # If we're in an async context, we can't use asyncio.run()
-        import concurrent.futures
 
         future = asyncio.run_coroutine_threadsafe(check_limits(request), loop)
         return future.result(timeout=10.0)
