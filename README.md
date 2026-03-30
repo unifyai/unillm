@@ -271,11 +271,20 @@ unillm/
 
 ## Local Development
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management. UniLLM depends on [unify](https://github.com/unifyai/unify) via a local path (`../unify`), so both repos must be cloned as siblings:
+
+```
+parent/
+├── unillm/   # this repo
+└── unify/    # https://github.com/unifyai/unify
+```
 
 ### Setup
 
 ```bash
+git clone https://github.com/unifyai/unillm.git
+git clone https://github.com/unifyai/unify.git
+cd unillm
 uv sync
 ```
 
