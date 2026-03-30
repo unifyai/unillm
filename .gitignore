@@ -3,6 +3,8 @@
 *.env
 .sensitive_data
 
+.cursor/
+
 *venv/
 __pycache__/
 

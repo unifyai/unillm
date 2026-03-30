@@ -27,7 +27,7 @@ from unillm.types import PromptCacheParam
 
 
 class _Client(ABC):
-    """Base Abstract class for interacting with the Unify chat completions endpoint."""
+    """Base class for LLM client implementations."""
 
     def __init__(
         self,

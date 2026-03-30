@@ -1,3 +1,13 @@
+# CI for unillm
+#
+# Two modes:
+#   Internal (CLONE_TOKEN available): Clones Orchestra, starts a local server,
+#     and runs tests against it. Full observability (GCP, OTel, logs).
+#   External (no CLONE_TOKEN): Tests run without a local Orchestra. Credit
+#     deduction falls back to the production API (or silently warns if no
+#     UNIFY_KEY). External contributors only need OPENAI_API_KEY /
+#     ANTHROPIC_API_KEY as repo secrets (or can rely on cached responses).
+
 name: Testing unillm
 
 on:
@@ -68,15 +78,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Clone unify repo
-      uses: actions/checkout@v4
-      with:
-        repository: unifyai/unify
-        ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        path: unify-sdk
-        token: ${{ secrets.CLONE_TOKEN }}
-        fetch-depth: 1
-
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -84,13 +85,6 @@ jobs:
 
     - name: Install uv
       uses: astral-sh/setup-uv@v4
-
-    - name: Configure unify path for CI
-      run: |
-        # Local development uses sibling path (../unify).
-        # CI clones into ./unify-sdk/ (not ./unify/) to avoid shadowing
-        # the installed "unify" Python package with an implicit namespace package.
-        sed -i 's|path = "../unify"|path = "./unify-sdk"|g' pyproject.toml
 
     - name: Install deps
       run: uv sync --group dev
@@ -104,22 +98,28 @@ jobs:
     if: needs.should-run-tests.outputs.run_tests == 'true'
     timeout-minutes: 120
     env:
-      # Local orchestra configuration
-      ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
-      # Logging directories (matches unity/unify repo structure)
       LOGS_DIR: ${{ github.workspace }}/logs
-      # Orchestra GCP configuration (set by google-github-actions/auth step)
-      # GOOGLE_APPLICATION_CREDENTIALS is set automatically by the google-github-actions/auth action
-      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      GCP_LOCATION: ${{ vars.GCP_LOCATION }}
-      # GCP bucket names (passed to orchestra server)
-      ORCHESTRA_GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_LOGS }}
-      ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME: ${{ vars.GCP_BUCKET_ASSISTANT_IMAGES }}
-      ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME: ${{ vars.GCP_BUCKET_RECORDINGS }}
     steps:
     - uses: actions/checkout@v4
 
+    # Detect whether internal secrets are available (org CI vs external fork)
+    - name: Check internal secrets
+      id: secrets-check
+      run: |
+        if [ -n "$CLONE_TOKEN" ]; then
+          echo "has_internal=true" >> $GITHUB_OUTPUT
+          echo "Running in internal mode (Orchestra + GCP available)"
+        else
+          echo "has_internal=false" >> $GITHUB_OUTPUT
+          echo "Running in external mode (no Orchestra, using production API fallback)"
+        fi
+      env:
+        CLONE_TOKEN: ${{ secrets.CLONE_TOKEN }}
+
+    # --- Internal-only: Clone and set up Orchestra ---
+
     - name: Clone orchestra repo for local deployment
+      if: steps.secrets-check.outputs.has_internal == 'true'
       uses: actions/checkout@v4
       with:
         repository: unifyai/orchestra
@@ -128,23 +128,18 @@ jobs:
         token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1
 
-    - name: Clone unify repo
-      uses: actions/checkout@v4
-      with:
-        repository: unifyai/unify
-        ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        path: unify-sdk
-        token: ${{ secrets.CLONE_TOKEN }}
-        fetch-depth: 1
-
     - name: Authenticate to Google Cloud
+      if: steps.secrets-check.outputs.has_internal == 'true'
       uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
 
     - name: Get orchestra commit SHA
+      if: steps.secrets-check.outputs.has_internal == 'true'
       id: orchestra-sha
       run: echo "sha=$(git -C orchestra rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+    # --- Common setup ---
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -155,24 +150,23 @@ jobs:
       uses: astral-sh/setup-uv@v4
 
     - name: Install poetry (for orchestra)
+      if: steps.secrets-check.outputs.has_internal == 'true'
       run: |
         python -m pip install --upgrade pip
         pip install poetry
 
-    # Cache uv dependencies
     - name: Cache uv dependencies
       uses: actions/cache@v4
       with:
         path: |
           ~/.cache/uv
           .venv
-        key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}-${{ steps.orchestra-sha.outputs.sha }}
+        key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
         restore-keys: |
-          uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}-
           uv-${{ runner.os }}-
 
-    # Cache poetry dependencies (for orchestra)
     - name: Cache poetry dependencies
+      if: steps.secrets-check.outputs.has_internal == 'true'
       uses: actions/cache@v4
       with:
         path: ~/.cache/pypoetry
@@ -190,58 +184,51 @@ jobs:
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
 
-    - name: Configure unify path for CI
-      run: |
-        # Local development uses sibling path (../unify).
-        # CI clones into ./unify-sdk/ (not ./unify/) to avoid shadowing
-        # the installed "unify" Python package with an implicit namespace package.
-        sed -i 's|path = "../unify"|path = "./unify-sdk"|g' pyproject.toml
-
     - name: Install unillm deps
       run: uv sync --group dev
 
     - name: Install orchestra dependencies
+      if: steps.secrets-check.outputs.has_internal == 'true'
       run: |
-        cd "$ORCHESTRA_REPO_PATH"
+        cd "${{ github.workspace }}/orchestra"
         poetry install --no-interaction
+
+    # --- Logging and Orchestra startup ---
 
     - name: Setup logging directories
       run: |
-        # Create log directories matching unity repo structure
         mkdir -p "$LOGS_DIR/unillm"
         mkdir -p "$LOGS_DIR/unify"
         mkdir -p "$LOGS_DIR/orchestra"
         mkdir -p "$LOGS_DIR/all"
-        echo "Created logging directories:"
-        echo "  - $LOGS_DIR/unillm/   (unillm LLM I/O logs)"
-        echo "  - $LOGS_DIR/unify/    (unify client logs)"
-        echo "  - $LOGS_DIR/orchestra/ (orchestra request logs)"
-        echo "  - $LOGS_DIR/all/       (OpenTelemetry traces)"
 
     - name: Start local orchestra
+      if: steps.secrets-check.outputs.has_internal == 'true'
       run: |
-        # Start local orchestra with test user seeding, logging, and enough workers for parallel tests
         ORCHESTRA_SEED_USER=1 \
         ORCHESTRA_WORKERS=8 \
         ORCHESTRA_LOG_DIR="$LOGS_DIR/orchestra" \
         ORCHESTRA_OTEL_LOG_DIR="$LOGS_DIR/all" \
+        ORCHESTRA_GCP_BUCKET_NAME="${{ vars.GCP_BUCKET_LOGS }}" \
+        ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME="${{ vars.GCP_BUCKET_ASSISTANT_IMAGES }}" \
+        ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME="${{ vars.GCP_BUCKET_RECORDINGS }}" \
+        GCP_PROJECT_ID="${{ vars.GCP_PROJECT_ID }}" \
+        GCP_LOCATION="${{ vars.GCP_LOCATION }}" \
         UNIFY_KEY="${{ secrets.UNIFY_KEY }}" \
-        "$ORCHESTRA_REPO_PATH/scripts/local.sh" start
+        "${{ github.workspace }}/orchestra/scripts/local.sh" start
 
-        # Export the local URL for tests
         echo "ORCHESTRA_URL=http://127.0.0.1:8000/v0" >> $GITHUB_ENV
+
+    # --- Run tests ---
 
     - name: Run unit tests
       id: pytest
       run: |
         set +e
-        # Run pytest and capture output for summary extraction
         uv run pytest --timeout=120 -p no:warnings -vv tests/ 2>&1 | tee pytest_output.txt
         exit_code=${PIPESTATUS[0]}
         echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
 
-        # Extract pass/fail/error/skip counts from pytest summary line
-        # Format: "X passed, Y failed, Z errors, W skipped in N.NNs"
         summary_line=$(grep -E "^=+ .*(passed|failed|error).* in [0-9]+(\.[0-9]+)?s" pytest_output.txt | tail -1)
         if [ -n "$summary_line" ]; then
           passed=$(echo "$summary_line" | grep -oE "[0-9]+ passed" | grep -oE "[0-9]+" || echo "0")
@@ -261,22 +248,18 @@ jobs:
 
         exit $exit_code
       env:
-        # Unify API key (for query logging)
         UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
-        # LLM provider API keys
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        # Enable LLM response caching (uses local_separate backend: reads .cache.ndjson, writes .cache_write.ndjson)
         UNILLM_CACHE: "true"
         UNILLM_CACHE_BACKEND: "local_separate"
-        # Enable OpenTelemetry tracing for unillm
         UNILLM_OTEL: "true"
         UNILLM_OTEL_LOG_DIR: ${{ env.LOGS_DIR }}/all
-        # File-based LLM I/O logging (independent of terminal)
         UNILLM_LOG_DIR: ${{ env.LOGS_DIR }}/unillm
-        # Enable OpenTelemetry tracing for unify client
         UNIFY_OTEL: "true"
         UNIFY_OTEL_LOG_DIR: ${{ env.LOGS_DIR }}/all
+
+    # --- Post-test reporting and cleanup ---
 
     - name: Generate success summary
       if: success()
@@ -311,12 +294,11 @@ jobs:
         echo "$STATS — [view logs]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
 
     - name: Dump orchestra logs on failure
-      if: failure()
+      if: failure() && steps.secrets-check.outputs.has_internal == 'true'
       run: |
         echo "=== Orchestra Server Logs ==="
         if [ -f /tmp/orchestra-local-server.log ]; then
           cat /tmp/orchestra-local-server.log
-          # Copy server log to logs/orchestra/ for artifact upload
           cp /tmp/orchestra-local-server.log "$LOGS_DIR/orchestra/server.log"
         else
           echo "No orchestra log file found"
@@ -338,7 +320,6 @@ jobs:
       run: |
         echo "=== Preparing logs for upload ==="
 
-        # Copy orchestra server log (always, not just on failure)
         if [ -f /tmp/orchestra-local-server.log ]; then
           cp /tmp/orchestra-local-server.log "$LOGS_DIR/orchestra/server.log"
           echo "✓ Copied orchestra server log"
@@ -362,8 +343,6 @@ jobs:
 
         # --- orchestra logs (requires filename sanitization for Windows compatibility) ---
         if [ -d "$LOGS_DIR/orchestra" ]; then
-          # Orchestra trace filenames may contain colons from route paths.
-          # Colons are invalid in Windows NTFS, so GitHub Actions rejects them.
           sanitized=0
           while IFS= read -r -d '' file; do
             newname=$(echo "$file" | tr ':' '_')
@@ -402,9 +381,9 @@ jobs:
         retention-days: 90
 
     - name: Stop local orchestra
-      if: always()
+      if: always() && steps.secrets-check.outputs.has_internal == 'true'
       run: |
-        "$ORCHESTRA_REPO_PATH/scripts/local.sh" stop || true
+        "${{ github.workspace }}/orchestra/scripts/local.sh" stop || true
 
   # Cache consolidation job: merges new cache entries and saves to GitHub cache
   cache-consolidation:

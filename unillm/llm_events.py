@@ -3,7 +3,7 @@ LLM Event Hooks
 ===============
 
 Provides a hook mechanism for external integrations to receive LLM completion
-events. This allows downstream consumers (like Unity's EventBus) to capture and
+events. This allows downstream consumers to capture and
 log all LLM activity without coupling unillm to specific logging implementations.
 
 The pattern mirrors cache_events.py - using a ContextVar for thread-safety and

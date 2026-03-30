@@ -31,7 +31,7 @@ OpenTelemetry tracing is controlled by:
 - UNILLM_OTEL_LOG_DIR: Directory for file-based span export (optional)
 
 When UNILLM_OTEL is enabled, LLM calls create OTel spans that can be
-correlated with parent spans (from Unity) and child spans (in Unify).
+correlated with parent application spans and child service spans.
 
 File-based span export:
 When UNILLM_OTEL_LOG_DIR is set, spans are written to JSONL files keyed
@@ -181,7 +181,7 @@ def _setup_otel() -> None:
             existing,
             (trace.NoOpTracerProvider, trace.ProxyTracerProvider),
         ):
-            # Parent (e.g., Unity) already configured OTel - use theirs
+            # Parent application already configured OTel - use theirs
             _TRACER = trace.get_tracer("unillm")
             _LOGGER.debug("Using existing OTel TracerProvider from parent")
             return

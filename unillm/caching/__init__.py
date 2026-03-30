@@ -24,8 +24,6 @@ __all__ = [
     "LocalSeparateCache",
     "CacheStats",
     "get_cache_stats",
-    "_get_cache",
-    "_write_to_cache",
     "is_caching_enabled",
     "set_cache_backend",
     "get_cache_backend",

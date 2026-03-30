@@ -790,8 +790,7 @@ class _UniClient(_Client, abc.ABC):
 
 
 class Unify(_UniClient):
-    """Class for interacting with the Unify chat completions endpoint in a synchronous
-    manner."""
+    """Sync client for LLM inference via the model@provider endpoint format."""
 
     def _generate_stream(
         self,
@@ -1302,8 +1301,7 @@ class Unify(_UniClient):
 
 
 class AsyncUnify(_UniClient):
-    """Class for interacting with the Unify chat completions endpoint in a synchronous
-    manner."""
+    """Async client for LLM inference via the model@provider endpoint format."""
 
     # Providers whose litellm handler expects an OpenAI SDK client (AsyncOpenAI)
     # as the ``client`` kwarg.  We must NOT pass an AsyncHTTPHandler for these.
