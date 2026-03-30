@@ -1976,7 +1976,7 @@ wheels = [
 ]
 
 [[package]]
-name = "unifyai"
+name = "unify"
 version = "0.9.10"
 source = { editable = "../unify" }
 dependencies = [
@@ -2030,7 +2030,7 @@ dependencies = [
     { name = "litellm" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "unifyai" },
+    { name = "unify" },
 ]
 
 [package.dev-dependencies]
@@ -2052,7 +2052,7 @@ requires-dist = [
     { name = "litellm", specifier = "==1.82.5" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
-    { name = "unifyai", editable = "../unify" },
+    { name = "unify", editable = "../unify" },
 ]
 
 [package.metadata.requires-dev]

@@ -8,7 +8,7 @@ dependencies = [
     "litellm==1.82.5",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
-    "unifyai",
+    "unify",
 ]
 
 [dependency-groups]
@@ -29,4 +29,4 @@ dev = [
 include = ["unillm", "unillm.*"]
 
 [tool.uv.sources]
-unifyai = { path = "../unify", editable = true }
+unify = { path = "../unify", editable = true }
