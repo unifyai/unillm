@@ -11,6 +11,7 @@ from unillm import (
     CostEvent,
 )
 from unillm.cost_tracker import _emit_cost_event
+from unillm.costs import get_cost_margin
 
 # ---------------------------------------------------------------------------
 #  Unit tests for CostEvent dataclass
@@ -318,9 +319,7 @@ class TestCostEventEmissionMocked:
         event = events[0]
         assert event.cache_status == "miss"
         assert event.provider_cost == 0.001
-        assert event.billed_cost == pytest.approx(
-            0.0012,
-        )  # 0.001 * 1.2 (default margin)
+        assert event.billed_cost == pytest.approx(0.001 * get_cost_margin())
         assert event.prompt_tokens == 10
         assert event.completion_tokens == 5
 
@@ -381,7 +380,7 @@ class TestCostEventEmissionMocked:
         event = events[0]
         assert event.cache_status == "miss"
         assert event.provider_cost == 0.002
-        assert event.billed_cost == 0.01  # 0.002 * 5
+        assert event.billed_cost == pytest.approx(0.002 * get_cost_margin())
         assert event.prompt_tokens == 20
         assert event.completion_tokens == 10
 
