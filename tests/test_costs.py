@@ -228,10 +228,10 @@ class TestTieredLongContextPricing:
 
     FAKE_MODEL = "fake-tiered-model"
     FAKE_MODEL_INFO = {
-        "input_cost_per_token": 1e-6,            # $1/M
-        "output_cost_per_token": 2e-6,           # $2/M
-        "input_cost_per_token_above_200k_tokens": 4e-6,    # $4/M
-        "output_cost_per_token_above_200k_tokens": 8e-6,   # $8/M
+        "input_cost_per_token": 1e-6,  # $1/M
+        "output_cost_per_token": 2e-6,  # $2/M
+        "input_cost_per_token_above_200k_tokens": 4e-6,  # $4/M
+        "output_cost_per_token_above_200k_tokens": 8e-6,  # $8/M
     }
 
     @pytest.fixture(autouse=True)
