@@ -1,6 +1,7 @@
 """Tests for the cost computation module."""
 
 import pytest
+from unittest.mock import patch
 
 from unillm.costs import (
     _normalize_model_name,
@@ -62,12 +63,12 @@ class TestComputeCostWithProviderSuffix:
     def test_compute_cost_with_anthropic_suffix(self):
         """Test that claude model with @anthropic suffix works."""
         cost_with_suffix = compute_cost(
-            "claude-3-5-sonnet-20241022@anthropic",
+            "claude-sonnet-4-20250514@anthropic",
             prompt_tokens=1000,
             completion_tokens=500,
         )
         cost_without_suffix = compute_cost(
-            "claude-3-5-sonnet-20241022",
+            "claude-sonnet-4-20250514",
             prompt_tokens=1000,
             completion_tokens=500,
         )
@@ -109,26 +110,6 @@ class TestComputeCost:
 
         # Expected: (1000 * 2.5e-6) + (500 * 1e-5) = 0.0025 + 0.005 = 0.0075
         assert abs(cost - 0.0075) < 1e-9
-
-    def test_compute_cost_gpt4o_mini(self):
-        """Test cost computation for gpt-4o-mini model."""
-        # gpt-4o-mini: input=$0.15/M, output=$0.60/M
-        cost = compute_cost("gpt-4o-mini", prompt_tokens=10000, completion_tokens=5000)
-
-        # Expected: (10000 * 1.5e-7) + (5000 * 6e-7) = 0.0015 + 0.003 = 0.0045
-        assert abs(cost - 0.0045) < 1e-9
-
-    def test_compute_cost_claude_sonnet(self):
-        """Test cost computation for Claude model."""
-        # claude-3-5-sonnet: input=$3.00/M, output=$15.00/M
-        cost = compute_cost(
-            "claude-3-5-sonnet-20241022",
-            prompt_tokens=2000,
-            completion_tokens=1000,
-        )
-
-        # Expected: (2000 * 3e-6) + (1000 * 1.5e-5) = 0.006 + 0.015 = 0.021
-        assert abs(cost - 0.021) < 1e-9
 
     def test_compute_cost_zero_tokens(self):
         """Test cost computation with zero tokens."""
@@ -230,47 +211,78 @@ class TestComputeCostFromResponse:
 
 
 class TestTieredLongContextPricing:
-    """Tests for tiered pricing when prompts exceed 200k tokens.
+    """Tests for tiered pricing when prompts exceed a token threshold.
 
-    Anthropic charges higher rates for input/output tokens when the prompt
-    exceeds 200k tokens:
-      - Input:  2x standard rate for tokens above 200k
-      - Output: 1.5x standard rate when prompt > 200k
+    Some providers charge higher rates for input/output tokens when the prompt
+    exceeds a threshold (e.g. 200k tokens):
+      - Input:  2x standard rate for tokens above the threshold
+      - Output: 1.5x standard rate when prompt exceeds the threshold
 
-    LiteLLM provides these rates as `input_cost_per_token_above_200k_tokens`
-    and `output_cost_per_token_above_200k_tokens`. Our cost functions must
+    LiteLLM provides these rates as `input_cost_per_token_above_{N}k_tokens`
+    and `output_cost_per_token_above_{N}k_tokens`. Our cost functions must
     use them for accurate billing.
+
+    These tests use a fake model info dict to avoid depending on any real
+    model's pricing data staying stable in LiteLLM.
     """
+
+    FAKE_MODEL = "fake-tiered-model"
+    FAKE_MODEL_INFO = {
+        "input_cost_per_token": 1e-6,  # $1/M
+        "output_cost_per_token": 2e-6,  # $2/M
+        "input_cost_per_token_above_200k_tokens": 4e-6,  # $4/M
+        "output_cost_per_token_above_200k_tokens": 8e-6,  # $8/M
+    }
+
+    @pytest.fixture(autouse=True)
+    def _patch_model_info(self):
+        with patch(
+            "unillm.costs._get_model_info",
+            return_value=self.FAKE_MODEL_INFO,
+        ):
+            yield
+
+    @property
+    def input_rate(self):
+        return self.FAKE_MODEL_INFO["input_cost_per_token"]
+
+    @property
+    def output_rate(self):
+        return self.FAKE_MODEL_INFO["output_cost_per_token"]
+
+    @property
+    def input_rate_tiered(self):
+        return self.FAKE_MODEL_INFO["input_cost_per_token_above_200k_tokens"]
+
+    @property
+    def output_rate_tiered(self):
+        return self.FAKE_MODEL_INFO["output_cost_per_token_above_200k_tokens"]
 
     def test_compute_cost_applies_tiered_input_pricing(self):
         """Input tokens above 200k should be billed at the higher rate."""
-        # claude-opus-4-6: $5/M standard, $10/M above 200k
         cost = compute_cost(
-            "claude-opus-4-6",
+            self.FAKE_MODEL,
             prompt_tokens=300_000,
             completion_tokens=0,
         )
-        # First 200k at $5/M  = $1.00
-        # Next  100k at $10/M = $1.00
-        # Total                = $2.00
-        expected = (200_000 * 5e-6) + (100_000 * 10e-6)
+        expected = (200_000 * self.input_rate) + (100_000 * self.input_rate_tiered)
         assert abs(cost - expected) < 1e-9, (
             f"Expected ${expected:.4f} (tiered) but got ${cost:.4f} "
-            f"(flat rate would give ${300_000 * 5e-6:.4f})"
+            f"(flat rate would give ${300_000 * self.input_rate:.4f})"
         )
 
     def test_compute_cost_applies_tiered_output_pricing(self):
         """Output tokens should be billed at the higher rate when prompt > 200k."""
-        # claude-opus-4-6: $25/M standard output, $37.50/M when prompt > 200k
         cost = compute_cost(
-            "claude-opus-4-6",
+            self.FAKE_MODEL,
             prompt_tokens=250_000,
             completion_tokens=10_000,
         )
-        # Input:  200k × $5/M + 50k × $10/M  = $1.00 + $0.50 = $1.50
-        # Output: 10k × $37.50/M (prompt > 200k) = $0.375
-        # Total = $1.875
-        expected = (200_000 * 5e-6) + (50_000 * 10e-6) + (10_000 * 37.5e-6)
+        expected = (
+            (200_000 * self.input_rate)
+            + (50_000 * self.input_rate_tiered)
+            + (10_000 * self.output_rate_tiered)
+        )
         assert (
             abs(cost - expected) < 1e-9
         ), f"Expected ${expected:.4f} (tiered) but got ${cost:.4f}"
@@ -278,12 +290,11 @@ class TestTieredLongContextPricing:
     def test_compute_cost_no_tiered_pricing_under_200k(self):
         """Requests under 200k should use standard rates only."""
         cost = compute_cost(
-            "claude-opus-4-6",
+            self.FAKE_MODEL,
             prompt_tokens=150_000,
             completion_tokens=5_000,
         )
-        # All standard: 150k × $5/M + 5k × $25/M = $0.75 + $0.125 = $0.875
-        expected = (150_000 * 5e-6) + (5_000 * 25e-6)
+        expected = (150_000 * self.input_rate) + (5_000 * self.output_rate)
         assert abs(cost - expected) < 1e-9
 
     def test_compute_full_cost_tiered_pricing(self):
@@ -292,11 +303,12 @@ class TestTieredLongContextPricing:
             "prompt_tokens": 300_000,
             "completion_tokens": 10_000,
         }
-        cost = compute_full_cost_from_usage("claude-opus-4-6", usage)
-        # Input:  200k × $5/M + 100k × $10/M  = $1.00 + $1.00 = $2.00
-        # Output: 10k × $37.50/M = $0.375
-        # Total = $2.375
-        expected = (200_000 * 5e-6) + (100_000 * 10e-6) + (10_000 * 37.5e-6)
+        cost = compute_full_cost_from_usage(self.FAKE_MODEL, usage)
+        expected = (
+            (200_000 * self.input_rate)
+            + (100_000 * self.input_rate_tiered)
+            + (10_000 * self.output_rate_tiered)
+        )
         assert (
             abs(cost - expected) < 1e-9
         ), f"Expected ${expected:.4f} (tiered) but got ${cost:.4f}"

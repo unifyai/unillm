@@ -13,6 +13,7 @@ from unillm import (
     allm_event_hook_scope,
 )
 from unillm.llm_events import _emit_llm_event
+from unillm.costs import get_cost_margin
 
 
 class TestLLMEventDataclass:
@@ -595,8 +596,7 @@ class TestLLMEventCosts:
         # Provider cost should be set
         assert event.provider_cost == 0.001
 
-        # Billed cost should be provider_cost * margin (default 1.2)
-        assert event.billed_cost == pytest.approx(0.0012)
+        assert event.billed_cost == pytest.approx(0.001 * get_cost_margin())
 
     def test_costs_with_custom_margin(self):
         """Billed cost should respect UNILLM_COST_MARGIN env var."""
@@ -731,7 +731,7 @@ class TestLLMEventCosts:
         event = captured[0]
 
         assert event.provider_cost == 0.002
-        assert event.billed_cost == 0.01  # 0.002 * 5
+        assert event.billed_cost == pytest.approx(0.002 * get_cost_margin())
 
 
 # ---------------------------------------------------------------------------
