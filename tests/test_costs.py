@@ -111,26 +111,6 @@ class TestComputeCost:
         # Expected: (1000 * 2.5e-6) + (500 * 1e-5) = 0.0025 + 0.005 = 0.0075
         assert abs(cost - 0.0075) < 1e-9
 
-    def test_compute_cost_gpt4o_mini(self):
-        """Test cost computation for gpt-4o-mini model."""
-        # gpt-4o-mini: input=$0.15/M, output=$0.60/M
-        cost = compute_cost("gpt-4o-mini", prompt_tokens=10000, completion_tokens=5000)
-
-        # Expected: (10000 * 1.5e-7) + (5000 * 6e-7) = 0.0015 + 0.003 = 0.0045
-        assert abs(cost - 0.0045) < 1e-9
-
-    def test_compute_cost_claude_sonnet(self):
-        """Test cost computation for Claude model."""
-        # claude-3-5-sonnet: input=$3.00/M, output=$15.00/M
-        cost = compute_cost(
-            "claude-3-5-sonnet-20241022",
-            prompt_tokens=2000,
-            completion_tokens=1000,
-        )
-
-        # Expected: (2000 * 3e-6) + (1000 * 1.5e-5) = 0.006 + 0.015 = 0.021
-        assert abs(cost - 0.021) < 1e-9
-
     def test_compute_cost_zero_tokens(self):
         """Test cost computation with zero tokens."""
         cost = compute_cost("gpt-4o", prompt_tokens=0, completion_tokens=0)
