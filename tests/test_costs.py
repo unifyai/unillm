@@ -63,12 +63,12 @@ class TestComputeCostWithProviderSuffix:
     def test_compute_cost_with_anthropic_suffix(self):
         """Test that claude model with @anthropic suffix works."""
         cost_with_suffix = compute_cost(
-            "claude-3-5-sonnet-20241022@anthropic",
+            "claude-sonnet-4-20250514@anthropic",
             prompt_tokens=1000,
             completion_tokens=500,
         )
         cost_without_suffix = compute_cost(
-            "claude-3-5-sonnet-20241022",
+            "claude-sonnet-4-20250514",
             prompt_tokens=1000,
             completion_tokens=500,
         )
