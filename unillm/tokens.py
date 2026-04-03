@@ -29,8 +29,21 @@ def get_max_input_tokens(endpoint: str) -> int:
         ValueError: If the model is not found in either our overrides
                     or LiteLLM's model data.
     """
-    info = get_model_info(endpoint)
-    return info["max_input_tokens"]
+    try:
+        info = get_model_info(endpoint)
+        return info["max_input_tokens"]
+    except ValueError:
+        pass
+
+    model = _normalize_model_name(endpoint)
+    try:
+        info = litellm.get_model_info(model)
+        max_tokens = info.get("max_input_tokens")
+        if max_tokens is not None:
+            return max_tokens
+    except Exception:
+        pass
+    raise ValueError(f"Model {model} not found")
 
 
 def count_tokens(
