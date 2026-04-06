@@ -34,10 +34,40 @@ from ..limit_hooks import (
 _LOGGER = logging.getLogger("unillm")
 
 
-def _safe_deduct_credits(amount: float, *, api_key: str | None = None) -> None:
-    """Deduct credits, logging on failure instead of propagating the exception."""
+def _safe_deduct_credits(
+    amount: float,
+    *,
+    api_key: str | None = None,
+    model: str | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    provider_cost: float | None = None,
+) -> None:
+    """Deduct credits with ledger metadata from billing context."""
+    from ..billing_context import get_billing_context
+
+    ctx = get_billing_context()
+    detail: dict = {}
+    if model:
+        detail["model"] = model
+    if prompt_tokens is not None:
+        detail["prompt_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        detail["completion_tokens"] = completion_tokens
+    if provider_cost is not None:
+        detail["provider_cost"] = provider_cost
+
     try:
-        unify.deduct_credits(amount, api_key=api_key)
+        unify.deduct_credits(
+            amount,
+            api_key=api_key,
+            category="llm",
+            assistant_id=ctx.assistant_id,
+            user_id=ctx.user_id,
+            organization_id=ctx.organization_id,
+            description=f"{model} call" if model else None,
+            detail=detail or None,
+        )
     except Exception:
         _LOGGER.warning("Failed to deduct credits: $%.6f", amount, exc_info=True)
 
@@ -864,7 +894,14 @@ class Unify(_UniClient):
                     )
                     if provider_cost > 0:
                         billed_cost = provider_cost * get_cost_margin()
-                        _safe_deduct_credits(billed_cost, api_key=self._api_key)
+                        _safe_deduct_credits(
+                            billed_cost,
+                            api_key=self._api_key,
+                            model=kw.get("model"),
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            provider_cost=provider_cost,
+                        )
 
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
@@ -941,7 +978,12 @@ class Unify(_UniClient):
             if cost is not None and cost > 0:
                 margin = get_cost_margin()
                 billed = cost * margin
-                _safe_deduct_credits(billed, api_key=self._api_key)
+                _safe_deduct_credits(
+                    billed,
+                    api_key=self._api_key,
+                    model=retry_kw.get("model"),
+                    provider_cost=cost,
+                )
 
                 _emit_cost_event(
                     CostEvent.from_completion(
@@ -1208,7 +1250,12 @@ class Unify(_UniClient):
 
         # Deduct credits for cache misses (use already-computed billed_cost).
         if billed_cost is not None and billed_cost > 0:
-            _safe_deduct_credits(billed_cost, api_key=self._api_key)
+            _safe_deduct_credits(
+                billed_cost,
+                api_key=self._api_key,
+                model=kw.get("model"),
+                provider_cost=provider_cost,
+            )
 
         # Always return full completion; _apply_stateful_logic handles extraction
         return chat_completion
@@ -1466,6 +1513,10 @@ class AsyncUnify(_UniClient):
                                 _safe_deduct_credits,
                                 billed_cost,
                                 api_key=self._api_key,
+                                model=kw.get("model"),
+                                prompt_tokens=prompt_tokens,
+                                completion_tokens=completion_tokens,
+                                provider_cost=provider_cost,
                             ),
                             name="unillm_deduct_credits_stream",
                         )
@@ -1554,6 +1605,8 @@ class AsyncUnify(_UniClient):
                         _safe_deduct_credits,
                         billed,
                         api_key=self._api_key,
+                        model=retry_kw.get("model"),
+                        provider_cost=cost,
                     ),
                     name=f"unillm_deduct_credits_{label_suffix}",
                 )
@@ -1842,6 +1895,8 @@ class AsyncUnify(_UniClient):
                     _safe_deduct_credits,
                     billed_cost,
                     api_key=self._api_key,
+                    model=kw.get("model"),
+                    provider_cost=provider_cost,
                 ),
                 name="unillm_deduct_credits",
             )
