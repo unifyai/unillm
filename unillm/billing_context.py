@@ -23,6 +23,7 @@ class BillingContext:
     assistant_id: Optional[int] = None
     user_id: Optional[str] = None
     organization_id: Optional[int] = None
+    source: Optional[str] = None
 
 
 _BILLING_CONTEXT: ContextVar[BillingContext] = ContextVar(
@@ -36,12 +37,22 @@ def set_billing_context(
     assistant_id: int | None = None,
     user_id: str | None = None,
     organization_id: int | None = None,
+    source: str | None = None,
 ) -> None:
-    """Set billing attribution for the current async/thread context."""
+    """Set billing attribution for the current async/thread context.
+
+    Args:
+        assistant_id: The assistant producing the work.
+        user_id: The user whose interaction triggered the cost.
+        organization_id: The organization owning the billing account.
+        source: What triggered this LLM call — ``"chat"``, ``"call"``,
+            ``"tool"``, etc.  Stored in ``detail.source`` on the ledger.
+    """
     _BILLING_CONTEXT.set(BillingContext(
         assistant_id=assistant_id,
         user_id=user_id,
         organization_id=organization_id,
+        source=source,
     ))
 
 

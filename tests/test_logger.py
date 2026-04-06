@@ -843,7 +843,9 @@ class TestLogUsage:
         monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
         monkeypatch.setattr(logger, "_LOG_DIR", None)
 
-        set_billing_context(assistant_id=42, user_id="user-abc", organization_id=7)
+        set_billing_context(
+            assistant_id=42, user_id="user-abc", organization_id=7, source="chat",
+        )
 
         usage = {
             "input_tokens": 100,
@@ -872,10 +874,11 @@ class TestLogUsage:
         assert kwargs["assistant_id"] == 42
         assert kwargs["user_id"] == "user-abc"
         assert kwargs["organization_id"] == 7
-        assert kwargs["description"] == "gpt-4o-realtime-preview call"
+        assert kwargs["description"] == "Assistant work"
         assert kwargs["detail"]["model"] == "gpt-4o-realtime-preview"
         assert kwargs["detail"]["prompt_tokens"] == 100
         assert kwargs["detail"]["completion_tokens"] == 50
+        assert kwargs["detail"]["source"] == "chat"
 
     def test_works_without_transcript(self, tmp_path, monkeypatch):
         """log_usage works when no transcript is provided."""
