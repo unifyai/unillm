@@ -625,13 +625,15 @@ def log_usage(
                 detail["completion_tokens"] = usage["output_tokens"]
             if provider_cost:
                 detail["provider_cost"] = provider_cost
+            if ctx.source:
+                detail["source"] = ctx.source
             unify.deduct_credits(
                 billed_cost,
                 category="llm",
                 assistant_id=ctx.assistant_id,
                 user_id=ctx.user_id,
                 organization_id=ctx.organization_id,
-                description=f"{model} call",
+                description="Assistant work",
                 detail=detail,
             )
         except Exception:

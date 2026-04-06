@@ -56,6 +56,8 @@ def _safe_deduct_credits(
         detail["completion_tokens"] = completion_tokens
     if provider_cost is not None:
         detail["provider_cost"] = provider_cost
+    if ctx.source:
+        detail["source"] = ctx.source
 
     try:
         unify.deduct_credits(
@@ -65,7 +67,7 @@ def _safe_deduct_credits(
             assistant_id=ctx.assistant_id,
             user_id=ctx.user_id,
             organization_id=ctx.organization_id,
-            description=f"{model} call" if model else None,
+            description="Assistant work",
             detail=detail or None,
         )
     except Exception:
