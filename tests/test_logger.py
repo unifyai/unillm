@@ -829,11 +829,12 @@ class TestLogUsage:
         assert "billed_cost" in content
 
     def test_deducts_credits(self, tmp_path, monkeypatch):
-        """log_usage deducts the billed cost via unify.deduct_credits."""
+        """log_usage deducts the billed cost via unify.deduct_credits with full attribution."""
         from unittest.mock import patch, MagicMock
         from unillm import settings
         from unillm import logger
         from unillm.logger import log_usage
+        from unillm.billing_context import set_billing_context
 
         monkeypatch.delenv("UNILLM_LOG_DIR", raising=False)
         monkeypatch.setattr(settings.SETTINGS, "UNILLM_TERMINAL_LOG", True)
@@ -841,6 +842,8 @@ class TestLogUsage:
         monkeypatch.setattr(logger, "_TERMINAL_LOG_ENABLED", True)
         monkeypatch.setattr(logger, "_LOG_DIR_CHECKED", False)
         monkeypatch.setattr(logger, "_LOG_DIR", None)
+
+        set_billing_context(assistant_id=42, user_id="user-abc", organization_id=7)
 
         usage = {
             "input_tokens": 100,
@@ -859,11 +862,20 @@ class TestLogUsage:
         with patch("unillm.logger.unify.deduct_credits", mock_deduct):
             billed_cost = log_usage("gpt-4o-realtime-preview", usage)
 
-        # Should have called deduct_credits with the billed amount
         mock_deduct.assert_called_once()
         deducted_amount = mock_deduct.call_args[0][0]
         assert deducted_amount == billed_cost
         assert deducted_amount > 0
+
+        kwargs = mock_deduct.call_args[1]
+        assert kwargs["category"] == "llm"
+        assert kwargs["assistant_id"] == 42
+        assert kwargs["user_id"] == "user-abc"
+        assert kwargs["organization_id"] == 7
+        assert kwargs["description"] == "gpt-4o-realtime-preview call"
+        assert kwargs["detail"]["model"] == "gpt-4o-realtime-preview"
+        assert kwargs["detail"]["prompt_tokens"] == 100
+        assert kwargs["detail"]["completion_tokens"] == 50
 
     def test_works_without_transcript(self, tmp_path, monkeypatch):
         """log_usage works when no transcript is provided."""
