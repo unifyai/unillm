@@ -844,7 +844,10 @@ class TestLogUsage:
         monkeypatch.setattr(logger, "_LOG_DIR", None)
 
         set_billing_context(
-            assistant_id=42, user_id="user-abc", organization_id=7, source="chat",
+            assistant_id=42,
+            user_id="user-abc",
+            organization_id=7,
+            source="chat",
         )
 
         usage = {

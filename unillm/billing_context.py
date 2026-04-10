@@ -48,12 +48,14 @@ def set_billing_context(
         source: What triggered this LLM call — ``"chat"``, ``"call"``,
             ``"tool"``, etc.  Stored in ``detail.source`` on the ledger.
     """
-    _BILLING_CONTEXT.set(BillingContext(
-        assistant_id=assistant_id,
-        user_id=user_id,
-        organization_id=organization_id,
-        source=source,
-    ))
+    _BILLING_CONTEXT.set(
+        BillingContext(
+            assistant_id=assistant_id,
+            user_id=user_id,
+            organization_id=organization_id,
+            source=source,
+        )
+    )
 
 
 def get_billing_context() -> BillingContext:
