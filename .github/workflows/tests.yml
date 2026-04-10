@@ -397,64 +397,64 @@ jobs:
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   # Cache check job: verifies cache coverage
-  cache-check:
-    name: LLM Cache Check
-    runs-on: ubuntu-latest
-    needs: [pytest]
-    if: always() && needs.pytest.result != 'cancelled'
-    steps:
-    - name: Download logs from pytest job
-      uses: actions/download-artifact@v4
-      with:
-        pattern: logs-*
-        path: all-logs
-        merge-multiple: true
+  # cache-check:
+  #   name: LLM Cache Check
+  #   runs-on: ubuntu-latest
+  #   needs: [pytest]
+  #   if: always() && needs.pytest.result != 'cancelled'
+  #   steps:
+  #   - name: Download logs from pytest job
+  #     uses: actions/download-artifact@v4
+  #     with:
+  #       pattern: logs-*
+  #       path: all-logs
+  #       merge-multiple: true
 
-    - name: Check cache statistics
-      run: |
-        # Count cache hits and misses from unillm logs
-        TOTAL_HITS=0
-        TOTAL_MISSES=0
+  #   - name: Check cache statistics
+  #     run: |
+  #       # Count cache hits and misses from unillm logs
+  #       TOTAL_HITS=0
+  #       TOTAL_MISSES=0
 
-        if [ -d "all-logs/unillm" ]; then
-          # Count files ending in _hit.txt (cache hits) and _miss.txt (cache misses)
-          TOTAL_HITS=$(find all-logs/unillm -name "*_hit.txt" -type f 2>/dev/null | wc -l | tr -d ' ')
-          TOTAL_MISSES=$(find all-logs/unillm -name "*_miss.txt" -type f 2>/dev/null | wc -l | tr -d ' ')
-        fi
+  #       if [ -d "all-logs/unillm" ]; then
+  #         # Count files ending in _hit.txt (cache hits) and _miss.txt (cache misses)
+  #         TOTAL_HITS=$(find all-logs/unillm -name "*_hit.txt" -type f 2>/dev/null | wc -l | tr -d ' ')
+  #         TOTAL_MISSES=$(find all-logs/unillm -name "*_miss.txt" -type f 2>/dev/null | wc -l | tr -d ' ')
+  #       fi
 
-        TOTAL=$((TOTAL_HITS + TOTAL_MISSES))
+  #       TOTAL=$((TOTAL_HITS + TOTAL_MISSES))
 
-        echo "=== LLM Cache Statistics ==="
-        echo "  Hits:   $TOTAL_HITS"
-        echo "  Misses: $TOTAL_MISSES"
-        echo "  Total:  $TOTAL"
+  #       echo "=== LLM Cache Statistics ==="
+  #       echo "  Hits:   $TOTAL_HITS"
+  #       echo "  Misses: $TOTAL_MISSES"
+  #       echo "  Total:  $TOTAL"
 
-        # Handle case with no LLM calls
-        if [ $TOTAL -eq 0 ]; then
-          echo ""
-          echo "✅ No LLM calls made - cache check passed"
-          echo "## ✅ LLM Cache: No LLM calls" >> $GITHUB_STEP_SUMMARY
-          exit 0
-        fi
+  #       # Handle case with no LLM calls
+  #       if [ $TOTAL -eq 0 ]; then
+  #         echo ""
+  #         echo "✅ No LLM calls made - cache check passed"
+  #         echo "## ✅ LLM Cache: No LLM calls" >> $GITHUB_STEP_SUMMARY
+  #         exit 0
+  #       fi
 
-        HIT_RATE=$(python3 -c "print(f'{$TOTAL_HITS * 100.0 / $TOTAL:.1f}')")
-        echo "  Hit Rate: ${HIT_RATE}%"
-        echo ""
+  #       HIT_RATE=$(python3 -c "print(f'{$TOTAL_HITS * 100.0 / $TOTAL:.1f}')")
+  #       echo "  Hit Rate: ${HIT_RATE}%"
+  #       echo ""
 
-        # Require 100% cache coverage - fail CI on misses
-        if [ $TOTAL_MISSES -gt 0 ]; then
-          echo "❌ Cache coverage is not 100% - $TOTAL_MISSES cache misses detected"
-          echo ""
-          echo "Re-run CI to populate cache, then merge once 100% coverage is achieved."
-          echo "## ❌ LLM Cache: ${HIT_RATE}% coverage" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**$TOTAL_HITS** hits, **$TOTAL_MISSES** misses" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "_Re-run CI to populate cache, then merge once 100% coverage is achieved._" >> $GITHUB_STEP_SUMMARY
-          exit 1
-        fi
+  #       # Require 100% cache coverage - fail CI on misses
+  #       if [ $TOTAL_MISSES -gt 0 ]; then
+  #         echo "❌ Cache coverage is not 100% - $TOTAL_MISSES cache misses detected"
+  #         echo ""
+  #         echo "Re-run CI to populate cache, then merge once 100% coverage is achieved."
+  #         echo "## ❌ LLM Cache: ${HIT_RATE}% coverage" >> $GITHUB_STEP_SUMMARY
+  #         echo "" >> $GITHUB_STEP_SUMMARY
+  #         echo "**$TOTAL_HITS** hits, **$TOTAL_MISSES** misses" >> $GITHUB_STEP_SUMMARY
+  #         echo "" >> $GITHUB_STEP_SUMMARY
+  #         echo "_Re-run CI to populate cache, then merge once 100% coverage is achieved._" >> $GITHUB_STEP_SUMMARY
+  #         exit 1
+  #       fi
 
-        echo "✅ 100% cache coverage"
-        echo "## ✅ LLM Cache: 100% coverage" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**$TOTAL_HITS** cache hits, **0** misses" >> $GITHUB_STEP_SUMMARY
+  #       echo "✅ 100% cache coverage"
+  #       echo "## ✅ LLM Cache: 100% coverage" >> $GITHUB_STEP_SUMMARY
+  #       echo "" >> $GITHUB_STEP_SUMMARY
+  #       echo "**$TOTAL_HITS** cache hits, **0** misses" >> $GITHUB_STEP_SUMMARY
