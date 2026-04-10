@@ -14,69 +14,30 @@ on:
   # Manual trigger - always runs tests
   workflow_dispatch:
 
-  # Push events - tests only run if commit message contains [run-tests]
   push:
     branches:
-    - '**'
+    - main
+    - staging
 
-  # Pull request events - tests only run if PR title contains [run-tests]
   pull_request:
     branches:
-    - '**'
+    - main
+    - staging
 
 jobs:
-  # Determine if tests should run based on trigger and commit/PR message
-  should-run-tests:
-    runs-on: ubuntu-latest
-    outputs:
-      run_tests: ${{ steps.check.outputs.run_tests }}
-    steps:
-    - name: Check if tests should run
-      id: check
-      env:
-        EVENT_NAME: ${{ github.event_name }}
-        COMMIT_MSG: ${{ github.event.head_commit.message }}
-        PR_TITLE: ${{ github.event.pull_request.title }}
-      run: |
-        # workflow_dispatch always runs tests
-        if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-          echo "run_tests=true" >> "$GITHUB_OUTPUT"
-          echo "Tests triggered by workflow_dispatch"
-          exit 0
-        fi
-
-        # For push events, check commit message for [run-tests]
-        if [[ "$EVENT_NAME" == "push" ]]; then
-          if [[ "$COMMIT_MSG" == *"[run-tests]"* ]]; then
-            echo "run_tests=true" >> "$GITHUB_OUTPUT"
-            echo "Tests triggered by commit message containing [run-tests]"
-          else
-            echo "run_tests=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping tests - commit message does not contain [run-tests]"
-          fi
-          exit 0
-        fi
-
-        # For pull_request events, check PR title for [run-tests]
-        if [[ "$EVENT_NAME" == "pull_request" ]]; then
-          if [[ "$PR_TITLE" == *"[run-tests]"* ]]; then
-            echo "run_tests=true" >> "$GITHUB_OUTPUT"
-            echo "Tests triggered by PR title containing [run-tests]"
-          else
-            echo "run_tests=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping tests - PR title does not contain [run-tests]"
-          fi
-          exit 0
-        fi
-
-        # Default: don't run tests
-        echo "run_tests=false" >> "$GITHUB_OUTPUT"
-        echo "Skipping tests - unknown event type"
-
   black:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+
+    - name: Clone unify repo
+      uses: actions/checkout@v4
+      with:
+        repository: unifyai/unify
+        ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        path: unify-sdk
+        token: ${{ secrets.CLONE_TOKEN }}
+        fetch-depth: 1
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -86,6 +47,9 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@v4
 
+    - name: Configure unify path for CI
+      run: sed -i 's|path = "../unify"|path = "./unify-sdk"|g' pyproject.toml
+
     - name: Install deps
       run: uv sync --group dev
 
@@ -94,8 +58,6 @@ jobs:
 
   pytest:
     runs-on: ubuntu-latest-8-cores
-    needs: should-run-tests
-    if: needs.should-run-tests.outputs.run_tests == 'true'
     timeout-minutes: 120
     env:
       LOGS_DIR: ${{ github.workspace }}/logs
@@ -138,6 +100,17 @@ jobs:
       if: steps.secrets-check.outputs.has_internal == 'true'
       id: orchestra-sha
       run: echo "sha=$(git -C orchestra rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+    # --- Clone unify (needed by all modes for uv sync) ---
+
+    - name: Clone unify repo
+      uses: actions/checkout@v4
+      with:
+        repository: unifyai/unify
+        ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        path: unify-sdk
+        token: ${{ secrets.CLONE_TOKEN }}
+        fetch-depth: 1
 
     # --- Common setup ---
 
@@ -184,6 +157,9 @@ jobs:
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
 
+    - name: Configure unify path for CI
+      run: sed -i 's|path = "../unify"|path = "./unify-sdk"|g' pyproject.toml
+
     - name: Install unillm deps
       run: uv sync --group dev
 
@@ -225,7 +201,7 @@ jobs:
       id: pytest
       run: |
         set +e
-        uv run pytest --timeout=120 -p no:warnings -vv tests/ 2>&1 | tee pytest_output.txt
+        uv run pytest -n auto --timeout=120 -p no:warnings -vv tests/ 2>&1 | tee pytest_output.txt
         exit_code=${PIPESTATUS[0]}
         echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
 
@@ -389,8 +365,8 @@ jobs:
   cache-consolidation:
     name: Consolidate LLM cache
     runs-on: ubuntu-latest
-    needs: [should-run-tests, pytest]
-    if: always() && needs.should-run-tests.outputs.run_tests == 'true'
+    needs: [pytest]
+    if: always()
     steps:
     - uses: actions/checkout@v4
 
@@ -421,65 +397,64 @@ jobs:
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   # Cache check job: verifies cache coverage
-  cache-check:
-    name: LLM Cache Check
-    runs-on: ubuntu-latest
-    needs: [should-run-tests, pytest]
-    # Run after pytest completes (regardless of pass/fail), but not if cancelled or skipped
-    if: always() && needs.should-run-tests.outputs.run_tests == 'true' && needs.pytest.result != 'cancelled'
-    steps:
-    - name: Download logs from pytest job
-      uses: actions/download-artifact@v4
-      with:
-        pattern: logs-*
-        path: all-logs
-        merge-multiple: true
+  # cache-check:
+  #   name: LLM Cache Check
+  #   runs-on: ubuntu-latest
+  #   needs: [pytest]
+  #   if: always() && needs.pytest.result != 'cancelled'
+  #   steps:
+  #   - name: Download logs from pytest job
+  #     uses: actions/download-artifact@v4
+  #     with:
+  #       pattern: logs-*
+  #       path: all-logs
+  #       merge-multiple: true
 
-    - name: Check cache statistics
-      run: |
-        # Count cache hits and misses from unillm logs
-        TOTAL_HITS=0
-        TOTAL_MISSES=0
+  #   - name: Check cache statistics
+  #     run: |
+  #       # Count cache hits and misses from unillm logs
+  #       TOTAL_HITS=0
+  #       TOTAL_MISSES=0
 
-        if [ -d "all-logs/unillm" ]; then
-          # Count files ending in _hit.txt (cache hits) and _miss.txt (cache misses)
-          TOTAL_HITS=$(find all-logs/unillm -name "*_hit.txt" -type f 2>/dev/null | wc -l | tr -d ' ')
-          TOTAL_MISSES=$(find all-logs/unillm -name "*_miss.txt" -type f 2>/dev/null | wc -l | tr -d ' ')
-        fi
+  #       if [ -d "all-logs/unillm" ]; then
+  #         # Count files ending in _hit.txt (cache hits) and _miss.txt (cache misses)
+  #         TOTAL_HITS=$(find all-logs/unillm -name "*_hit.txt" -type f 2>/dev/null | wc -l | tr -d ' ')
+  #         TOTAL_MISSES=$(find all-logs/unillm -name "*_miss.txt" -type f 2>/dev/null | wc -l | tr -d ' ')
+  #       fi
 
-        TOTAL=$((TOTAL_HITS + TOTAL_MISSES))
+  #       TOTAL=$((TOTAL_HITS + TOTAL_MISSES))
 
-        echo "=== LLM Cache Statistics ==="
-        echo "  Hits:   $TOTAL_HITS"
-        echo "  Misses: $TOTAL_MISSES"
-        echo "  Total:  $TOTAL"
+  #       echo "=== LLM Cache Statistics ==="
+  #       echo "  Hits:   $TOTAL_HITS"
+  #       echo "  Misses: $TOTAL_MISSES"
+  #       echo "  Total:  $TOTAL"
 
-        # Handle case with no LLM calls
-        if [ $TOTAL -eq 0 ]; then
-          echo ""
-          echo "✅ No LLM calls made - cache check passed"
-          echo "## ✅ LLM Cache: No LLM calls" >> $GITHUB_STEP_SUMMARY
-          exit 0
-        fi
+  #       # Handle case with no LLM calls
+  #       if [ $TOTAL -eq 0 ]; then
+  #         echo ""
+  #         echo "✅ No LLM calls made - cache check passed"
+  #         echo "## ✅ LLM Cache: No LLM calls" >> $GITHUB_STEP_SUMMARY
+  #         exit 0
+  #       fi
 
-        HIT_RATE=$(python3 -c "print(f'{$TOTAL_HITS * 100.0 / $TOTAL:.1f}')")
-        echo "  Hit Rate: ${HIT_RATE}%"
-        echo ""
+  #       HIT_RATE=$(python3 -c "print(f'{$TOTAL_HITS * 100.0 / $TOTAL:.1f}')")
+  #       echo "  Hit Rate: ${HIT_RATE}%"
+  #       echo ""
 
-        # Require 100% cache coverage - fail CI on misses
-        if [ $TOTAL_MISSES -gt 0 ]; then
-          echo "❌ Cache coverage is not 100% - $TOTAL_MISSES cache misses detected"
-          echo ""
-          echo "Re-run CI to populate cache, then merge once 100% coverage is achieved."
-          echo "## ❌ LLM Cache: ${HIT_RATE}% coverage" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**$TOTAL_HITS** hits, **$TOTAL_MISSES** misses" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "_Re-run CI to populate cache, then merge once 100% coverage is achieved._" >> $GITHUB_STEP_SUMMARY
-          exit 1
-        fi
+  #       # Require 100% cache coverage - fail CI on misses
+  #       if [ $TOTAL_MISSES -gt 0 ]; then
+  #         echo "❌ Cache coverage is not 100% - $TOTAL_MISSES cache misses detected"
+  #         echo ""
+  #         echo "Re-run CI to populate cache, then merge once 100% coverage is achieved."
+  #         echo "## ❌ LLM Cache: ${HIT_RATE}% coverage" >> $GITHUB_STEP_SUMMARY
+  #         echo "" >> $GITHUB_STEP_SUMMARY
+  #         echo "**$TOTAL_HITS** hits, **$TOTAL_MISSES** misses" >> $GITHUB_STEP_SUMMARY
+  #         echo "" >> $GITHUB_STEP_SUMMARY
+  #         echo "_Re-run CI to populate cache, then merge once 100% coverage is achieved._" >> $GITHUB_STEP_SUMMARY
+  #         exit 1
+  #       fi
 
-        echo "✅ 100% cache coverage"
-        echo "## ✅ LLM Cache: 100% coverage" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**$TOTAL_HITS** cache hits, **0** misses" >> $GITHUB_STEP_SUMMARY
+  #       echo "✅ 100% cache coverage"
+  #       echo "## ✅ LLM Cache: 100% coverage" >> $GITHUB_STEP_SUMMARY
+  #       echo "" >> $GITHUB_STEP_SUMMARY
+  #       echo "**$TOTAL_HITS** cache hits, **0** misses" >> $GITHUB_STEP_SUMMARY

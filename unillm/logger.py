@@ -612,10 +612,30 @@ def log_usage(
         except Exception:
             pass
 
-    # Deduct credits
+    # Deduct credits with full attribution
     if billed_cost > 0:
         try:
-            unify.deduct_credits(billed_cost)
+            from .billing_context import get_billing_context
+
+            ctx = get_billing_context()
+            detail: dict = {"model": model}
+            if usage.get("input_tokens") is not None:
+                detail["prompt_tokens"] = usage["input_tokens"]
+            if usage.get("output_tokens") is not None:
+                detail["completion_tokens"] = usage["output_tokens"]
+            if provider_cost:
+                detail["provider_cost"] = provider_cost
+            if ctx.source:
+                detail["source"] = ctx.source
+            unify.deduct_credits(
+                billed_cost,
+                category="llm",
+                assistant_id=ctx.assistant_id,
+                user_id=ctx.user_id,
+                organization_id=ctx.organization_id,
+                description="Assistant work",
+                detail=detail,
+            )
         except Exception:
             _LOGGER.warning(f"Failed to deduct credits: ${billed_cost:.6f}")
 
