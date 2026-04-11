@@ -39,13 +39,13 @@ Related repositories:
 ## Installation
 
 ```bash
-pip install git+https://github.com/unifyai/unillm.git
+pip install unifyai-unillm
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv add unillm --git https://github.com/unifyai/unillm.git
+uv add unifyai-unillm
 ```
 
 ## Configuration
@@ -275,21 +275,20 @@ unillm/
 
 ## Local Development
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management. UniLLM depends on [unify](https://github.com/unifyai/unify) via a local path (`../unify`), so both repos must be cloned as siblings:
-
-```
-parent/
-├── unillm/   # this repo
-└── unify/    # https://github.com/unifyai/unify
-```
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management. By default, local development installs the published [`unifyai`](https://pypi.org/project/unifyai/) package for the persistence/logging dependency.
 
 ### Setup
 
 ```bash
 git clone https://github.com/unifyai/unillm.git
-git clone https://github.com/unifyai/unify.git
 cd unillm
 uv sync
+```
+
+If you're iterating on a sibling checkout of `unify` as well, override the installed dependency with an editable install after `uv sync`:
+
+```bash
+uv pip install -e ../unify
 ```
 
 ### Running Tests

@@ -1,29 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "unillm"
+name = "unifyai-unillm"
 version = "0.1.0"
 description = "Lightweight LLM access layer with provider normalization, caching, and observability."
 readme = "README.md"
 requires-python = ">=3.12"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "Unify", email = "hello@unify.ai"},
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "litellm==1.82.5",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+    "unifyai>=0.9.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/unifyai/unillm"
 Repository = "https://github.com/unifyai/unillm"
 Issues = "https://github.com/unifyai/unillm/issues"
-dependencies = [
-    "litellm==1.82.5",
-    "pydantic>=2.12.5",
-    "pydantic-settings>=2.12.0",
-    "unify",
-]
 
 [dependency-groups]
 dev = [
@@ -41,6 +44,3 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["unillm", "unillm.*"]
-
-[tool.uv.sources]
-unify = { path = "../unify", editable = true }
