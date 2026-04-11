@@ -1,9 +1,23 @@
 [project]
 name = "unillm"
 version = "0.1.0"
-description = "Lightweight LLM client wrapper with provider normalization, caching, and observability."
+description = "Lightweight LLM access layer with provider normalization, caching, and observability."
 readme = "README.md"
 requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "Unify", email = "hello@unify.ai"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/unifyai/unillm"
+Repository = "https://github.com/unifyai/unillm"
+Issues = "https://github.com/unifyai/unillm/issues"
 dependencies = [
     "litellm==1.82.5",
     "pydantic>=2.12.5",
@@ -23,8 +37,6 @@ dev = [
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp>=1.20.0",
-    "pytest-cov>=7.1.0",
-    "pytest-xdist>=3.8.0",
 ]
 
 [tool.setuptools.packages.find]
