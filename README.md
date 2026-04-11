@@ -1,10 +1,10 @@
 # UniLLM
 
-Lightweight LLM client wrapper with provider normalization, caching, and observability. Routes requests through [LiteLLM](https://github.com/BerriAI/litellm) with a unified `endpoint` format (`model@provider`) and automatic provider-specific preprocessing.
+Lightweight LLM access layer with provider normalization, caching, and observability. It uses a unified `endpoint` format (`model@provider`) so application code can switch providers without rewriting call sites, while still allowing developers to choose the model provider or compatible endpoint they want to use.
 
-## System Architecture
+## What layer is this?
 
-UniLLM is the LLM abstraction layer in a multi-repository system:
+UniLLM is the model-access layer in the wider Unity stack:
 
 ```
          User (Console/Phone/SMS/Email)
@@ -27,7 +27,9 @@ UniLLM is the LLM abstraction layer in a multi-repository system:
               └───────────┘       └────────────┘
 ```
 
-**This repo (UniLLM)** handles all LLM inference for Unity. It normalizes requests across providers (OpenAI, Anthropic, Vertex AI, etc.), provides response caching for test determinism, and integrates with Unify for query logging.
+**This repo (UniLLM)** handles LLM inference for Unity. It normalizes requests across providers (OpenAI, Anthropic, Vertex AI, etc.), provides response caching for test determinism, and can integrate with Unify for logging and billing context.
+
+If you're here from the Unity quickstart, this is the layer that talks to model providers. OpenAI and Anthropic are the simplest documented paths, but the point of UniLLM is that the provider choice is yours, including other supported providers and compatible local endpoints.
 
 Related repositories:
 - [Unity](https://github.com/unifyai/unity) — AI assistant brain (primary consumer)
@@ -50,13 +52,15 @@ uv add unillm --git https://github.com/unifyai/unillm.git
 
 ### API Keys
 
-Set API keys for the providers you want to use:
+Set credentials for whichever providers you want to use:
 
 ```bash
 export OPENAI_API_KEY=<your-key>
 export ANTHROPIC_API_KEY=<your-key>
 # ... other provider keys
 ```
+
+You do not need a Unify account for basic inference. `UNIFY_KEY` only matters for optional logging, credit, and observability features that integrate with the wider Unify stack.
 
 ### Google Cloud / Vertex AI
 
@@ -329,4 +333,4 @@ pre-commit install
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE) for details.
