@@ -17,7 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "litellm==1.82.5",
+    "litellm==1.83.4",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
     "unify",
@@ -34,7 +34,7 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "pytest-timeout>=2.3.1",
     "autoflake>=2.3.1",
-    "black==26.1.0",
+    "black==26.3.1",
     "pytest-dotenv>=0.5.2",
     "pre-commit>=4.0.1",
     "opentelemetry-api>=1.20.0",
