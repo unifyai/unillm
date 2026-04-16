@@ -25,6 +25,9 @@ models = {
     "gpt-5.1": "gpt-5.1",
     "gpt-5.1-chat-latest": "gpt-5.1-chat-latest",
     "gpt-5.2": "gpt-5.2",
+    "gpt-5.4": "gpt-5.4",
+    "gpt-5.4-mini": "gpt-5.4-mini",
+    "gpt-5.4-nano": "gpt-5.4-nano",
 }
 
 register_model_alias_map("openai", models)
