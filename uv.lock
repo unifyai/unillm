@@ -1913,14 +1913,23 @@ wheels = [
 ]
 
 [[package]]
-name = "unify-llm"
+name = "unify"
+version = "0.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "untokenize" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e9/92/f7ab4a788a3efbf83cddeb0f78595fcddd690ef0f55371a525d0f7c237ad/unify-0.5.tar.gz", hash = "sha256:8ddce812b2457212b7598fe574c9e6eb3ad69710f445391338270c7f8a71723c", size = 4363, upload-time = "2019-08-07T13:46:09.142Z" }
+
+[[package]]
+name = "unillm"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "litellm" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "unify-sdk" },
+    { name = "unify" },
 ]
 
 [package.dev-dependencies]
@@ -1942,7 +1951,7 @@ requires-dist = [
     { name = "litellm", specifier = "==1.83.4" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
-    { name = "unify-sdk", editable = "../unify" },
+    { name = "unify" },
 ]
 
 [package.metadata.requires-dev]
@@ -1960,41 +1969,10 @@ dev = [
 ]
 
 [[package]]
-name = "unify-sdk"
-version = "0.1.0"
-source = { editable = "../unify" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "requests" },
-    { name = "tqdm" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.12.14" },
-    { name = "requests", specifier = ">=2.32.4" },
-    { name = "tqdm", specifier = ">=4.67.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "autoflake", specifier = ">=1.6.1" },
-    { name = "black", specifier = "==26.3.1" },
-    { name = "flake8", specifier = ">=4.0.1" },
-    { name = "isort", specifier = ">=5.11.4" },
-    { name = "mypy", specifier = ">=1.1.1" },
-    { name = "opentelemetry-api", specifier = ">=1.20.0" },
-    { name = "opentelemetry-exporter-otlp", specifier = ">=1.20.0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
-    { name = "pre-commit", specifier = ">=3.0.1" },
-    { name = "pytest", specifier = ">=8.3.3" },
-    { name = "pytest-asyncio", specifier = ">=0.24.0" },
-    { name = "pytest-dotenv", specifier = ">=0.5.2" },
-    { name = "pytest-timeout", specifier = ">=2.3.1" },
-    { name = "pytest-xdist", specifier = ">=3.8.0" },
-    { name = "python-dotenv", specifier = ">=1.2.1" },
-    { name = "types-requests" },
-]
+name = "untokenize"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f7/46/e7cea8159199096e1df52da20a57a6665da80c37fb8aeb848a3e47442c32/untokenize-0.1.1.tar.gz", hash = "sha256:3865dbbbb8efb4bb5eaa72f1be7f3e0be00ea8b7f125c69cbd1f5fda926f37a2", size = 3099, upload-time = "2014-02-08T16:30:40.631Z" }
 
 [[package]]
 name = "urllib3"
