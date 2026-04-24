@@ -48,6 +48,18 @@ Or with [uv](https://docs.astral.sh/uv/):
 uv add unifyai-unillm
 ```
 
+The import name stays `unillm`:
+
+```python
+import unillm
+```
+
+If you're reading the repo name, package name, and import side-by-side:
+
+- **Repo:** `unillm`
+- **PyPI package:** `unifyai-unillm`
+- **Python import:** `unillm`
+
 ## Configuration
 
 ### API Keys
