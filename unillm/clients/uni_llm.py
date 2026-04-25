@@ -3,6 +3,7 @@ import abc
 import asyncio
 import inspect
 import logging
+import re
 
 from typing import (
     Any,
@@ -32,6 +33,10 @@ from ..limit_hooks import (
 )
 
 _LOGGER = logging.getLogger("unillm")
+
+_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX = "openai/responses/"
+_OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS = ("parallel_tool_calls", "tool_choice")
+_OPENAI_GPT_MINOR_VERSION_RE = re.compile(r"^gpt-5\.(?P<minor>\d+)(?:[-.].*)?$")
 
 
 def _safe_deduct_credits(
@@ -72,6 +77,94 @@ def _safe_deduct_credits(
         )
     except Exception:
         _LOGGER.warning("Failed to deduct credits: $%.6f", amount, exc_info=True)
+
+
+def _canonical_model_for_accounting(model: str | None) -> str:
+    """Return the provider model name used for pricing, limits, and ledger metadata."""
+    if not model:
+        return ""
+    if model.startswith(_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX):
+        return model.removeprefix(_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX)
+    return model
+
+
+def _is_openai_gpt_responses_tool_model(model: str) -> bool:
+    """Return whether an OpenAI model needs Responses for tools with reasoning."""
+    match = _OPENAI_GPT_MINOR_VERSION_RE.match(model)
+    return bool(match and int(match.group("minor")) >= 4)
+
+
+def _copy_tool_for_responses_bridge(tool: Any) -> Any:
+    """Copy a chat tool while placing strictness where LiteLLM's bridge reads it."""
+    if not isinstance(tool, dict):
+        return tool
+
+    tool_copy = dict(tool)
+    function = tool_copy.get("function")
+    if tool_copy.get("type") == "function" and isinstance(function, dict):
+        function_copy = dict(function)
+        if "strict" in tool_copy and "strict" not in function_copy:
+            function_copy["strict"] = tool_copy["strict"]
+        tool_copy["function"] = function_copy
+        tool_copy.pop("strict", None)
+    return tool_copy
+
+
+def _copy_tools_for_responses_bridge(tools: Iterable[Any] | None) -> list[Any] | None:
+    """Return response-bridge-compatible tool definitions without mutating callers."""
+    if tools is None:
+        return None
+    return [_copy_tool_for_responses_bridge(tool) for tool in tools]
+
+
+def _allow_responses_bridge_params(kw: dict) -> None:
+    """Preserve chat tool controls that LiteLLM otherwise drops before bridging."""
+    current = kw.get("allowed_openai_params")
+    if current is None:
+        allowed: set[str] = set()
+    elif isinstance(current, str):
+        allowed = {current}
+    else:
+        allowed = {str(param) for param in current}
+
+    allowed.update(_OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS)
+    kw["allowed_openai_params"] = sorted(allowed)
+
+
+def _prepare_provider_request_kw(
+    *,
+    kw: dict,
+    provider: str,
+    stream: bool,
+) -> str:
+    """Apply provider transport adaptations and return the accounting model."""
+    model = str(kw.get("model") or "")
+    tools = kw.get("tools")
+
+    if (
+        provider == "openai"
+        and not stream
+        and tools
+        and kw.get("reasoning_effort") is not None
+        and _is_openai_gpt_responses_tool_model(model)
+    ):
+        kw["model"] = f"{_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX}{model}"
+        kw["tools"] = _copy_tools_for_responses_bridge(tools)
+        _allow_responses_bridge_params(kw)
+
+    return _canonical_model_for_accounting(str(kw.get("model") or model))
+
+
+def _request_kw_for_event(kw: dict, accounting_model: str) -> dict:
+    """Return event metadata with the provider model as the primary model."""
+    transport_model = kw.get("model")
+    if transport_model == accounting_model:
+        return kw
+
+    event_kw = dict(kw)
+    event_kw["model"] = accounting_model
+    event_kw["transport_model"] = transport_model
+    return event_kw
 
 
 from openai.types.chat import (
@@ -843,11 +936,16 @@ class Unify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
+        accounting_model = _prepare_provider_request_kw(
+            kw=kw,
+            provider=self._provider,
+            stream=True,
+        )
 
         # Check spending limits before starting stream
         if is_limit_check_enabled():
             limit_request = LimitCheckRequest(
-                model=kw.get("model", endpoint),
+                model=accounting_model,
                 endpoint=endpoint,
             )
             limit_result = check_limits_sync(limit_request)
@@ -890,7 +988,7 @@ class Unify(_UniClient):
                     from ..costs import compute_cost, get_cost_margin
 
                     provider_cost = compute_cost(
-                        kw["model"],
+                        accounting_model,
                         prompt_tokens,
                         completion_tokens,
                     )
@@ -899,7 +997,7 @@ class Unify(_UniClient):
                         _safe_deduct_credits(
                             billed_cost,
                             api_key=self._api_key,
-                            model=kw.get("model"),
+                            model=accounting_model,
                             prompt_tokens=prompt_tokens,
                             completion_tokens=completion_tokens,
                             provider_cost=provider_cost,
@@ -908,7 +1006,7 @@ class Unify(_UniClient):
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
                 LLMEvent(
-                    request=kw,
+                    request=_request_kw_for_event(kw, accounting_model),
                     response=None,  # No single response for streams
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
@@ -918,7 +1016,7 @@ class Unify(_UniClient):
 
             _emit_cost_event(
                 CostEvent.from_completion(
-                    model=kw.get("model", ""),
+                    model=accounting_model,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
                     completion=usage_info,
@@ -976,20 +1074,21 @@ class Unify(_UniClient):
         if completion is not None:
             from ..costs import get_cost_margin
 
-            cost = compute_cost_from_response(retry_kw["model"], completion)
+            accounting_model = _canonical_model_for_accounting(retry_kw.get("model"))
+            cost = compute_cost_from_response(accounting_model, completion)
             if cost is not None and cost > 0:
                 margin = get_cost_margin()
                 billed = cost * margin
                 _safe_deduct_credits(
                     billed,
                     api_key=self._api_key,
-                    model=retry_kw.get("model"),
+                    model=accounting_model,
                     provider_cost=cost,
                 )
 
                 _emit_cost_event(
                     CostEvent.from_completion(
-                        model=retry_kw.get("model", ""),
+                        model=accounting_model,
                         provider_cost=cost,
                         billed_cost=billed,
                         completion=completion,
@@ -1079,6 +1178,11 @@ class Unify(_UniClient):
 
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
+        accounting_model = _prepare_provider_request_kw(
+            kw=kw,
+            provider=self._provider,
+            stream=False,
+        )
 
         # Write request to log file (before LLM call) so we don't lose it if call hangs
         pending_path = write_request_pending(
@@ -1128,7 +1232,7 @@ class Unify(_UniClient):
                     # Check spending limits before making LLM call (cache miss)
                     if is_limit_check_enabled():
                         limit_request = LimitCheckRequest(
-                            model=kw.get("model", endpoint),
+                            model=accounting_model,
                             endpoint=endpoint,
                         )
                         limit_result = check_limits_sync(limit_request)
@@ -1196,7 +1300,10 @@ class Unify(_UniClient):
             if not in_cache and chat_completion is not None:
                 from ..costs import get_cost_margin
 
-                provider_cost = compute_cost_from_response(kw["model"], chat_completion)
+                provider_cost = compute_cost_from_response(
+                    accounting_model,
+                    chat_completion,
+                )
                 if provider_cost is not None and provider_cost > 0:
                     billed_cost = provider_cost * get_cost_margin()
 
@@ -1204,7 +1311,7 @@ class Unify(_UniClient):
             # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
             _emit_llm_event(
                 LLMEvent(
-                    request=kw,
+                    request=_request_kw_for_event(kw, accounting_model),
                     response=resp_body,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
@@ -1214,7 +1321,7 @@ class Unify(_UniClient):
 
             _emit_cost_event(
                 CostEvent.from_completion(
-                    model=kw.get("model", ""),
+                    model=accounting_model,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
                     completion=chat_completion,
@@ -1255,7 +1362,7 @@ class Unify(_UniClient):
             _safe_deduct_credits(
                 billed_cost,
                 api_key=self._api_key,
-                model=kw.get("model"),
+                model=accounting_model,
                 provider_cost=provider_cost,
             )
 
@@ -1396,6 +1503,11 @@ class AsyncUnify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
+        accounting_model = _prepare_provider_request_kw(
+            kw=kw,
+            provider=self._provider,
+            stream=True,
+        )
 
         # Write request to log file (before LLM call) so we don't lose it if call hangs
         pending_path = write_request_pending(
@@ -1412,7 +1524,7 @@ class AsyncUnify(_UniClient):
         limit_task: asyncio.Task | None = None
         if is_limit_check_enabled():
             limit_request = LimitCheckRequest(
-                model=kw.get("model", endpoint),
+                model=accounting_model,
                 endpoint=endpoint,
             )
             limit_task = asyncio.create_task(
@@ -1504,7 +1616,7 @@ class AsyncUnify(_UniClient):
                     from ..costs import compute_cost, get_cost_margin
 
                     provider_cost = compute_cost(
-                        kw["model"],
+                        accounting_model,
                         prompt_tokens,
                         completion_tokens,
                     )
@@ -1515,7 +1627,7 @@ class AsyncUnify(_UniClient):
                                 _safe_deduct_credits,
                                 billed_cost,
                                 api_key=self._api_key,
-                                model=kw.get("model"),
+                                model=accounting_model,
                                 prompt_tokens=prompt_tokens,
                                 completion_tokens=completion_tokens,
                                 provider_cost=provider_cost,
@@ -1526,7 +1638,7 @@ class AsyncUnify(_UniClient):
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
                 LLMEvent(
-                    request=kw,
+                    request=_request_kw_for_event(kw, accounting_model),
                     response=None,  # No single response for streams
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
@@ -1536,7 +1648,7 @@ class AsyncUnify(_UniClient):
 
             _emit_cost_event(
                 CostEvent.from_completion(
-                    model=kw.get("model", ""),
+                    model=accounting_model,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
                     completion=usage_info,
@@ -1598,7 +1710,8 @@ class AsyncUnify(_UniClient):
         if completion is not None:
             from ..costs import get_cost_margin
 
-            cost = compute_cost_from_response(retry_kw["model"], completion)
+            accounting_model = _canonical_model_for_accounting(retry_kw.get("model"))
+            cost = compute_cost_from_response(accounting_model, completion)
             if cost is not None and cost > 0:
                 margin = get_cost_margin()
                 billed = cost * margin
@@ -1607,7 +1720,7 @@ class AsyncUnify(_UniClient):
                         _safe_deduct_credits,
                         billed,
                         api_key=self._api_key,
-                        model=retry_kw.get("model"),
+                        model=accounting_model,
                         provider_cost=cost,
                     ),
                     name=f"unillm_deduct_credits_{label_suffix}",
@@ -1615,7 +1728,7 @@ class AsyncUnify(_UniClient):
 
                 _emit_cost_event(
                     CostEvent.from_completion(
-                        model=retry_kw.get("model", ""),
+                        model=accounting_model,
                         provider_cost=cost,
                         billed_cost=billed,
                         completion=completion,
@@ -1705,6 +1818,11 @@ class AsyncUnify(_UniClient):
 
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
+        accounting_model = _prepare_provider_request_kw(
+            kw=kw,
+            provider=self._provider,
+            stream=False,
+        )
 
         # Write request to log file (before LLM call) so we don't lose it if call hangs
         pending_path = write_request_pending(
@@ -1759,7 +1877,7 @@ class AsyncUnify(_UniClient):
                     # cancellation. Limit check is fast (~50ms), LLM call is slow.
                     if is_limit_check_enabled():
                         limit_request = LimitCheckRequest(
-                            model=kw.get("model", endpoint),
+                            model=accounting_model,
                             endpoint=endpoint,
                         )
                         limit_task = asyncio.create_task(
@@ -1864,7 +1982,10 @@ class AsyncUnify(_UniClient):
             if not in_cache and chat_completion is not None:
                 from ..costs import get_cost_margin
 
-                provider_cost = compute_cost_from_response(kw["model"], chat_completion)
+                provider_cost = compute_cost_from_response(
+                    accounting_model,
+                    chat_completion,
+                )
                 if provider_cost is not None and provider_cost > 0:
                     billed_cost = provider_cost * get_cost_margin()
 
@@ -1872,7 +1993,7 @@ class AsyncUnify(_UniClient):
             # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
             _emit_llm_event(
                 LLMEvent(
-                    request=kw,
+                    request=_request_kw_for_event(kw, accounting_model),
                     response=resp_body,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
@@ -1882,7 +2003,7 @@ class AsyncUnify(_UniClient):
 
             _emit_cost_event(
                 CostEvent.from_completion(
-                    model=kw.get("model", ""),
+                    model=accounting_model,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
                     completion=chat_completion,
@@ -1897,7 +2018,7 @@ class AsyncUnify(_UniClient):
                     _safe_deduct_credits,
                     billed_cost,
                     api_key=self._api_key,
-                    model=kw.get("model"),
+                    model=accounting_model,
                     provider_cost=provider_cost,
                 ),
                 name="unillm_deduct_credits",
