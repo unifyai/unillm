@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "unillm"
-version = "0.1.0"
+version = "0.0.0"
 description = "Lightweight LLM access layer with provider normalization, caching, and observability."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -41,6 +41,9 @@ dev = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp>=1.20.0",
 ]
+
+[tool.uv.sources]
+unify = { git = "https://github.com/unifyai/unify.git", branch = "staging" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["unillm"]
