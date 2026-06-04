@@ -39,6 +39,15 @@ def get_model_alias(endpoint: str) -> str:
     return alias
 
 
+def list_models(provider: str) -> list[str]:
+    suffix = f"@{provider}"
+    return sorted(
+        endpoint[: -len(suffix)]
+        for endpoint in _MODEL_ALIAS_MAP
+        if endpoint.endswith(suffix)
+    )
+
+
 def get_model_info(endpoint: str) -> Dict[str, Any]:
     """Return model info for *endpoint*, with local overrides taking priority.
 
