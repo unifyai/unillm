@@ -63,6 +63,8 @@ def _safe_deduct_credits(
         detail["provider_cost"] = provider_cost
     if ctx.source:
         detail["source"] = ctx.source
+    if ctx.label:
+        detail["label"] = ctx.label
 
     try:
         unify.deduct_credits(

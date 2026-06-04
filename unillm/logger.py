@@ -627,6 +627,8 @@ def log_usage(
                 detail["provider_cost"] = provider_cost
             if ctx.source:
                 detail["source"] = ctx.source
+            if ctx.label:
+                detail["label"] = ctx.label
             unify.deduct_credits(
                 billed_cost,
                 category="llm",
