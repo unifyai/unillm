@@ -2,6 +2,8 @@
 
 import json
 
+from pydantic import BaseModel
+
 from unillm.clients.provider_preprocessing import (
     CACHE_CONTROL_EPHEMERAL,
     THINKING_COMPLIANCE_CONTEXT_HEADER,
@@ -406,6 +408,88 @@ class TestInternalAnnotationStripping:
                         f"Internal annotation leaked on content block: "
                         f"{[k for k in block if k.startswith('_')]}"
                     )
+
+
+class TestAdaptiveThinking:
+    def test_claude_opus_48_uses_adaptive_thinking_payload(self):
+        kw = {
+            "model": "anthropic/claude-opus-4-8",
+            "reasoning_effort": "high",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        apply_provider_preprocessing(kw, "anthropic")
+
+        assert "reasoning_effort" not in kw
+        assert kw["thinking"] == {"type": "adaptive"}
+        assert kw["output_config"] == {"effort": "high"}
+
+    def test_claude_opus_48_disables_thinking_for_response_format(self):
+        kw = {
+            "model": "anthropic/claude-opus-4-8",
+            "reasoning_effort": "high",
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        apply_provider_preprocessing(kw, "anthropic")
+
+        assert "reasoning_effort" not in kw
+        assert "thinking" not in kw
+        assert "output_config" not in kw
+
+    def test_other_anthropic_models_keep_legacy_reasoning_effort(self):
+        kw = {
+            "model": "anthropic/claude-opus-4-6",
+            "reasoning_effort": "high",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        apply_provider_preprocessing(kw, "anthropic")
+
+        assert kw["reasoning_effort"] == "high"
+        assert "extra_body" not in kw
+
+
+class TestDeepSeekThinkingCompliance:
+    class _Answer(BaseModel):
+        answer: str
+
+    def test_assistant_messages_get_empty_reasoning_content(self):
+        kw = {
+            "model": "deepseek/deepseek-v4-pro",
+            "reasoning_effort": "high",
+            "messages": [
+                {"role": "user", "content": "call tool"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {"name": "tool", "arguments": "{}"},
+                        },
+                    ],
+                },
+            ],
+        }
+
+        apply_provider_preprocessing(kw, "deepseek")
+
+        assert kw["messages"][1]["reasoning_content"] == ""
+
+    def test_response_format_becomes_prompt_instruction(self):
+        kw = {
+            "model": "deepseek/deepseek-v4-pro",
+            "response_format": self._Answer,
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        apply_provider_preprocessing(kw, "deepseek")
+
+        assert "response_format" not in kw
+        assert kw["messages"][0]["role"] == "system"
+        assert "valid JSON only" in kw["messages"][0]["content"]
 
 
 # A short stand-in for a real base64 screenshot (~200 chars).

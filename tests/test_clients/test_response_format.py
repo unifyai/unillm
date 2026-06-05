@@ -79,7 +79,7 @@ def test_response_format_enforced_despite_contradictory_prompt():
     """
     import unillm
 
-    client = unillm.Unify("claude-4.5-opus@anthropic", cache=False)
+    client = unillm.Unify("claude-4.8-opus@anthropic", cache=False)
     response = client.generate(
         system_message=(
             "You are an assistant specialised in querying communication transcripts.\n"

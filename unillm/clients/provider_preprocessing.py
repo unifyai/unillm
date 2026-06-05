@@ -559,6 +559,60 @@ def _apply_context_1m_beta(kw: Dict[str, Any]) -> None:
         kw["extra_headers"] = headers
 
 
+def _uses_anthropic_adaptive_thinking(kw: Dict[str, Any]) -> bool:
+    from ..endpoints.anthropic import ADAPTIVE_THINKING_MODELS
+
+    return kw.get("model") in ADAPTIVE_THINKING_MODELS
+
+
+def _apply_anthropic_adaptive_thinking(kw: Dict[str, Any]) -> None:
+    effort = kw.pop("reasoning_effort", None)
+    if effort is None or not _uses_anthropic_adaptive_thinking(kw):
+        if effort is not None:
+            kw["reasoning_effort"] = effort
+        return
+
+    if kw.get("response_format") is not None:
+        return
+
+    kw["thinking"] = {"type": "adaptive"}
+    output_config = dict(kw.get("output_config") or {})
+    output_config["effort"] = effort
+    kw["output_config"] = output_config
+
+
+def _apply_deepseek_thinking_compliance(kw: Dict[str, Any]) -> None:
+    if kw.get("reasoning_effort") is None:
+        return
+
+    for msg in kw.get("messages", []):
+        if msg.get("role") == "assistant" and "reasoning_content" not in msg:
+            msg["reasoning_content"] = ""
+
+
+def _apply_deepseek_response_format_instructions(kw: Dict[str, Any]) -> None:
+    response_format = kw.pop("response_format", None)
+    if response_format is None:
+        return
+
+    if isinstance(response_format, type) and hasattr(
+        response_format,
+        "model_json_schema",
+    ):
+        schema = response_format.model_json_schema()
+    elif isinstance(response_format, dict):
+        schema = response_format
+    else:
+        schema = {"type": "object"}
+
+    instruction = (
+        "Respond with valid JSON only, with no markdown or commentary. "
+        "The JSON must conform to this schema:\n"
+        f"{json.dumps(schema, indent=2)}"
+    )
+    kw["messages"].insert(0, {"role": "system", "content": instruction})
+
+
 def apply_provider_preprocessing(
     kw: Dict[str, Any],
     provider: Optional[str],
@@ -571,6 +625,12 @@ def apply_provider_preprocessing(
 
     messages = copy.deepcopy(messages)
     kw["messages"] = messages
+
+    if provider == "deepseek":
+        _apply_deepseek_response_format_instructions(kw)
+        _apply_deepseek_thinking_compliance(kw)
+        _strip_internal_annotations(kw)
+        return kw
 
     if provider != "anthropic":
         _strip_internal_annotations(kw)
@@ -637,6 +697,7 @@ def apply_provider_preprocessing(
         kw["messages"] = messages
 
     _apply_context_1m_beta(kw)
+    _apply_anthropic_adaptive_thinking(kw)
 
     if prompt_caching:
         _apply_anthropic_caching(kw, prompt_caching)

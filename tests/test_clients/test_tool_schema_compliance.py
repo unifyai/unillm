@@ -76,7 +76,7 @@ def test_anthropic_no_tool_name_constraint():
     The intermediate retry messages should NOT appear in the client's history.
     """
     client = unillm.Unify(
-        "claude-4.5-opus@anthropic",
+        "claude-4.8-opus@anthropic",
         cache=True,
         stateful=True,  # Enable stateful to test history cleanup
     )
@@ -142,7 +142,7 @@ def test_anthropic_no_tool_name_constraint_with_thinking():
     The intermediate retry messages should NOT appear in the client's history.
     """
     client = unillm.Unify(
-        "claude-4.5-opus@anthropic",
+        "claude-4.8-opus@anthropic",
         cache=True,
         stateful=True,  # Enable stateful to test history cleanup
     )
