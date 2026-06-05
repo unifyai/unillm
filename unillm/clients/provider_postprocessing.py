@@ -310,7 +310,7 @@ def _get_response_format_model(
     kw: dict,
 ) -> Optional[Type[BaseModel]]:
     """Extract the Pydantic model from the request kwargs, if present."""
-    rf = kw.get("response_format")
+    rf = kw.get("response_format") or kw.get("_unillm_response_format")
     if rf is None:
         return None
     # response_format may be the Pydantic class directly

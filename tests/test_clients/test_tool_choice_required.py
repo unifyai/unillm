@@ -47,7 +47,7 @@ def test_tool_choice_required_compliance():
     retry-on-non-compliance mechanism works correctly AND that it's
     transparent to the caller (no intermediate messages leak through).
     """
-    client = new_llm_client("claude-4.5-opus@anthropic")
+    client = new_llm_client("claude-4.8-opus@anthropic")
     client.set_system_message(
         "You are a helpful assistant. Only use tools when absolutely necessary. "
         "For simple questions, prefer answering directly without tools.",
@@ -89,7 +89,7 @@ def test_tool_choice_required_stateful_history():
     - A text-only assistant response (the non-compliant first attempt)
     - The retry nudge user message
     """
-    client = new_llm_client("claude-4.5-opus@anthropic", stateful=True)
+    client = new_llm_client("claude-4.8-opus@anthropic", stateful=True)
     client.set_system_message(
         "You are a helpful assistant. Only use tools when absolutely necessary. "
         "For simple questions, prefer answering directly without tools.",
