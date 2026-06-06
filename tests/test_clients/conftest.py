@@ -5,7 +5,7 @@ _TEST_MODELS = [
     "claude-4.8-opus@anthropic",
     "deepseek-v4-max@deepseek",
     "minimax-v3@minimax",
-    "mimo-v2.5-pro@xiaomi-mimo",
+    "mimo-v2.5@xiaomi-mimo",
 ]
 
 
