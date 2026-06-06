@@ -3,6 +3,7 @@ import abc
 import asyncio
 import inspect
 import logging
+import os
 import re
 
 from typing import (
@@ -153,6 +154,14 @@ def _allow_responses_bridge_params(kw: dict) -> None:
     kw["allowed_openai_params"] = sorted(allowed)
 
 
+def _xiaomi_mimo_token_plan_api_base() -> str | None:
+    api_key = os.environ.get("XIAOMI_MIMO_API_KEY", "")
+    for region in ("sgp", "cn", "ams"):
+        if api_key.startswith(f"tp-{region}"):
+            return f"https://token-plan-{region}.xiaomimimo.com/v1"
+    return None
+
+
 def _prepare_provider_request_kw(
     *,
     kw: dict,
@@ -176,6 +185,11 @@ def _prepare_provider_request_kw(
 
     if provider == "minimax" and kw.get("api_base") is None:
         kw["api_base"] = "https://api.minimax.io/v1"
+
+    if provider == "xiaomi-mimo" and kw.get("api_base") is None:
+        api_base = _xiaomi_mimo_token_plan_api_base()
+        if api_base is not None:
+            kw["api_base"] = api_base
 
     return _canonical_model_for_accounting(str(kw.get("model") or model))
 
@@ -1490,7 +1504,7 @@ class AsyncUnify(_UniClient):
 
     # Providers whose litellm handler expects an OpenAI SDK client (AsyncOpenAI)
     # as the ``client`` kwarg.  We must NOT pass an AsyncHTTPHandler for these.
-    _OPENAI_SDK_PROVIDERS = frozenset({"openai", "azure", "azure_ai"})
+    _OPENAI_SDK_PROVIDERS = frozenset({"openai", "azure", "azure_ai", "xiaomi-mimo"})
 
     _async_http_client: Optional[AsyncHTTPHandler] = None
     _async_http_client_session = None  # tracks which aiohttp session the handler wraps
