@@ -39,6 +39,26 @@ _OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS = ("parallel_tool_calls", "tool_choice")
 _OPENAI_GPT_MINOR_VERSION_RE = re.compile(r"^gpt-5\.(?P<minor>\d+)(?:[-.].*)?$")
 
 
+def _enforce_parallel_tool_call_response_limit(
+    chat_completion: Any,
+    parallel_tool_calls: Optional[bool],
+) -> bool:
+    if parallel_tool_calls is not False or chat_completion is None:
+        return False
+
+    try:
+        message = chat_completion.choices[0].message
+        tool_calls = message.tool_calls or []
+    except Exception:
+        return False
+
+    if len(tool_calls) <= 1:
+        return False
+
+    message.tool_calls = tool_calls[:1]
+    return True
+
+
 def _safe_deduct_credits(
     amount: float,
     *,
@@ -153,6 +173,9 @@ def _prepare_provider_request_kw(
         kw["model"] = f"{_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX}{model}"
         kw["tools"] = _copy_tools_for_responses_bridge(tools)
         _allow_responses_bridge_params(kw)
+
+    if provider == "minimax" and kw.get("api_base") is None:
+        kw["api_base"] = "https://api.minimax.io/v1"
 
     return _canonical_model_for_accounting(str(kw.get("model") or model))
 
@@ -1342,6 +1365,10 @@ class Unify(_UniClient):
                 original_tool_choice,
                 origin=origin,
             )
+            _enforce_parallel_tool_call_response_limit(
+                chat_completion,
+                prompt.components.get("parallel_tool_calls"),
+            )
 
         # Cache the FINAL response (after any post-processing), not intermediate ones
         did_postprocess = chat_completion is not original_completion
@@ -2036,6 +2063,10 @@ class AsyncUnify(_UniClient):
                 prompt,
                 original_tool_choice,
                 origin=origin,
+            )
+            _enforce_parallel_tool_call_response_limit(
+                chat_completion,
+                prompt.components.get("parallel_tool_calls"),
             )
 
         # Cache the FINAL response (after any post-processing), not intermediate ones

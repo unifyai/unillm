@@ -488,6 +488,30 @@ class TestDeepSeekThinkingCompliance:
 
         assert kw["messages"][1]["reasoning_content"] == ""
 
+    def test_assistant_messages_get_empty_reasoning_content_without_reasoning_effort(
+        self,
+    ):
+        kw = {
+            "model": "deepseek/deepseek-v4-pro",
+            "messages": [
+                {"role": "user", "content": "call tool"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {"name": "tool", "arguments": "{}"},
+                        },
+                    ],
+                },
+            ],
+        }
+
+        apply_provider_preprocessing(kw, "deepseek")
+
+        assert kw["messages"][1]["reasoning_content"] == ""
+
     def test_response_format_becomes_prompt_instruction(self):
         kw = {
             "model": "deepseek/deepseek-v4-pro",

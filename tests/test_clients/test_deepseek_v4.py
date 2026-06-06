@@ -3,7 +3,7 @@ import os
 import pytest
 
 import unillm
-from unillm.endpoints.utils import get_model_alias, list_models
+from unillm.endpoints.utils import get_model_alias, get_model_info, list_models
 
 DEEPSEEK_V4_MAX_ENDPOINT = "deepseek-v4-max@deepseek"
 DEEPSEEK_V4_MAX_PROVIDER_MODEL = "deepseek/deepseek-v4-pro"
@@ -13,6 +13,10 @@ _HAS_DEEPSEEK_API_KEY = bool(os.environ.get("DEEPSEEK_API_KEY"))
 def test_deepseek_v4_max_alias_registered() -> None:
     assert get_model_alias(DEEPSEEK_V4_MAX_ENDPOINT) == DEEPSEEK_V4_MAX_PROVIDER_MODEL
     assert "deepseek-v4-max" in list_models("deepseek")
+
+
+def test_deepseek_v4_max_model_info_registered() -> None:
+    assert get_model_info(DEEPSEEK_V4_MAX_ENDPOINT)["max_input_tokens"] == 128_000
 
 
 @pytest.mark.skipif(not _HAS_DEEPSEEK_API_KEY, reason="No DeepSeek API key available")
