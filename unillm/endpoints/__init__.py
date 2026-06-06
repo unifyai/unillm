@@ -2,6 +2,7 @@ from . import anthropic
 from . import bedrock
 from . import deepseek
 from . import groq
+from . import minimax
 from . import mistral
 from . import openai
 from . import replicate

@@ -582,9 +582,6 @@ def _apply_anthropic_adaptive_thinking(kw: Dict[str, Any]) -> None:
 
 
 def _apply_deepseek_thinking_compliance(kw: Dict[str, Any]) -> None:
-    if kw.get("reasoning_effort") is None:
-        return
-
     for msg in kw.get("messages", []):
         if msg.get("role") == "assistant" and "reasoning_content" not in msg:
             msg["reasoning_content"] = ""
