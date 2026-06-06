@@ -194,6 +194,38 @@ class TestApplyAnthropicCachingSystemMessage:
         assert msg.get("cache_control") == CACHE_CONTROL_EPHEMERAL
 
 
+class TestSoftToolChoiceCompliance:
+    def test_minimax_required_tool_choice_gets_instruction(self):
+        kw = {
+            "model": "minimax/MiniMax-M3",
+            "messages": [{"role": "user", "content": "Do it."}],
+            "tools": [{"type": "function", "function": {"name": "tool_a"}}],
+            "tool_choice": "required",
+        }
+
+        apply_provider_preprocessing(kw, "minimax")
+
+        assert kw["tool_choice"] == "auto"
+        assert kw["messages"][0] == {
+            "role": "system",
+            "content": TOOL_CHOICE_REQUIRED_INSTRUCTION,
+        }
+
+    def test_xiaomi_explicit_tool_choice_gets_named_instruction(self):
+        kw = {
+            "model": "xiaomi_mimo/mimo-v2.5-pro",
+            "messages": [{"role": "user", "content": "Do it."}],
+            "tools": [{"type": "function", "function": {"name": "tool_a"}}],
+            "tool_choice": {"type": "function", "function": {"name": "tool_a"}},
+        }
+
+        apply_provider_preprocessing(kw, "xiaomi-mimo")
+
+        assert kw["tool_choice"] == "auto"
+        assert kw["messages"][0]["role"] == "system"
+        assert "MUST call the `tool_a` tool" in kw["messages"][0]["content"]
+
+
 class TestApplyAnthropicCachingTools:
     """Tests for tool caching."""
 

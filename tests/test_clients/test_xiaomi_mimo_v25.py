@@ -32,6 +32,26 @@ def test_mimo_token_plan_key_uses_regional_api_base(monkeypatch) -> None:
     assert kw["api_base"] == "https://token-plan-sgp.xiaomimimo.com/v1"
 
 
+def test_mimo_tool_requests_disable_thinking(monkeypatch) -> None:
+    monkeypatch.setenv("XIAOMI_MIMO_API_KEY", "tp-sgp-test")
+    kw = {
+        "model": MIMO_V25_PRO_PROVIDER_MODEL,
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "get_id", "parameters": {"type": "object"}},
+            },
+        ],
+    }
+
+    _prepare_provider_request_kw(kw=kw, provider="xiaomi-mimo", stream=False)
+
+    assert set(kw["allowed_openai_params"]) >= {"tools", "tool_choice"}
+    assert kw["tool_choice"] == "auto"
+    assert kw["extra_body"]["thinking"] == {"type": "disabled"}
+
+
 @pytest.mark.skipif(
     not _HAS_XIAOMI_MIMO_API_KEY,
     reason="No Xiaomi MiMo API key available",

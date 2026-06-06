@@ -8,7 +8,7 @@ but operates on responses rather than requests.
 Currently handles:
 - Anthropic: tool_choice="required" compliance with thinking mode
 - Anthropic/DeepSeek: invalid tool name detection (tool called not in schema)
-- DeepSeek: forced tool choice compliance
+- DeepSeek/MiniMax/Xiaomi MiMo: soft forced tool choice compliance
 - response_format schema validation with retry (all providers)
 """
 
@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 # Retry reason constants
 RETRY_REASON_TOOL_CHOICE_REQUIRED = "tool_choice_required"
 RETRY_REASON_INVALID_TOOL_NAME = "invalid_tool_name"
+
+SOFT_FORCED_TOOL_CHOICE_PROVIDERS = {"deepseek", "minimax", "xiaomi-mimo"}
 
 # Nudge message for retrying when model ignores tool_choice="required" instruction
 TOOL_CHOICE_REQUIRED_RETRY_NUDGE = (
@@ -68,8 +70,8 @@ def check_needs_postprocessing(
             reasoning_effort=reasoning_effort,
             tools=tools,
         )
-    if provider == "deepseek":
-        return _check_deepseek_postprocessing(
+    if provider in SOFT_FORCED_TOOL_CHOICE_PROVIDERS:
+        return _check_soft_forced_tool_choice_postprocessing(
             response=response,
             original_tool_choice=original_tool_choice,
             tools=tools,
@@ -314,7 +316,7 @@ def _check_anthropic_postprocessing(
     return False, None
 
 
-def _check_deepseek_postprocessing(
+def _check_soft_forced_tool_choice_postprocessing(
     *,
     response: "ChatCompletion",
     original_tool_choice: Optional[Any],

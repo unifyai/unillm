@@ -198,6 +198,9 @@ def _prepare_provider_request_kw(
     if provider == "xiaomi-mimo" and tools:
         _allow_openai_params(kw, ("tools", "tool_choice"))
         kw.setdefault("tool_choice", "auto")
+        extra_body = dict(kw.get("extra_body") or {})
+        extra_body["thinking"] = {"type": "disabled"}
+        kw["extra_body"] = extra_body
 
     return _canonical_model_for_accounting(str(kw.get("model") or model))
 
