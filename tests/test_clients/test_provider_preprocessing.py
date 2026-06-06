@@ -225,6 +225,38 @@ class TestSoftToolChoiceCompliance:
         assert kw["messages"][0]["role"] == "system"
         assert "MUST call the `tool_a` tool" in kw["messages"][0]["content"]
 
+    def test_xiaomi_completed_tool_calls_become_context(self):
+        kw = {
+            "model": "xiaomi_mimo/mimo-v2.5",
+            "messages": [
+                {"role": "user", "content": "Call get_id."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {"name": "get_id", "arguments": "{}"},
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_123",
+                    "content": "xK7-pQ9-mR2",
+                },
+            ],
+        }
+
+        apply_provider_preprocessing(kw, "xiaomi-mimo")
+
+        assert [msg["role"] for msg in kw["messages"]] == ["user", "user"]
+        assert kw["messages"][1]["content"].startswith(
+            THINKING_COMPLIANCE_CONTEXT_HEADER,
+        )
+        assert "xK7-pQ9-mR2" in kw["messages"][1]["content"]
+
 
 class TestApplyAnthropicCachingTools:
     """Tests for tool caching."""

@@ -198,6 +198,25 @@ def _apply_thinking_compliance(
     return _transform_tool_calls_to_context(messages)
 
 
+def _transform_completed_tool_calls_to_context(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    completed_call_message_ids = {
+        id(msg)
+        for idx, msg in enumerate(messages[:-1])
+        if msg.get("role") == "assistant"
+        and msg.get("tool_calls")
+        and messages[idx + 1].get("role") == "tool"
+    }
+    if not completed_call_message_ids:
+        return messages
+
+    return _transform_tool_calls_to_context(
+        messages,
+        predicate=lambda msg: id(msg) in completed_call_message_ids,
+    )
+
+
 def _strip_thinking_blocks(
     messages: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -671,6 +690,9 @@ def apply_provider_preprocessing(
         return kw
 
     if provider in SOFT_FORCED_TOOL_CHOICE_PROVIDERS:
+        if provider == "xiaomi-mimo":
+            messages = _transform_completed_tool_calls_to_context(messages)
+            kw["messages"] = messages
         _apply_soft_forced_tool_choice_compliance(kw)
         _strip_internal_annotations(kw)
         return kw
