@@ -74,7 +74,6 @@ def test_sync_openai_tool_reasoning_call_uses_responses_bridge() -> None:
         client = unillm.Unify(
             "gpt-5.5@openai",
             reasoning_effort="low",
-            cache=False,
             api_key="test-key",
         )
         response = client.generate(
@@ -119,7 +118,6 @@ async def test_async_openai_responses_bridge_preserves_stateful_tool_history() -
         client = unillm.AsyncUnify(
             "gpt-5.5@openai",
             reasoning_effort="low",
-            cache=False,
             stateful=True,
             api_key="test-key",
         )
@@ -159,7 +157,6 @@ async def test_openai_responses_bridge_cost_events_use_canonical_model() -> None
         client = unillm.AsyncUnify(
             "gpt-5.5@openai",
             reasoning_effort="low",
-            cache=False,
             api_key="test-key",
         )
         llm_events = []
