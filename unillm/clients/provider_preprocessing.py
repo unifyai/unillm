@@ -27,6 +27,8 @@ TOOL_CHOICE_REQUIRED_INSTRUCTION = (
     "do not respond with text only. Select the most appropriate tool and call it."
 )
 
+SOFT_FORCED_TOOL_CHOICE_PROVIDERS = {"deepseek", "minimax", "xiaomi-mimo"}
+
 
 def _move_system_messages_to_front(
     messages: List[Dict[str, Any]],
@@ -634,7 +636,7 @@ def _tool_choice_instruction(tool_choice: Any) -> str:
     )
 
 
-def _apply_deepseek_tool_choice_compliance(kw: Dict[str, Any]) -> None:
+def _apply_soft_forced_tool_choice_compliance(kw: Dict[str, Any]) -> None:
     tool_choice = kw.get("tool_choice")
     if not _is_forced_tool_choice(tool_choice):
         return
@@ -664,7 +666,12 @@ def apply_provider_preprocessing(
     if provider == "deepseek":
         _apply_deepseek_response_format_instructions(kw)
         _apply_deepseek_thinking_compliance(kw)
-        _apply_deepseek_tool_choice_compliance(kw)
+        _apply_soft_forced_tool_choice_compliance(kw)
+        _strip_internal_annotations(kw)
+        return kw
+
+    if provider in SOFT_FORCED_TOOL_CHOICE_PROVIDERS:
+        _apply_soft_forced_tool_choice_compliance(kw)
         _strip_internal_annotations(kw)
         return kw
 

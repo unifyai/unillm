@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
 from pathlib import Path
 from unittest.mock import patch
 
@@ -62,6 +63,7 @@ GPT_55_TOOL = {
 def test_sync_openai_tool_reasoning_call_uses_responses_bridge() -> None:
     """Sync GPT-5.5 tool calls with reasoning use the provider-qualified bridge."""
     captured: dict = {}
+    prompt = f"Find Alice. request={uuid4()}"
 
     def fake_completion(**kwargs):
         captured.update(kwargs)
@@ -77,7 +79,7 @@ def test_sync_openai_tool_reasoning_call_uses_responses_bridge() -> None:
             api_key="test-key",
         )
         response = client.generate(
-            messages=[{"role": "user", "content": "Find Alice."}],
+            messages=[{"role": "user", "content": prompt}],
             tools=[GPT_55_TOOL],
             tool_choice="required",
             parallel_tool_calls=False,
@@ -103,6 +105,7 @@ def test_sync_openai_tool_reasoning_call_uses_responses_bridge() -> None:
 async def test_async_openai_responses_bridge_preserves_stateful_tool_history() -> None:
     """Async bridged tool calls still store ChatCompletion-shaped history."""
     captured: dict = {}
+    prompt = f"Find Alice. request={uuid4()}"
 
     async def fake_acompletion(**kwargs):
         captured.update(kwargs)
@@ -122,7 +125,7 @@ async def test_async_openai_responses_bridge_preserves_stateful_tool_history() -
             api_key="test-key",
         )
         await client.generate(
-            messages=[{"role": "user", "content": "Find Alice."}],
+            messages=[{"role": "user", "content": prompt}],
             tools=[GPT_55_TOOL],
             tool_choice="required",
             return_full_completion=True,
@@ -138,6 +141,7 @@ async def test_async_openai_responses_bridge_preserves_stateful_tool_history() -
 async def test_openai_responses_bridge_cost_events_use_canonical_model() -> None:
     """Billing and cost events use the provider model, not the bridge prefix."""
     captured: dict = {}
+    prompt = f"Say done. request={uuid4()}"
 
     async def fake_acompletion(**kwargs):
         captured.update(kwargs)
@@ -163,7 +167,7 @@ async def test_openai_responses_bridge_cost_events_use_canonical_model() -> None
         with unillm.capture_costs() as events:
             async with allm_event_hook_scope(llm_events.append):
                 await client.generate(
-                    messages=[{"role": "user", "content": "Say done."}],
+                    messages=[{"role": "user", "content": prompt}],
                     tools=[GPT_55_TOOL],
                     tool_choice="auto",
                     return_full_completion=True,
