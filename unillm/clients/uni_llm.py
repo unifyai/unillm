@@ -140,8 +140,8 @@ def _copy_tools_for_responses_bridge(tools: Iterable[Any] | None) -> list[Any] |
     return [_copy_tool_for_responses_bridge(tool) for tool in tools]
 
 
-def _allow_responses_bridge_params(kw: dict) -> None:
-    """Preserve chat tool controls that LiteLLM otherwise drops before bridging."""
+def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
+    """Preserve OpenAI-compatible params that LiteLLM provider metadata omits."""
     current = kw.get("allowed_openai_params")
     if current is None:
         allowed: set[str] = set()
@@ -150,8 +150,13 @@ def _allow_responses_bridge_params(kw: dict) -> None:
     else:
         allowed = {str(param) for param in current}
 
-    allowed.update(_OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS)
+    allowed.update(params)
     kw["allowed_openai_params"] = sorted(allowed)
+
+
+def _allow_responses_bridge_params(kw: dict) -> None:
+    """Preserve chat tool controls that LiteLLM otherwise drops before bridging."""
+    _allow_openai_params(kw, _OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS)
 
 
 def _xiaomi_mimo_token_plan_api_base() -> str | None:
@@ -190,6 +195,9 @@ def _prepare_provider_request_kw(
         api_base = _xiaomi_mimo_token_plan_api_base()
         if api_base is not None:
             kw["api_base"] = api_base
+    if provider == "xiaomi-mimo" and tools:
+        _allow_openai_params(kw, ("tools", "tool_choice"))
+        kw.setdefault("tool_choice", "auto")
 
     return _canonical_model_for_accounting(str(kw.get("model") or model))
 

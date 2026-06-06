@@ -37,7 +37,7 @@ def test_mimo_token_plan_key_uses_regional_api_base(monkeypatch) -> None:
     reason="No Xiaomi MiMo API key available",
 )
 def test_sync_mimo_v25_pro_simple_message() -> None:
-    client = unillm.Unify(MIMO_V25_PRO_ENDPOINT, cache=False, temperature=0)
+    client = unillm.Unify(MIMO_V25_PRO_ENDPOINT, temperature=0)
     response = client.generate(
         messages=[
             {"role": "user", "content": "What is the capital of France?"},
@@ -54,7 +54,7 @@ def test_sync_mimo_v25_pro_simple_message() -> None:
     reason="No Xiaomi MiMo API key available",
 )
 async def test_async_mimo_v25_pro_simple_message() -> None:
-    client = unillm.AsyncUnify(MIMO_V25_PRO_ENDPOINT, cache=False, temperature=0)
+    client = unillm.AsyncUnify(MIMO_V25_PRO_ENDPOINT, temperature=0)
     response = await client.generate(
         messages=[
             {"role": "user", "content": "What is the capital of France?"},

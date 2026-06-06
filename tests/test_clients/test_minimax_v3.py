@@ -33,7 +33,7 @@ def test_minimax_request_uses_default_api_base() -> None:
 
 @pytest.mark.skipif(not _HAS_MINIMAX_API_KEY, reason="No MiniMax API key available")
 def test_sync_minimax_v3_simple_message() -> None:
-    client = unillm.Unify(MINIMAX_V3_ENDPOINT, cache=False, temperature=0)
+    client = unillm.Unify(MINIMAX_V3_ENDPOINT, temperature=0)
     response = client.generate(
         messages=[
             {"role": "user", "content": "What is the capital of France?"},
@@ -47,7 +47,7 @@ def test_sync_minimax_v3_simple_message() -> None:
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _HAS_MINIMAX_API_KEY, reason="No MiniMax API key available")
 async def test_async_minimax_v3_simple_message() -> None:
-    client = unillm.AsyncUnify(MINIMAX_V3_ENDPOINT, cache=False, temperature=0)
+    client = unillm.AsyncUnify(MINIMAX_V3_ENDPOINT, temperature=0)
     response = await client.generate(
         messages=[
             {"role": "user", "content": "What is the capital of France?"},

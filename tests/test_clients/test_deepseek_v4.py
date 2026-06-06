@@ -21,7 +21,7 @@ def test_deepseek_v4_max_model_info_registered() -> None:
 
 @pytest.mark.skipif(not _HAS_DEEPSEEK_API_KEY, reason="No DeepSeek API key available")
 def test_sync_deepseek_v4_max_simple_message() -> None:
-    client = unillm.Unify(DEEPSEEK_V4_MAX_ENDPOINT, cache=False, temperature=0)
+    client = unillm.Unify(DEEPSEEK_V4_MAX_ENDPOINT, temperature=0)
     response = client.generate(
         messages=[
             {"role": "user", "content": "What is the capital of France?"},
@@ -35,7 +35,7 @@ def test_sync_deepseek_v4_max_simple_message() -> None:
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _HAS_DEEPSEEK_API_KEY, reason="No DeepSeek API key available")
 async def test_async_deepseek_v4_max_simple_message() -> None:
-    client = unillm.AsyncUnify(DEEPSEEK_V4_MAX_ENDPOINT, cache=False, temperature=0)
+    client = unillm.AsyncUnify(DEEPSEEK_V4_MAX_ENDPOINT, temperature=0)
     response = await client.generate(
         messages=[
             {"role": "user", "content": "What is the capital of France?"},
