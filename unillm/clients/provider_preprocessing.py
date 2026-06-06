@@ -613,6 +613,44 @@ def _apply_deepseek_response_format_instructions(kw: Dict[str, Any]) -> None:
     kw["messages"].insert(0, {"role": "system", "content": instruction})
 
 
+def _forced_tool_name(tool_choice: Any) -> Optional[str]:
+    if not isinstance(tool_choice, dict):
+        return None
+    function_choice = tool_choice.get("function")
+    if not isinstance(function_choice, dict):
+        return None
+    name = function_choice.get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def _is_forced_tool_choice(tool_choice: Any) -> bool:
+    return tool_choice == "required" or _forced_tool_name(tool_choice) is not None
+
+
+def _tool_choice_instruction(tool_choice: Any) -> str:
+    name = _forced_tool_name(tool_choice)
+    if name is None:
+        return TOOL_CHOICE_REQUIRED_INSTRUCTION
+    return (
+        f"IMPORTANT: You MUST call the `{name}` tool on this turn. "
+        "Do not respond with text only and do not choose a different tool."
+    )
+
+
+def _apply_deepseek_tool_choice_compliance(kw: Dict[str, Any]) -> None:
+    tool_choice = kw.get("tool_choice")
+    if not _is_forced_tool_choice(tool_choice):
+        return
+
+    kw["tool_choice"] = "auto"
+    messages = kw.get("messages", [])
+    messages.insert(
+        0,
+        {"role": "system", "content": _tool_choice_instruction(tool_choice)},
+    )
+    kw["messages"] = messages
+
+
 def apply_provider_preprocessing(
     kw: Dict[str, Any],
     provider: Optional[str],
@@ -629,6 +667,7 @@ def apply_provider_preprocessing(
     if provider == "deepseek":
         _apply_deepseek_response_format_instructions(kw)
         _apply_deepseek_thinking_compliance(kw)
+        _apply_deepseek_tool_choice_compliance(kw)
         _strip_internal_annotations(kw)
         return kw
 

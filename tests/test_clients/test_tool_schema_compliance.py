@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 import unillm
 from unillm.clients.provider_postprocessing import (
     RETRY_REASON_INVALID_TOOL_NAME,
+    RETRY_REASON_TOOL_CHOICE_REQUIRED,
     build_retry_kw,
     check_needs_postprocessing,
 )
@@ -418,6 +419,55 @@ def test_check_needs_postprocessing_detects_tool_calls_with_empty_tools():
         "but the model returned tool_calls"
     )
     assert retry_reason == RETRY_REASON_INVALID_TOOL_NAME
+
+
+def test_deepseek_required_tool_choice_retries_text_only_response():
+    mock_message = MagicMock()
+    mock_message.tool_calls = None
+    mock_message.content = "I can answer directly."
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=mock_response,
+        provider="deepseek",
+        original_tool_choice="required",
+        reasoning_effort=None,
+        tools=[TOOL_A],
+    )
+
+    assert needs_retry
+    assert retry_reason == RETRY_REASON_TOOL_CHOICE_REQUIRED
+
+
+def test_deepseek_explicit_tool_choice_retries_wrong_tool_response():
+    mock_tool_call = MagicMock()
+    mock_tool_call.function.name = "search"
+
+    mock_message = MagicMock()
+    mock_message.tool_calls = [mock_tool_call]
+    mock_message.content = None
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=mock_response,
+        provider="deepseek",
+        original_tool_choice={"type": "function", "function": {"name": "tool_a"}},
+        reasoning_effort=None,
+        tools=[TOOL_A, TOOL_SEARCH],
+    )
+
+    assert needs_retry
+    assert retry_reason == RETRY_REASON_TOOL_CHOICE_REQUIRED
 
 
 def test_build_retry_kw_no_tools_returns_tool_result_with_text_instruction():

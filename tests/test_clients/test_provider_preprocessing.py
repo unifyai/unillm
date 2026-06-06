@@ -8,6 +8,7 @@ from unillm.clients.provider_preprocessing import (
     CACHE_CONTROL_EPHEMERAL,
     THINKING_COMPLIANCE_CONTEXT_HEADER,
     THINKING_COMPLIANCE_CONTEXT_FOOTER,
+    TOOL_CHOICE_REQUIRED_INSTRUCTION,
     _apply_anthropic_caching,
     _apply_thinking_compliance,
     _transform_tool_calls_to_context,
@@ -455,6 +456,15 @@ class TestDeepSeekThinkingCompliance:
     class _Answer(BaseModel):
         answer: str
 
+    _TOOL = {
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "Look up a value.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    }
+
     def test_assistant_messages_get_empty_reasoning_content(self):
         kw = {
             "model": "deepseek/deepseek-v4-pro",
@@ -490,6 +500,33 @@ class TestDeepSeekThinkingCompliance:
         assert "response_format" not in kw
         assert kw["messages"][0]["role"] == "system"
         assert "valid JSON only" in kw["messages"][0]["content"]
+
+    def test_required_tool_choice_is_downgraded_to_auto(self):
+        kw = {
+            "model": "deepseek/deepseek-v4-pro",
+            "messages": [{"role": "user", "content": "Call a tool"}],
+            "tools": [self._TOOL],
+            "tool_choice": "required",
+        }
+
+        apply_provider_preprocessing(kw, "deepseek")
+
+        assert kw["tool_choice"] == "auto"
+        assert kw["messages"][0]["role"] == "system"
+        assert TOOL_CHOICE_REQUIRED_INSTRUCTION in kw["messages"][0]["content"]
+
+    def test_explicit_tool_choice_is_downgraded_to_auto(self):
+        kw = {
+            "model": "deepseek/deepseek-v4-pro",
+            "messages": [{"role": "user", "content": "Call lookup"}],
+            "tools": [self._TOOL],
+            "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        }
+
+        apply_provider_preprocessing(kw, "deepseek")
+
+        assert kw["tool_choice"] == "auto"
+        assert "lookup" in kw["messages"][0]["content"]
 
 
 # A short stand-in for a real base64 screenshot (~200 chars).
