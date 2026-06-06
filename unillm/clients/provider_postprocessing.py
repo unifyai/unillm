@@ -7,13 +7,14 @@ but operates on responses rather than requests.
 
 Currently handles:
 - Anthropic: tool_choice="required" compliance with thinking mode
-- Anthropic: invalid tool name detection (tool called not in schema)
+- Anthropic/DeepSeek: invalid tool name detection (tool called not in schema)
+- DeepSeek: forced tool choice compliance
 - response_format schema validation with retry (all providers)
 """
 
 import json
 import logging
-from typing import List, Optional, Set, Tuple, Type, TYPE_CHECKING
+from typing import Any, List, Optional, Set, Tuple, Type, TYPE_CHECKING
 
 from pydantic import BaseModel
 
@@ -45,7 +46,7 @@ def check_needs_postprocessing(
     *,
     response: "ChatCompletion",
     provider: str,
-    original_tool_choice: Optional[str],
+    original_tool_choice: Optional[Any],
     reasoning_effort: Optional[str],
     tools: Optional[List[dict]] = None,
 ) -> Tuple[bool, Optional[str]]:
@@ -67,6 +68,12 @@ def check_needs_postprocessing(
             reasoning_effort=reasoning_effort,
             tools=tools,
         )
+    if provider == "deepseek":
+        return _check_deepseek_postprocessing(
+            response=response,
+            original_tool_choice=original_tool_choice,
+            tools=tools,
+        )
     return False, None
 
 
@@ -81,6 +88,20 @@ def _get_valid_tool_names(tools: Optional[List[dict]]) -> List[str]:
             if name:
                 names.append(name)
     return names
+
+
+def _forced_tool_name(tool_choice: Any) -> Optional[str]:
+    if not isinstance(tool_choice, dict):
+        return None
+    function_choice = tool_choice.get("function")
+    if not isinstance(function_choice, dict):
+        return None
+    name = function_choice.get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def _called_tool_names(msg: "ChatCompletionMessage") -> List[str]:
+    return [tc.function.name for tc in (msg.tool_calls or [])]
 
 
 def _make_tool_error(
@@ -254,7 +275,7 @@ def build_retry_kw(
 def _check_anthropic_postprocessing(
     *,
     response: "ChatCompletion",
-    original_tool_choice: Optional[str],
+    original_tool_choice: Optional[Any],
     reasoning_effort: Optional[str],
     tools: Optional[List[dict]] = None,
 ) -> Tuple[bool, Optional[str]]:
@@ -288,6 +309,31 @@ def _check_anthropic_postprocessing(
     if reasoning_effort is not None and original_tool_choice == "required":
         if not msg.tool_calls:
             # Non-compliant: model responded with text only despite instruction
+            return True, RETRY_REASON_TOOL_CHOICE_REQUIRED
+
+    return False, None
+
+
+def _check_deepseek_postprocessing(
+    *,
+    response: "ChatCompletion",
+    original_tool_choice: Optional[Any],
+    tools: Optional[List[dict]] = None,
+) -> Tuple[bool, Optional[str]]:
+    msg = response.choices[0].message
+
+    if msg.tool_calls:
+        valid_names = set(_get_valid_tool_names(tools))
+        for tool_call in msg.tool_calls:
+            if tool_call.function.name not in valid_names:
+                return True, RETRY_REASON_INVALID_TOOL_NAME
+
+    if original_tool_choice == "required" and not msg.tool_calls:
+        return True, RETRY_REASON_TOOL_CHOICE_REQUIRED
+
+    required_tool_name = _forced_tool_name(original_tool_choice)
+    if required_tool_name is not None:
+        if required_tool_name not in _called_tool_names(msg):
             return True, RETRY_REASON_TOOL_CHOICE_REQUIRED
 
     return False, None
