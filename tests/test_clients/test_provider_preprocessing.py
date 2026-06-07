@@ -6,6 +6,8 @@ from pydantic import BaseModel
 
 from unillm.clients.provider_preprocessing import (
     CACHE_CONTROL_EPHEMERAL,
+    COMPLETED_TOOL_CONTEXT_FOOTER,
+    COMPLETED_TOOL_CONTEXT_HEADER,
     THINKING_COMPLIANCE_CONTEXT_HEADER,
     THINKING_COMPLIANCE_CONTEXT_FOOTER,
     TOOL_CHOICE_REQUIRED_INSTRUCTION,
@@ -253,9 +255,81 @@ class TestSoftToolChoiceCompliance:
 
         assert [msg["role"] for msg in kw["messages"]] == ["user", "user"]
         assert kw["messages"][1]["content"].startswith(
-            THINKING_COMPLIANCE_CONTEXT_HEADER,
+            COMPLETED_TOOL_CONTEXT_HEADER,
         )
         assert "xK7-pQ9-mR2" in kw["messages"][1]["content"]
+        assert "Do not repeat a tool call" in kw["messages"][1]["content"]
+        assert kw["messages"][1]["content"].endswith(COMPLETED_TOOL_CONTEXT_FOOTER)
+
+    def test_xiaomi_completed_status_tool_calls_become_terminal_context(self):
+        kw = {
+            "model": "xiaomi_mimo/mimo-v2.5",
+            "messages": [
+                {"role": "user", "content": "Run fast_task and slow_task."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_fast",
+                            "type": "function",
+                            "function": {"name": "fast_task", "arguments": "{}"},
+                        },
+                        {
+                            "id": "call_slow",
+                            "type": "function",
+                            "function": {"name": "slow_task", "arguments": "{}"},
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_fast",
+                    "name": "fast_task",
+                    "content": (
+                        '{"_placeholder":"completed","result_call_id":'
+                        '"call_fast_completed"}'
+                    ),
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_slow",
+                    "name": "slow_task",
+                    "content": '{"_placeholder":"pending"}',
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_fast_completed",
+                            "type": "function",
+                            "function": {
+                                "name": "check_status_call_fast",
+                                "arguments": "{}",
+                            },
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_fast_completed",
+                    "name": "check_status_call_fast",
+                    "content": "FAST_RESULT",
+                },
+            ],
+        }
+
+        apply_provider_preprocessing(kw, "xiaomi-mimo")
+
+        assert [msg["role"] for msg in kw["messages"]] == ["user", "user", "user"]
+        first_context = kw["messages"][1]["content"]
+        second_context = kw["messages"][2]["content"]
+        assert first_context.startswith(COMPLETED_TOOL_CONTEXT_HEADER)
+        assert second_context.startswith(COMPLETED_TOOL_CONTEXT_HEADER)
+        assert "treat pending entries as already in flight" in first_context
+        assert "FAST_RESULT" in second_context
+        assert "check_status_call_fast" in second_context
 
 
 class TestApplyAnthropicCachingTools:

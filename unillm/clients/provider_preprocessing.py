@@ -21,6 +21,17 @@ THINKING_PREFILL_EXPLANATION = (
 
 THINKING_COMPLIANCE_CONTEXT_HEADER = "[Prior tool execution context]"
 THINKING_COMPLIANCE_CONTEXT_FOOTER = "[Continue from here]"
+COMPLETED_TOOL_CONTEXT_HEADER = (
+    "[Prior tool execution context]\n"
+    "The entries below are authoritative records of tool calls that were already "
+    "started in prior turns. Do not repeat a tool call solely to obtain a result "
+    "that is already present here. Treat completed results as final, treat "
+    "pending entries as already in flight, and continue from this state."
+)
+COMPLETED_TOOL_CONTEXT_FOOTER = (
+    "[Continue from the tool execution state above. If the requested work is "
+    "complete, answer the user instead of re-calling completed tools.]"
+)
 
 TOOL_CHOICE_REQUIRED_INSTRUCTION = (
     "IMPORTANT: You MUST call a tool on this turn. A tool call is required - "
@@ -200,6 +211,9 @@ def _apply_thinking_compliance(
 
 def _transform_completed_tool_calls_to_context(
     messages: List[Dict[str, Any]],
+    *,
+    context_header: str = THINKING_COMPLIANCE_CONTEXT_HEADER,
+    context_footer: str = THINKING_COMPLIANCE_CONTEXT_FOOTER,
 ) -> List[Dict[str, Any]]:
     completed_call_message_ids = {
         id(msg)
@@ -213,6 +227,8 @@ def _transform_completed_tool_calls_to_context(
 
     return _transform_tool_calls_to_context(
         messages,
+        context_header=context_header,
+        context_footer=context_footer,
         predicate=lambda msg: id(msg) in completed_call_message_ids,
     )
 
@@ -691,7 +707,11 @@ def apply_provider_preprocessing(
 
     if provider in SOFT_FORCED_TOOL_CHOICE_PROVIDERS:
         if provider == "xiaomi-mimo":
-            messages = _transform_completed_tool_calls_to_context(messages)
+            messages = _transform_completed_tool_calls_to_context(
+                messages,
+                context_header=COMPLETED_TOOL_CONTEXT_HEADER,
+                context_footer=COMPLETED_TOOL_CONTEXT_FOOTER,
+            )
             kw["messages"] = messages
         _apply_soft_forced_tool_choice_compliance(kw)
         _strip_internal_annotations(kw)
