@@ -32,6 +32,11 @@ COMPLETED_TOOL_CONTEXT_FOOTER = (
     "[Continue from the tool execution state above. If the requested work is "
     "complete, answer the user instead of re-calling completed tools.]"
 )
+COMPLETED_TOOL_IMAGE_CONTEXT_FOOTER = (
+    "The image(s) above are already part of completed tool results. Do not call "
+    "the same image-producing tool again. Answer using the completed image "
+    "result and text context above."
+)
 
 TOOL_CHOICE_REQUIRED_INSTRUCTION = (
     "IMPORTANT: You MUST call a tool on this turn. A tool call is required - "
@@ -107,6 +112,7 @@ def _transform_tool_calls_to_context(
     *,
     context_header: str = THINKING_COMPLIANCE_CONTEXT_HEADER,
     context_footer: str = THINKING_COMPLIANCE_CONTEXT_FOOTER,
+    image_context_footer: Optional[str] = None,
     predicate: Optional[Callable[[Dict[str, Any]], bool]] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -175,6 +181,8 @@ def _transform_tool_calls_to_context(
                     {"type": "text", "text": context_text},
                     *all_images,
                 ]
+                if image_context_footer is not None:
+                    content.append({"type": "text", "text": image_context_footer})
                 result.append({"role": "user", "content": content})
             else:
                 result.append({"role": "user", "content": context_text})
@@ -214,6 +222,7 @@ def _transform_completed_tool_calls_to_context(
     *,
     context_header: str = THINKING_COMPLIANCE_CONTEXT_HEADER,
     context_footer: str = THINKING_COMPLIANCE_CONTEXT_FOOTER,
+    image_context_footer: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     completed_call_message_ids = {
         id(msg)
@@ -229,6 +238,7 @@ def _transform_completed_tool_calls_to_context(
         messages,
         context_header=context_header,
         context_footer=context_footer,
+        image_context_footer=image_context_footer,
         predicate=lambda msg: id(msg) in completed_call_message_ids,
     )
 
@@ -685,6 +695,47 @@ def _apply_soft_forced_tool_choice_compliance(kw: Dict[str, Any]) -> None:
     kw["messages"] = messages
 
 
+def _completed_image_tool_names(messages: List[Dict[str, Any]]) -> set[str]:
+    call_id_to_name = {}
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        for tool_call in msg.get("tool_calls") or []:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function")
+            if not isinstance(function, dict):
+                continue
+            call_id = tool_call.get("id")
+            name = function.get("name")
+            if isinstance(call_id, str) and isinstance(name, str) and name:
+                call_id_to_name[call_id] = name
+
+    names = set()
+    for msg in messages:
+        if msg.get("role") != "tool":
+            continue
+        _, images = _extract_image_blocks(msg.get("content", ""))
+        if not images:
+            continue
+        name = msg.get("name") or call_id_to_name.get(msg.get("tool_call_id"))
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
+
+
+def _suppress_tools_after_completed_image_result(
+    kw: Dict[str, Any],
+    messages: List[Dict[str, Any]],
+) -> None:
+    completed_image_tools = _completed_image_tool_names(messages)
+    if not completed_image_tools:
+        return
+
+    kw.pop("tools", None)
+    kw.pop("tool_choice", None)
+
+
 def apply_provider_preprocessing(
     kw: Dict[str, Any],
     provider: Optional[str],
@@ -707,10 +758,12 @@ def apply_provider_preprocessing(
 
     if provider in SOFT_FORCED_TOOL_CHOICE_PROVIDERS:
         if provider == "xiaomi-mimo":
+            _suppress_tools_after_completed_image_result(kw, messages)
             messages = _transform_completed_tool_calls_to_context(
                 messages,
                 context_header=COMPLETED_TOOL_CONTEXT_HEADER,
                 context_footer=COMPLETED_TOOL_CONTEXT_FOOTER,
+                image_context_footer=COMPLETED_TOOL_IMAGE_CONTEXT_FOOTER,
             )
             kw["messages"] = messages
         _apply_soft_forced_tool_choice_compliance(kw)
