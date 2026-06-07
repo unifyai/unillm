@@ -1,4 +1,4 @@
-from .utils import register_model_alias_map, register_model_info
+from .utils import register_litellm_model_info, register_model_alias_map
 
 models = {
     "deepseek-v4-max": "deepseek/deepseek-v4-pro",
@@ -7,9 +7,26 @@ models = {
     "deepseek-r1": "deepseek/deepseek-reasoner",
 }
 
-model_info = {
-    "deepseek-v4-max": {"max_input_tokens": 128_000},
-}
-
 register_model_alias_map("deepseek", models)
-register_model_info("deepseek", model_info)
+register_litellm_model_info(
+    {
+        "deepseek-v4-pro": {
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+            "max_input_tokens": 1_048_576,
+            "max_tokens": 393_216,
+            "input_cost_per_token": 0.435 / 1_000_000,
+            "cache_read_input_token_cost": 0.003625 / 1_000_000,
+            "output_cost_per_token": 0.87 / 1_000_000,
+        },
+        "deepseek/deepseek-v4-pro": {
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+            "max_input_tokens": 1_048_576,
+            "max_tokens": 393_216,
+            "input_cost_per_token": 0.435 / 1_000_000,
+            "cache_read_input_token_cost": 0.003625 / 1_000_000,
+            "output_cost_per_token": 0.87 / 1_000_000,
+        },
+    },
+)

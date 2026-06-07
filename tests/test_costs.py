@@ -3,12 +3,15 @@
 import pytest
 from unittest.mock import patch
 
+import litellm
+
 from unillm.costs import (
     _normalize_model_name,
     compute_cost,
     compute_cost_from_response,
     compute_full_cost_from_usage,
 )
+from unillm.endpoints import anthropic, deepseek, minimax, openai, xiaomi_mimo
 
 
 class TestNormalizeModelName:
@@ -208,6 +211,59 @@ class TestComputeCostFromResponse:
         }
         cost = compute_cost_from_response("non-existent-model@openai", response)
         assert cost is None
+
+    def test_from_response_uses_cached_prompt_token_pricing(self):
+        """Cached prompt tokens should use LiteLLM's cache-read token rate."""
+        response = {
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 100,
+                "prompt_tokens_details": {"cached_tokens": 900},
+            },
+        }
+
+        cost = compute_cost_from_response("deepseek/deepseek-v4-pro", response)
+
+        assert cost is not None
+        expected = (
+            100 * (0.435 / 1_000_000)
+            + 900 * (0.003625 / 1_000_000)
+            + 100 * (0.87 / 1_000_000)
+        )
+        assert abs(cost - expected) < 1e-12
+
+
+class TestSupportedModelPricingCoverage:
+    """Supported endpoint aliases should resolve to priced LiteLLM model entries."""
+
+    PROVIDERS = {
+        "openai": openai.models,
+        "anthropic": anthropic.models,
+        "deepseek": deepseek.models,
+        "minimax": minimax.models,
+        "xiaomi-mimo": xiaomi_mimo.models,
+    }
+
+    @pytest.mark.parametrize(
+        ("provider", "model", "provider_model"),
+        [
+            (provider, model, provider_model)
+            for provider, models in PROVIDERS.items()
+            for model, provider_model in models.items()
+        ],
+    )
+    def test_litellm_has_pricing_for_supported_model(
+        self,
+        provider,
+        model,
+        provider_model,
+    ):
+        info = litellm.get_model_info(provider_model)
+
+        assert info.get("input_cost_per_token"), f"{model}@{provider} lacks input price"
+        assert info.get(
+            "output_cost_per_token",
+        ), f"{model}@{provider} lacks output price"
 
 
 class TestTieredLongContextPricing:

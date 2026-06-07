@@ -1,4 +1,4 @@
-from .utils import register_model_alias_map, register_model_info
+from .utils import register_litellm_model_info, register_model_alias_map
 
 provider = "anthropic"
 models = {
@@ -15,12 +15,6 @@ models = {
     "claude-4.8-opus": "anthropic/claude-opus-4-8",
 }
 
-model_info = {
-    "claude-4.6-opus": {"max_input_tokens": 1_000_000},
-    "claude-4.6-sonnet": {"max_input_tokens": 1_000_000},
-    "claude-4.8-opus": {"max_input_tokens": 1_000_000},
-}
-
 CONTEXT_1M_BETA = "context-1m-2025-08-07"
 CONTEXT_1M_MODELS = {
     models["claude-4-sonnet"],
@@ -35,4 +29,16 @@ ADAPTIVE_THINKING_MODELS = {
 }
 
 register_model_alias_map(provider, models)
-register_model_info(provider, model_info)
+register_litellm_model_info(
+    {
+        models["claude-3.5-haiku"]: {
+            "litellm_provider": provider,
+            "mode": "chat",
+            "max_input_tokens": 200_000,
+            "input_cost_per_token": 0.80 / 1_000_000,
+            "cache_creation_input_token_cost": 1.00 / 1_000_000,
+            "cache_read_input_token_cost": 0.08 / 1_000_000,
+            "output_cost_per_token": 4.00 / 1_000_000,
+        },
+    },
+)

@@ -17,7 +17,10 @@ def test_minimax_v3_alias_registered() -> None:
 
 
 def test_minimax_v3_model_info_registered() -> None:
-    assert get_model_info(MINIMAX_V3_ENDPOINT)["max_input_tokens"] == 1_000_000
+    info = get_model_info(MINIMAX_V3_ENDPOINT)
+    assert info["max_input_tokens"] == 1_000_000
+    assert info["input_cost_per_token"] > 0
+    assert info["output_cost_per_token"] > 0
 
 
 def test_minimax_request_uses_default_api_base() -> None:
