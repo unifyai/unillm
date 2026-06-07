@@ -2,7 +2,6 @@
 
 import pytest
 
-from unillm.endpoints.anthropic import model_info as anthropic_model_info
 from unillm.tokens import count_tokens, fills_context_window, get_max_input_tokens
 
 
@@ -19,14 +18,9 @@ class TestGetMaxInputTokens:
         assert isinstance(result, int)
         assert result > 0
 
-    @pytest.mark.skipif(
-        "claude-4.6-opus" not in anthropic_model_info,
-        reason="No local override registered for claude-4.6-opus",
-    )
-    def test_local_override_takes_priority(self):
-        expected = anthropic_model_info["claude-4.6-opus"]["max_input_tokens"]
+    def test_litellm_registered_context_window_is_used(self):
         result = get_max_input_tokens("claude-4.6-opus@anthropic")
-        assert result == expected
+        assert result == 1_000_000
 
     def test_with_provider_suffix(self):
         with_suffix = get_max_input_tokens("gpt-5.2@openai")

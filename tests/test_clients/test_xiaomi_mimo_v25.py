@@ -24,11 +24,17 @@ def test_mimo_v25_pro_alias_registered() -> None:
 
 
 def test_mimo_v25_model_info_registered() -> None:
-    assert get_model_info(MIMO_V25_ENDPOINT)["max_input_tokens"] == 1_000_000
+    info = get_model_info(MIMO_V25_ENDPOINT)
+    assert info["max_input_tokens"] == 1_000_000
+    assert info["input_cost_per_token"] > 0
+    assert info["output_cost_per_token"] > 0
 
 
 def test_mimo_v25_pro_model_info_registered() -> None:
-    assert get_model_info(MIMO_V25_PRO_ENDPOINT)["max_input_tokens"] == 1_000_000
+    info = get_model_info(MIMO_V25_PRO_ENDPOINT)
+    assert info["max_input_tokens"] == 1_000_000
+    assert info["input_cost_per_token"] > 0
+    assert info["output_cost_per_token"] > 0
 
 
 def test_mimo_token_plan_key_uses_regional_api_base(monkeypatch) -> None:

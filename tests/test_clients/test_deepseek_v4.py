@@ -16,7 +16,10 @@ def test_deepseek_v4_max_alias_registered() -> None:
 
 
 def test_deepseek_v4_max_model_info_registered() -> None:
-    assert get_model_info(DEEPSEEK_V4_MAX_ENDPOINT)["max_input_tokens"] == 128_000
+    info = get_model_info(DEEPSEEK_V4_MAX_ENDPOINT)
+    assert info["max_input_tokens"] == 1_048_576
+    assert info["input_cost_per_token"] > 0
+    assert info["output_cost_per_token"] > 0
 
 
 @pytest.mark.skipif(not _HAS_DEEPSEEK_API_KEY, reason="No DeepSeek API key available")

@@ -36,6 +36,12 @@ def register_model_info(
     )
 
 
+def register_litellm_model_info(model_info: Dict[str, Dict[str, Any]]) -> None:
+    """Register missing or corrected model metadata in LiteLLM's registry."""
+
+    litellm.register_model(model_info)
+
+
 def get_model_alias(endpoint: str) -> str:
     """
     Get the alias for a model. If the model is not found, throws an exception.
