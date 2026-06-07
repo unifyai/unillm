@@ -1,6 +1,7 @@
 # global
 import abc
 import asyncio
+import copy
 import inspect
 import logging
 import os
@@ -57,6 +58,23 @@ def _enforce_parallel_tool_call_response_limit(
         return False
 
     message.tool_calls = tool_calls[:1]
+    return True
+
+
+def _normalize_assistant_message_content(chat_completion: Any) -> bool:
+    try:
+        content = chat_completion.choices[0].message.content
+    except Exception:
+        return False
+
+    if not isinstance(content, str):
+        return False
+
+    normalized = content.strip()
+    if normalized == content:
+        return False
+
+    chat_completion.choices[0].message.content = normalized
     return True
 
 
@@ -1103,6 +1121,7 @@ class Unify(_UniClient):
                 completion = retry_transient_400_sync(
                     lambda: litellm.completion(**retry_kw),
                 )
+                _normalize_assistant_message_content(completion)
         finally:
             try:
                 body = (
@@ -1154,6 +1173,7 @@ class Unify(_UniClient):
         endpoint: str,
         prompt: "Prompt",
         original_tool_choice: Optional[str],
+        original_request_messages: Optional[List[dict]] = None,
         origin: Optional[str] = None,
     ) -> "ChatCompletion":
         """Run all postprocessing checks, retrying once per check if needed."""
@@ -1172,6 +1192,8 @@ class Unify(_UniClient):
             original_tool_choice=original_tool_choice,
             reasoning_effort=prompt.components.get("reasoning_effort"),
             tools=list(raw_tools) if raw_tools is not None else None,
+            request_messages=kw.get("messages"),
+            original_request_messages=original_request_messages,
         )
         if needs_retry:
             retry_kw = build_retry_kw(
@@ -1225,6 +1247,7 @@ class Unify(_UniClient):
         )
         # Capture original tool_choice before preprocessing may modify it
         original_tool_choice = kw.get("tool_choice")
+        original_request_messages = copy.deepcopy(kw.get("messages"))
 
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
@@ -1293,9 +1316,12 @@ class Unify(_UniClient):
                         chat_completion = retry_transient_400_sync(
                             lambda: litellm.completion(**kw),
                         )
+                        _normalize_assistant_message_content(chat_completion)
                     except litellm.exceptions.APIError as e:
                         llm_error = Exception(e.message)
                         raise llm_error
+                else:
+                    _normalize_assistant_message_content(chat_completion)
 
                 # Determine cache status after resolution
                 if is_cache_enabled:
@@ -1388,6 +1414,7 @@ class Unify(_UniClient):
                 endpoint,
                 prompt,
                 original_tool_choice,
+                original_request_messages,
                 origin=origin,
             )
             _enforce_parallel_tool_call_response_limit(
@@ -1743,6 +1770,7 @@ class AsyncUnify(_UniClient):
                         **retry_kw,
                     ),
                 )
+                _normalize_assistant_message_content(completion)
         finally:
             try:
                 body = (
@@ -1798,6 +1826,7 @@ class AsyncUnify(_UniClient):
         endpoint: str,
         prompt: "Prompt",
         original_tool_choice: Optional[str],
+        original_request_messages: Optional[List[dict]] = None,
         origin: Optional[str] = None,
     ) -> "ChatCompletion":
         """Run all postprocessing checks, retrying once per check if needed."""
@@ -1816,6 +1845,8 @@ class AsyncUnify(_UniClient):
             original_tool_choice=original_tool_choice,
             reasoning_effort=prompt.components.get("reasoning_effort"),
             tools=list(raw_tools) if raw_tools is not None else None,
+            request_messages=kw.get("messages"),
+            original_request_messages=original_request_messages,
         )
         if needs_retry:
             retry_kw = build_retry_kw(
@@ -1869,6 +1900,7 @@ class AsyncUnify(_UniClient):
         )
         # Capture original tool_choice before preprocessing may modify it
         original_tool_choice = kw.get("tool_choice")
+        original_request_messages = copy.deepcopy(kw.get("messages"))
 
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
@@ -1968,10 +2000,13 @@ class AsyncUnify(_UniClient):
 
                         # Limit check passed (or disabled), wait for LLM result
                         chat_completion = await llm_task
+                        _normalize_assistant_message_content(chat_completion)
                         llm_task = None  # Mark as consumed
                     except litellm.exceptions.APIError as e:
                         llm_error = Exception(e.message)
                         raise llm_error
+                else:
+                    _normalize_assistant_message_content(chat_completion)
 
                 # Determine cache status after resolution
                 if is_cache_enabled:
@@ -2087,6 +2122,7 @@ class AsyncUnify(_UniClient):
                 endpoint,
                 prompt,
                 original_tool_choice,
+                original_request_messages,
                 origin=origin,
             )
             _enforce_parallel_tool_call_response_limit(

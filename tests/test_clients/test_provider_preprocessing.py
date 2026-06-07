@@ -331,6 +331,53 @@ class TestSoftToolChoiceCompliance:
         assert "FAST_RESULT" in second_context
         assert "check_status_call_fast" in second_context
 
+    def test_xiaomi_completed_image_tool_context_ends_with_instruction_text(self):
+        image_block = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,abc123"},
+        }
+        kw = {
+            "model": "xiaomi_mimo/mimo-v2.5",
+            "tools": [
+                {"type": "function", "function": {"name": "image_tool"}},
+                {"type": "function", "function": {"name": "compress_context"}},
+            ],
+            "messages": [
+                {"role": "user", "content": "Call image_tool, then answer."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_img",
+                            "type": "function",
+                            "function": {"name": "image_tool", "arguments": "{}"},
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_img",
+                    "name": "image_tool",
+                    "content": [
+                        {"type": "text", "text": '{"status":"ok"}'},
+                        image_block,
+                    ],
+                },
+            ],
+        }
+
+        apply_provider_preprocessing(kw, "xiaomi-mimo")
+
+        content = kw["messages"][1]["content"]
+        assert isinstance(content, list)
+        assert content[0]["type"] == "text"
+        assert content[1] == image_block
+        assert content[-1]["type"] == "text"
+        assert "image(s) above" in content[-1]["text"]
+        assert "Do not call" in content[-1]["text"]
+        assert "tools" not in kw
+
 
 class TestApplyAnthropicCachingTools:
     """Tests for tool caching."""
