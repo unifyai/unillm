@@ -1,9 +1,21 @@
+from importlib import import_module
 from typing import Any, Dict
 
 import litellm
 
 _MODEL_ALIAS_MAP: Dict[str, str] = {}
 _MODEL_INFO_MAP: Dict[str, Dict[str, Any]] = {}
+_ENDPOINTS_IMPORTED = False
+
+
+def ensure_endpoints_imported() -> None:
+    """Import provider endpoint modules so the model registry is populated."""
+
+    global _ENDPOINTS_IMPORTED
+    if _ENDPOINTS_IMPORTED:
+        return
+    import_module("unillm.endpoints")
+    _ENDPOINTS_IMPORTED = True
 
 
 def register_model_alias_map(
@@ -24,6 +36,12 @@ def register_model_info(
     )
 
 
+def register_litellm_model_info(model_info: Dict[str, Dict[str, Any]]) -> None:
+    """Register missing or corrected model metadata in LiteLLM's registry."""
+
+    litellm.register_model(model_info)
+
+
 def get_model_alias(endpoint: str) -> str:
     """
     Get the alias for a model. If the model is not found, throws an exception.
@@ -33,10 +51,50 @@ def get_model_alias(endpoint: str) -> str:
     Returns:
         LiteLLM model name for the model.
     """
+    ensure_endpoints_imported()
     alias = _MODEL_ALIAS_MAP.get(endpoint)
     if alias is None:
         raise ValueError(f"Model {endpoint} not found")
     return alias
+
+
+def list_models(provider: str) -> list[str]:
+    ensure_endpoints_imported()
+    suffix = f"@{provider}"
+    return sorted(
+        endpoint[: -len(suffix)]
+        for endpoint in _MODEL_ALIAS_MAP
+        if endpoint.endswith(suffix)
+    )
+
+
+def list_providers() -> list[str]:
+    """Return provider names with at least one registered model endpoint."""
+
+    ensure_endpoints_imported()
+    return sorted(
+        {
+            endpoint.rsplit("@", 1)[1]
+            for endpoint in _MODEL_ALIAS_MAP
+            if "@" in endpoint
+        },
+    )
+
+
+def list_endpoints(provider: str | None = None) -> list[str]:
+    """Return supported model endpoints in ``model@provider`` form.
+
+    Args:
+        provider: Optional provider filter, e.g. ``"openai"``.
+    """
+
+    ensure_endpoints_imported()
+    if provider is None:
+        return sorted(_MODEL_ALIAS_MAP)
+    suffix = f"@{provider}"
+    return sorted(
+        endpoint for endpoint in _MODEL_ALIAS_MAP if endpoint.endswith(suffix)
+    )
 
 
 def get_model_info(endpoint: str) -> Dict[str, Any]:

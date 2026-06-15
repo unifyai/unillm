@@ -7,13 +7,14 @@ but operates on responses rather than requests.
 
 Currently handles:
 - Anthropic: tool_choice="required" compliance with thinking mode
-- Anthropic: invalid tool name detection (tool called not in schema)
+- Anthropic/DeepSeek: invalid tool name detection (tool called not in schema)
+- DeepSeek/MiniMax/Xiaomi MiMo: soft forced tool choice compliance
 - response_format schema validation with retry (all providers)
 """
 
 import json
 import logging
-from typing import List, Optional, Set, Tuple, Type, TYPE_CHECKING
+from typing import Any, List, Optional, Set, Tuple, Type, TYPE_CHECKING
 
 from pydantic import BaseModel
 
@@ -25,6 +26,9 @@ logger = logging.getLogger(__name__)
 # Retry reason constants
 RETRY_REASON_TOOL_CHOICE_REQUIRED = "tool_choice_required"
 RETRY_REASON_INVALID_TOOL_NAME = "invalid_tool_name"
+RETRY_REASON_REPEATED_COMPLETED_TOOL = "repeated_completed_tool"
+
+SOFT_FORCED_TOOL_CHOICE_PROVIDERS = {"deepseek", "minimax", "xiaomi-mimo"}
 
 # Nudge message for retrying when model ignores tool_choice="required" instruction
 TOOL_CHOICE_REQUIRED_RETRY_NUDGE = (
@@ -45,9 +49,11 @@ def check_needs_postprocessing(
     *,
     response: "ChatCompletion",
     provider: str,
-    original_tool_choice: Optional[str],
+    original_tool_choice: Optional[Any],
     reasoning_effort: Optional[str],
     tools: Optional[List[dict]] = None,
+    request_messages: Optional[List[dict]] = None,
+    original_request_messages: Optional[List[dict]] = None,
 ) -> Tuple[bool, Optional[str]]:
     """
     Check if a response needs post-processing (retry).
@@ -67,6 +73,14 @@ def check_needs_postprocessing(
             reasoning_effort=reasoning_effort,
             tools=tools,
         )
+    if provider in SOFT_FORCED_TOOL_CHOICE_PROVIDERS:
+        return _check_soft_forced_tool_choice_postprocessing(
+            response=response,
+            original_tool_choice=original_tool_choice,
+            tools=tools,
+            request_messages=request_messages,
+            original_request_messages=original_request_messages,
+        )
     return False, None
 
 
@@ -81,6 +95,76 @@ def _get_valid_tool_names(tools: Optional[List[dict]]) -> List[str]:
             if name:
                 names.append(name)
     return names
+
+
+def _forced_tool_name(tool_choice: Any) -> Optional[str]:
+    if not isinstance(tool_choice, dict):
+        return None
+    function_choice = tool_choice.get("function")
+    if not isinstance(function_choice, dict):
+        return None
+    name = function_choice.get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def _called_tool_names(msg: "ChatCompletionMessage") -> List[str]:
+    return [tc.function.name for tc in (msg.tool_calls or [])]
+
+
+def _has_tool_result_history(messages: Optional[List[dict]]) -> bool:
+    if not messages:
+        return False
+    return any(
+        isinstance(message, dict) and message.get("role") == "tool"
+        for message in messages
+    )
+
+
+def _completed_tool_signatures(messages: Optional[List[dict]]) -> set[tuple[str, str]]:
+    if not messages:
+        return set()
+
+    call_id_to_signature: dict[str, tuple[str, str]] = {}
+    completed_call_ids: set[str] = set()
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "assistant":
+            for tool_call in message.get("tool_calls") or []:
+                if not isinstance(tool_call, dict):
+                    continue
+                function = tool_call.get("function")
+                if not isinstance(function, dict):
+                    continue
+                call_id = tool_call.get("id")
+                name = function.get("name")
+                arguments = function.get("arguments", "")
+                if isinstance(call_id, str) and isinstance(name, str):
+                    call_id_to_signature[call_id] = (name, str(arguments))
+        elif message.get("role") == "tool":
+            tool_call_id = message.get("tool_call_id")
+            if isinstance(tool_call_id, str):
+                completed_call_ids.add(tool_call_id)
+
+    return {
+        signature
+        for call_id, signature in call_id_to_signature.items()
+        if call_id in completed_call_ids
+    }
+
+
+def _repeats_completed_tool_call(
+    msg: "ChatCompletionMessage",
+    messages: Optional[List[dict]],
+) -> bool:
+    completed = _completed_tool_signatures(messages)
+    if not completed or not msg.tool_calls:
+        return False
+
+    return all(
+        (tool_call.function.name, str(tool_call.function.arguments)) in completed
+        for tool_call in msg.tool_calls
+    )
 
 
 def _make_tool_error(
@@ -229,6 +313,18 @@ def build_retry_kw(
             msg=msg,
             assistant_content=assistant_content,
         )
+    elif retry_reason == RETRY_REASON_REPEATED_COMPLETED_TOOL:
+        retry_messages = list(kw.get("messages", []))
+        retry_messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "The tool call you just requested has already completed and "
+                    "its result is present in the conversation history. Do not "
+                    "call it again. Answer using the completed tool result."
+                ),
+            },
+        )
     else:
         # Default: tool_choice_required case
         retry_messages = list(kw.get("messages", []))
@@ -248,13 +344,16 @@ def build_retry_kw(
     # Create retry request
     retry_kw = dict(kw)
     retry_kw["messages"] = retry_messages
+    if retry_reason == RETRY_REASON_REPEATED_COMPLETED_TOOL:
+        retry_kw.pop("tools", None)
+        retry_kw.pop("tool_choice", None)
     return retry_kw
 
 
 def _check_anthropic_postprocessing(
     *,
     response: "ChatCompletion",
-    original_tool_choice: Optional[str],
+    original_tool_choice: Optional[Any],
     reasoning_effort: Optional[str],
     tools: Optional[List[dict]] = None,
 ) -> Tuple[bool, Optional[str]]:
@@ -293,6 +392,46 @@ def _check_anthropic_postprocessing(
     return False, None
 
 
+def _check_soft_forced_tool_choice_postprocessing(
+    *,
+    response: "ChatCompletion",
+    original_tool_choice: Optional[Any],
+    tools: Optional[List[dict]] = None,
+    request_messages: Optional[List[dict]] = None,
+    original_request_messages: Optional[List[dict]] = None,
+) -> Tuple[bool, Optional[str]]:
+    msg = response.choices[0].message
+
+    if msg.tool_calls:
+        valid_names = set(_get_valid_tool_names(tools))
+        for tool_call in msg.tool_calls:
+            if tool_call.function.name not in valid_names:
+                return True, RETRY_REASON_INVALID_TOOL_NAME
+
+        if original_tool_choice in (None, "auto") and _repeats_completed_tool_call(
+            msg,
+            original_request_messages,
+        ):
+            return True, RETRY_REASON_REPEATED_COMPLETED_TOOL
+
+    if original_tool_choice == "required" and not msg.tool_calls:
+        if (
+            not _get_valid_tool_names(tools)
+            and msg.content
+            and msg.content.strip()
+            and _has_tool_result_history(request_messages)
+        ):
+            return False, None
+        return True, RETRY_REASON_TOOL_CHOICE_REQUIRED
+
+    required_tool_name = _forced_tool_name(original_tool_choice)
+    if required_tool_name is not None:
+        if required_tool_name not in _called_tool_names(msg):
+            return True, RETRY_REASON_TOOL_CHOICE_REQUIRED
+
+    return False, None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # response_format schema validation retry
 # ─────────────────────────────────────────────────────────────────────────────
@@ -310,7 +449,7 @@ def _get_response_format_model(
     kw: dict,
 ) -> Optional[Type[BaseModel]]:
     """Extract the Pydantic model from the request kwargs, if present."""
-    rf = kw.get("response_format")
+    rf = kw.get("response_format") or kw.get("_unillm_response_format")
     if rf is None:
         return None
     # response_format may be the Pydantic class directly

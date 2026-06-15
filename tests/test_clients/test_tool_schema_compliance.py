@@ -14,9 +14,13 @@ don't appear in the client's message history.
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 import unillm
 from unillm.clients.provider_postprocessing import (
     RETRY_REASON_INVALID_TOOL_NAME,
+    RETRY_REASON_REPEATED_COMPLETED_TOOL,
+    RETRY_REASON_TOOL_CHOICE_REQUIRED,
     build_retry_kw,
     check_needs_postprocessing,
 )
@@ -76,7 +80,7 @@ def test_anthropic_no_tool_name_constraint():
     The intermediate retry messages should NOT appear in the client's history.
     """
     client = unillm.Unify(
-        "claude-4.5-opus@anthropic",
+        "claude-4.8-opus@anthropic",
         cache=True,
         stateful=True,  # Enable stateful to test history cleanup
     )
@@ -142,7 +146,7 @@ def test_anthropic_no_tool_name_constraint_with_thinking():
     The intermediate retry messages should NOT appear in the client's history.
     """
     client = unillm.Unify(
-        "claude-4.5-opus@anthropic",
+        "claude-4.8-opus@anthropic",
         cache=True,
         stateful=True,  # Enable stateful to test history cleanup
     )
@@ -418,6 +422,199 @@ def test_check_needs_postprocessing_detects_tool_calls_with_empty_tools():
         "but the model returned tool_calls"
     )
     assert retry_reason == RETRY_REASON_INVALID_TOOL_NAME
+
+
+@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+def test_soft_forced_tool_choice_retries_text_only_response(provider):
+    mock_message = MagicMock()
+    mock_message.tool_calls = None
+    mock_message.content = "I can answer directly."
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=mock_response,
+        provider=provider,
+        original_tool_choice="required",
+        reasoning_effort=None,
+        tools=[TOOL_A],
+    )
+
+    assert needs_retry
+    assert retry_reason == RETRY_REASON_TOOL_CHOICE_REQUIRED
+
+
+@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+def test_soft_forced_required_retries_final_answer_when_tools_remain(provider):
+    mock_message = MagicMock()
+    mock_message.tool_calls = None
+    mock_message.content = "call 1"
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=mock_response,
+        provider=provider,
+        original_tool_choice="required",
+        reasoning_effort=None,
+        tools=[TOOL_A],
+        request_messages=[
+            {"role": "user", "content": "Call tool_a, then answer."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "tool_a", "arguments": "{}"},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "2"},
+        ],
+    )
+
+    assert needs_retry
+    assert retry_reason == RETRY_REASON_TOOL_CHOICE_REQUIRED
+
+
+@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+def test_soft_forced_required_allows_final_answer_after_tools_removed(provider):
+    mock_message = MagicMock()
+    mock_message.tool_calls = None
+    mock_message.content = "2"
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=mock_response,
+        provider=provider,
+        original_tool_choice="required",
+        reasoning_effort=None,
+        tools=[],
+        request_messages=[
+            {"role": "user", "content": "Call tool_a, then answer."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "tool_a", "arguments": "{}"},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "2"},
+        ],
+    )
+
+    assert not needs_retry
+    assert retry_reason is None
+
+
+def test_xiaomi_auto_retries_repeated_completed_tool_call_without_tools():
+    mock_tool_call = MagicMock()
+    mock_tool_call.function.name = "tool_a"
+    mock_tool_call.function.arguments = "{}"
+
+    mock_message = MagicMock()
+    mock_message.tool_calls = [mock_tool_call]
+    mock_message.content = ""
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    request_kw = {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Call tool_a and then answer with its result.",
+            },
+        ],
+        "tools": [TOOL_A],
+    }
+    original_messages = [
+        *request_kw["messages"],
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "tool_a", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": '"done"'},
+    ]
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=mock_response,
+        provider="xiaomi-mimo",
+        original_tool_choice=None,
+        reasoning_effort=None,
+        tools=[TOOL_A],
+        request_messages=request_kw["messages"],
+        original_request_messages=original_messages,
+    )
+
+    assert needs_retry
+    assert retry_reason == RETRY_REASON_REPEATED_COMPLETED_TOOL
+
+    retry_kw = build_retry_kw(
+        kw=request_kw,
+        response=mock_response,
+        retry_reason=retry_reason,
+    )
+
+    assert "tools" not in retry_kw
+    assert "tool_choice" not in retry_kw
+    assert "already completed" in retry_kw["messages"][-1]["content"]
+
+
+@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+def test_soft_forced_tool_choice_retries_wrong_tool_response(provider):
+    mock_tool_call = MagicMock()
+    mock_tool_call.function.name = "search"
+
+    mock_message = MagicMock()
+    mock_message.tool_calls = [mock_tool_call]
+    mock_message.content = None
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=mock_response,
+        provider=provider,
+        original_tool_choice={"type": "function", "function": {"name": "tool_a"}},
+        reasoning_effort=None,
+        tools=[TOOL_A, TOOL_SEARCH],
+    )
+
+    assert needs_retry
+    assert retry_reason == RETRY_REASON_TOOL_CHOICE_REQUIRED
 
 
 def test_build_retry_kw_no_tools_returns_tool_result_with_text_instruction():

@@ -2,10 +2,15 @@
 
 import json
 
+from pydantic import BaseModel
+
 from unillm.clients.provider_preprocessing import (
     CACHE_CONTROL_EPHEMERAL,
+    COMPLETED_TOOL_CONTEXT_FOOTER,
+    COMPLETED_TOOL_CONTEXT_HEADER,
     THINKING_COMPLIANCE_CONTEXT_HEADER,
     THINKING_COMPLIANCE_CONTEXT_FOOTER,
+    TOOL_CHOICE_REQUIRED_INSTRUCTION,
     _apply_anthropic_caching,
     _apply_thinking_compliance,
     _transform_tool_calls_to_context,
@@ -189,6 +194,189 @@ class TestApplyAnthropicCachingSystemMessage:
         msg = kw["messages"][0]
         # Falls through to string case since list is empty
         assert msg.get("cache_control") == CACHE_CONTROL_EPHEMERAL
+
+
+class TestSoftToolChoiceCompliance:
+    def test_minimax_required_tool_choice_gets_instruction(self):
+        kw = {
+            "model": "minimax/MiniMax-M3",
+            "messages": [{"role": "user", "content": "Do it."}],
+            "tools": [{"type": "function", "function": {"name": "tool_a"}}],
+            "tool_choice": "required",
+        }
+
+        apply_provider_preprocessing(kw, "minimax")
+
+        assert kw["tool_choice"] == "auto"
+        assert kw["messages"][0] == {
+            "role": "system",
+            "content": TOOL_CHOICE_REQUIRED_INSTRUCTION,
+        }
+
+    def test_xiaomi_explicit_tool_choice_gets_named_instruction(self):
+        kw = {
+            "model": "xiaomi_mimo/mimo-v2.5-pro",
+            "messages": [{"role": "user", "content": "Do it."}],
+            "tools": [{"type": "function", "function": {"name": "tool_a"}}],
+            "tool_choice": {"type": "function", "function": {"name": "tool_a"}},
+        }
+
+        apply_provider_preprocessing(kw, "xiaomi-mimo")
+
+        assert kw["tool_choice"] == "auto"
+        assert kw["messages"][0]["role"] == "system"
+        assert "MUST call the `tool_a` tool" in kw["messages"][0]["content"]
+
+    def test_xiaomi_completed_tool_calls_become_context(self):
+        kw = {
+            "model": "xiaomi_mimo/mimo-v2.5",
+            "messages": [
+                {"role": "user", "content": "Call get_id."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {"name": "get_id", "arguments": "{}"},
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_123",
+                    "content": "xK7-pQ9-mR2",
+                },
+            ],
+        }
+
+        apply_provider_preprocessing(kw, "xiaomi-mimo")
+
+        assert [msg["role"] for msg in kw["messages"]] == ["user", "user"]
+        assert kw["messages"][1]["content"].startswith(
+            COMPLETED_TOOL_CONTEXT_HEADER,
+        )
+        assert "xK7-pQ9-mR2" in kw["messages"][1]["content"]
+        assert "Do not repeat a tool call" in kw["messages"][1]["content"]
+        assert kw["messages"][1]["content"].endswith(COMPLETED_TOOL_CONTEXT_FOOTER)
+
+    def test_xiaomi_completed_status_tool_calls_become_terminal_context(self):
+        kw = {
+            "model": "xiaomi_mimo/mimo-v2.5",
+            "messages": [
+                {"role": "user", "content": "Run fast_task and slow_task."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_fast",
+                            "type": "function",
+                            "function": {"name": "fast_task", "arguments": "{}"},
+                        },
+                        {
+                            "id": "call_slow",
+                            "type": "function",
+                            "function": {"name": "slow_task", "arguments": "{}"},
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_fast",
+                    "name": "fast_task",
+                    "content": (
+                        '{"_placeholder":"completed","result_call_id":'
+                        '"call_fast_completed"}'
+                    ),
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_slow",
+                    "name": "slow_task",
+                    "content": '{"_placeholder":"pending"}',
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_fast_completed",
+                            "type": "function",
+                            "function": {
+                                "name": "check_status_call_fast",
+                                "arguments": "{}",
+                            },
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_fast_completed",
+                    "name": "check_status_call_fast",
+                    "content": "FAST_RESULT",
+                },
+            ],
+        }
+
+        apply_provider_preprocessing(kw, "xiaomi-mimo")
+
+        assert [msg["role"] for msg in kw["messages"]] == ["user", "user", "user"]
+        first_context = kw["messages"][1]["content"]
+        second_context = kw["messages"][2]["content"]
+        assert first_context.startswith(COMPLETED_TOOL_CONTEXT_HEADER)
+        assert second_context.startswith(COMPLETED_TOOL_CONTEXT_HEADER)
+        assert "treat pending entries as already in flight" in first_context
+        assert "FAST_RESULT" in second_context
+        assert "check_status_call_fast" in second_context
+
+    def test_xiaomi_completed_image_tool_context_ends_with_instruction_text(self):
+        image_block = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,abc123"},
+        }
+        kw = {
+            "model": "xiaomi_mimo/mimo-v2.5",
+            "tools": [
+                {"type": "function", "function": {"name": "image_tool"}},
+                {"type": "function", "function": {"name": "compress_context"}},
+            ],
+            "messages": [
+                {"role": "user", "content": "Call image_tool, then answer."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_img",
+                            "type": "function",
+                            "function": {"name": "image_tool", "arguments": "{}"},
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_img",
+                    "name": "image_tool",
+                    "content": [
+                        {"type": "text", "text": '{"status":"ok"}'},
+                        image_block,
+                    ],
+                },
+            ],
+        }
+
+        apply_provider_preprocessing(kw, "xiaomi-mimo")
+
+        content = kw["messages"][1]["content"]
+        assert isinstance(content, list)
+        assert content[0]["type"] == "text"
+        assert content[1] == image_block
+        assert content[-1]["type"] == "text"
+        assert "image(s) above" in content[-1]["text"]
+        assert "Do not call" in content[-1]["text"]
+        assert "tools" not in kw
 
 
 class TestApplyAnthropicCachingTools:
@@ -406,6 +594,148 @@ class TestInternalAnnotationStripping:
                         f"Internal annotation leaked on content block: "
                         f"{[k for k in block if k.startswith('_')]}"
                     )
+
+
+class TestAdaptiveThinking:
+    def test_claude_opus_48_uses_adaptive_thinking_payload(self):
+        kw = {
+            "model": "anthropic/claude-opus-4-8",
+            "reasoning_effort": "high",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        apply_provider_preprocessing(kw, "anthropic")
+
+        assert "reasoning_effort" not in kw
+        assert kw["thinking"] == {"type": "adaptive"}
+        assert kw["output_config"] == {"effort": "high"}
+
+    def test_claude_opus_48_disables_thinking_for_response_format(self):
+        kw = {
+            "model": "anthropic/claude-opus-4-8",
+            "reasoning_effort": "high",
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        apply_provider_preprocessing(kw, "anthropic")
+
+        assert "reasoning_effort" not in kw
+        assert "thinking" not in kw
+        assert "output_config" not in kw
+
+    def test_other_anthropic_models_keep_legacy_reasoning_effort(self):
+        kw = {
+            "model": "anthropic/claude-opus-4-6",
+            "reasoning_effort": "high",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        apply_provider_preprocessing(kw, "anthropic")
+
+        assert kw["reasoning_effort"] == "high"
+        assert "extra_body" not in kw
+
+
+class TestDeepSeekThinkingCompliance:
+    class _Answer(BaseModel):
+        answer: str
+
+    _TOOL = {
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "Look up a value.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    }
+
+    def test_assistant_messages_get_empty_reasoning_content(self):
+        kw = {
+            "model": "deepseek/deepseek-v4-pro",
+            "reasoning_effort": "high",
+            "messages": [
+                {"role": "user", "content": "call tool"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {"name": "tool", "arguments": "{}"},
+                        },
+                    ],
+                },
+            ],
+        }
+
+        apply_provider_preprocessing(kw, "deepseek")
+
+        assert kw["messages"][1]["reasoning_content"] == ""
+
+    def test_assistant_messages_get_empty_reasoning_content_without_reasoning_effort(
+        self,
+    ):
+        kw = {
+            "model": "deepseek/deepseek-v4-pro",
+            "messages": [
+                {"role": "user", "content": "call tool"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {"name": "tool", "arguments": "{}"},
+                        },
+                    ],
+                },
+            ],
+        }
+
+        apply_provider_preprocessing(kw, "deepseek")
+
+        assert kw["messages"][1]["reasoning_content"] == ""
+
+    def test_response_format_becomes_prompt_instruction(self):
+        kw = {
+            "model": "deepseek/deepseek-v4-pro",
+            "response_format": self._Answer,
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        apply_provider_preprocessing(kw, "deepseek")
+
+        assert "response_format" not in kw
+        assert kw["messages"][0]["role"] == "system"
+        assert "valid JSON only" in kw["messages"][0]["content"]
+
+    def test_required_tool_choice_is_downgraded_to_auto(self):
+        kw = {
+            "model": "deepseek/deepseek-v4-pro",
+            "messages": [{"role": "user", "content": "Call a tool"}],
+            "tools": [self._TOOL],
+            "tool_choice": "required",
+        }
+
+        apply_provider_preprocessing(kw, "deepseek")
+
+        assert kw["tool_choice"] == "auto"
+        assert kw["messages"][0]["role"] == "system"
+        assert TOOL_CHOICE_REQUIRED_INSTRUCTION in kw["messages"][0]["content"]
+
+    def test_explicit_tool_choice_is_downgraded_to_auto(self):
+        kw = {
+            "model": "deepseek/deepseek-v4-pro",
+            "messages": [{"role": "user", "content": "Call lookup"}],
+            "tools": [self._TOOL],
+            "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        }
+
+        apply_provider_preprocessing(kw, "deepseek")
+
+        assert kw["tool_choice"] == "auto"
+        assert "lookup" in kw["messages"][0]["content"]
 
 
 # A short stand-in for a real base64 screenshot (~200 chars).

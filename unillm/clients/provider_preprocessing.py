@@ -21,11 +21,29 @@ THINKING_PREFILL_EXPLANATION = (
 
 THINKING_COMPLIANCE_CONTEXT_HEADER = "[Prior tool execution context]"
 THINKING_COMPLIANCE_CONTEXT_FOOTER = "[Continue from here]"
+COMPLETED_TOOL_CONTEXT_HEADER = (
+    "[Prior tool execution context]\n"
+    "The entries below are authoritative records of tool calls that were already "
+    "started in prior turns. Do not repeat a tool call solely to obtain a result "
+    "that is already present here. Treat completed results as final, treat "
+    "pending entries as already in flight, and continue from this state."
+)
+COMPLETED_TOOL_CONTEXT_FOOTER = (
+    "[Continue from the tool execution state above. If the requested work is "
+    "complete, answer the user instead of re-calling completed tools.]"
+)
+COMPLETED_TOOL_IMAGE_CONTEXT_FOOTER = (
+    "The image(s) above are already part of completed tool results. Do not call "
+    "the same image-producing tool again. Answer using the completed image "
+    "result and text context above."
+)
 
 TOOL_CHOICE_REQUIRED_INSTRUCTION = (
     "IMPORTANT: You MUST call a tool on this turn. A tool call is required - "
     "do not respond with text only. Select the most appropriate tool and call it."
 )
+
+SOFT_FORCED_TOOL_CHOICE_PROVIDERS = {"deepseek", "minimax", "xiaomi-mimo"}
 
 
 def _move_system_messages_to_front(
@@ -94,6 +112,7 @@ def _transform_tool_calls_to_context(
     *,
     context_header: str = THINKING_COMPLIANCE_CONTEXT_HEADER,
     context_footer: str = THINKING_COMPLIANCE_CONTEXT_FOOTER,
+    image_context_footer: Optional[str] = None,
     predicate: Optional[Callable[[Dict[str, Any]], bool]] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -162,6 +181,8 @@ def _transform_tool_calls_to_context(
                     {"type": "text", "text": context_text},
                     *all_images,
                 ]
+                if image_context_footer is not None:
+                    content.append({"type": "text", "text": image_context_footer})
                 result.append({"role": "user", "content": content})
             else:
                 result.append({"role": "user", "content": context_text})
@@ -194,6 +215,32 @@ def _apply_thinking_compliance(
         return messages
 
     return _transform_tool_calls_to_context(messages)
+
+
+def _transform_completed_tool_calls_to_context(
+    messages: List[Dict[str, Any]],
+    *,
+    context_header: str = THINKING_COMPLIANCE_CONTEXT_HEADER,
+    context_footer: str = THINKING_COMPLIANCE_CONTEXT_FOOTER,
+    image_context_footer: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    completed_call_message_ids = {
+        id(msg)
+        for idx, msg in enumerate(messages[:-1])
+        if msg.get("role") == "assistant"
+        and msg.get("tool_calls")
+        and messages[idx + 1].get("role") == "tool"
+    }
+    if not completed_call_message_ids:
+        return messages
+
+    return _transform_tool_calls_to_context(
+        messages,
+        context_header=context_header,
+        context_footer=context_footer,
+        image_context_footer=image_context_footer,
+        predicate=lambda msg: id(msg) in completed_call_message_ids,
+    )
 
 
 def _strip_thinking_blocks(
@@ -559,6 +606,136 @@ def _apply_context_1m_beta(kw: Dict[str, Any]) -> None:
         kw["extra_headers"] = headers
 
 
+def _uses_anthropic_adaptive_thinking(kw: Dict[str, Any]) -> bool:
+    from ..endpoints.anthropic import ADAPTIVE_THINKING_MODELS
+
+    return kw.get("model") in ADAPTIVE_THINKING_MODELS
+
+
+def _apply_anthropic_adaptive_thinking(kw: Dict[str, Any]) -> None:
+    effort = kw.pop("reasoning_effort", None)
+    if effort is None or not _uses_anthropic_adaptive_thinking(kw):
+        if effort is not None:
+            kw["reasoning_effort"] = effort
+        return
+
+    if kw.get("response_format") is not None:
+        return
+
+    kw["thinking"] = {"type": "adaptive"}
+    output_config = dict(kw.get("output_config") or {})
+    output_config["effort"] = effort
+    kw["output_config"] = output_config
+
+
+def _apply_deepseek_thinking_compliance(kw: Dict[str, Any]) -> None:
+    for msg in kw.get("messages", []):
+        if msg.get("role") == "assistant" and "reasoning_content" not in msg:
+            msg["reasoning_content"] = ""
+
+
+def _apply_deepseek_response_format_instructions(kw: Dict[str, Any]) -> None:
+    response_format = kw.pop("response_format", None)
+    if response_format is None:
+        return
+
+    if isinstance(response_format, type) and hasattr(
+        response_format,
+        "model_json_schema",
+    ):
+        schema = response_format.model_json_schema()
+    elif isinstance(response_format, dict):
+        schema = response_format
+    else:
+        schema = {"type": "object"}
+
+    instruction = (
+        "Respond with valid JSON only, with no markdown or commentary. "
+        "The JSON must conform to this schema:\n"
+        f"{json.dumps(schema, indent=2)}"
+    )
+    kw["messages"].insert(0, {"role": "system", "content": instruction})
+
+
+def _forced_tool_name(tool_choice: Any) -> Optional[str]:
+    if not isinstance(tool_choice, dict):
+        return None
+    function_choice = tool_choice.get("function")
+    if not isinstance(function_choice, dict):
+        return None
+    name = function_choice.get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def _is_forced_tool_choice(tool_choice: Any) -> bool:
+    return tool_choice == "required" or _forced_tool_name(tool_choice) is not None
+
+
+def _tool_choice_instruction(tool_choice: Any) -> str:
+    name = _forced_tool_name(tool_choice)
+    if name is None:
+        return TOOL_CHOICE_REQUIRED_INSTRUCTION
+    return (
+        f"IMPORTANT: You MUST call the `{name}` tool on this turn. "
+        "Do not respond with text only and do not choose a different tool."
+    )
+
+
+def _apply_soft_forced_tool_choice_compliance(kw: Dict[str, Any]) -> None:
+    tool_choice = kw.get("tool_choice")
+    if not _is_forced_tool_choice(tool_choice):
+        return
+
+    kw["tool_choice"] = "auto"
+    messages = kw.get("messages", [])
+    messages.insert(
+        0,
+        {"role": "system", "content": _tool_choice_instruction(tool_choice)},
+    )
+    kw["messages"] = messages
+
+
+def _completed_image_tool_names(messages: List[Dict[str, Any]]) -> set[str]:
+    call_id_to_name = {}
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        for tool_call in msg.get("tool_calls") or []:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function")
+            if not isinstance(function, dict):
+                continue
+            call_id = tool_call.get("id")
+            name = function.get("name")
+            if isinstance(call_id, str) and isinstance(name, str) and name:
+                call_id_to_name[call_id] = name
+
+    names = set()
+    for msg in messages:
+        if msg.get("role") != "tool":
+            continue
+        _, images = _extract_image_blocks(msg.get("content", ""))
+        if not images:
+            continue
+        name = msg.get("name") or call_id_to_name.get(msg.get("tool_call_id"))
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
+
+
+def _suppress_tools_after_completed_image_result(
+    kw: Dict[str, Any],
+    messages: List[Dict[str, Any]],
+) -> None:
+    completed_image_tools = _completed_image_tool_names(messages)
+    if not completed_image_tools:
+        return
+
+    kw.pop("tools", None)
+    kw.pop("tool_choice", None)
+
+
 def apply_provider_preprocessing(
     kw: Dict[str, Any],
     provider: Optional[str],
@@ -571,6 +748,27 @@ def apply_provider_preprocessing(
 
     messages = copy.deepcopy(messages)
     kw["messages"] = messages
+
+    if provider == "deepseek":
+        _apply_deepseek_response_format_instructions(kw)
+        _apply_deepseek_thinking_compliance(kw)
+        _apply_soft_forced_tool_choice_compliance(kw)
+        _strip_internal_annotations(kw)
+        return kw
+
+    if provider in SOFT_FORCED_TOOL_CHOICE_PROVIDERS:
+        if provider == "xiaomi-mimo":
+            _suppress_tools_after_completed_image_result(kw, messages)
+            messages = _transform_completed_tool_calls_to_context(
+                messages,
+                context_header=COMPLETED_TOOL_CONTEXT_HEADER,
+                context_footer=COMPLETED_TOOL_CONTEXT_FOOTER,
+                image_context_footer=COMPLETED_TOOL_IMAGE_CONTEXT_FOOTER,
+            )
+            kw["messages"] = messages
+        _apply_soft_forced_tool_choice_compliance(kw)
+        _strip_internal_annotations(kw)
+        return kw
 
     if provider != "anthropic":
         _strip_internal_annotations(kw)
@@ -637,6 +835,7 @@ def apply_provider_preprocessing(
         kw["messages"] = messages
 
     _apply_context_1m_beta(kw)
+    _apply_anthropic_adaptive_thinking(kw)
 
     if prompt_caching:
         _apply_anthropic_caching(kw, prompt_caching)

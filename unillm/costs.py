@@ -1,6 +1,7 @@
 """Cost computation using LiteLLM's pricing data."""
 
 import os
+import re
 from typing import Optional, Union
 
 import litellm
@@ -58,6 +59,9 @@ def _get_model_info(model: str) -> dict:
     Raises:
         ValueError: If the model is not found in LiteLLM's pricing data.
     """
+    from .endpoints.utils import ensure_endpoints_imported
+
+    ensure_endpoints_imported()
     normalized = _normalize_model_name(model)
     try:
         return litellm.get_model_info(normalized)
@@ -65,12 +69,14 @@ def _get_model_info(model: str) -> dict:
         raise ValueError(f"Could not find pricing info for model '{model}': {e}")
 
 
-import re
-
 _TIER_RE = re.compile(r"^(.+)_above_(\d+)k?_tokens$")
 
 
-def _get_tiered_rate(model_info: dict, base_key: str, prompt_tokens: int) -> float:
+def _get_tiered_rate(
+    model_info: dict,
+    base_key: str,
+    prompt_tokens: int,
+) -> tuple[float, int | None]:
     """Return the effective per-token rate, accounting for tier thresholds.
 
     LiteLLM encodes tiered pricing as ``{base_key}_above_{N}k_tokens``
@@ -97,10 +103,26 @@ def _get_tiered_rate(model_info: dict, base_key: str, prompt_tokens: int) -> flo
     return base_rate, None
 
 
+def _get_cache_read_rate(
+    model_info: dict,
+    prompt_tokens: int,
+) -> tuple[float, int | None]:
+    """Return the cache-read prompt token rate when the provider exposes one."""
+
+    for base_key in (
+        "cache_read_input_token_cost",
+        "input_cost_per_token_cache_hit",
+    ):
+        if model_info.get(base_key) is not None:
+            return _get_tiered_rate(model_info, base_key, prompt_tokens)
+    return 0, None
+
+
 def _compute_text_token_cost(
     model_info: dict,
     prompt_tokens: int,
     completion_tokens: int,
+    cached_tokens: int = 0,
 ) -> float:
     """Compute text token cost with tiered long-context pricing.
 
@@ -108,35 +130,43 @@ def _compute_text_token_cost(
     (e.g. Anthropic at 200k tokens).  This function discovers tier
     boundaries from the model_info keys automatically.
     """
+    cached_tokens = max(0, min(cached_tokens, prompt_tokens))
+    billable_input_tokens = prompt_tokens - cached_tokens
+
     input_rate = model_info.get("input_cost_per_token", 0)
     input_rate_tier, input_threshold = _get_tiered_rate(
         model_info,
         "input_cost_per_token",
         prompt_tokens,
     )
+    cache_read_rate, _ = _get_cache_read_rate(model_info, prompt_tokens)
     output_rate_tier, _ = _get_tiered_rate(
         model_info,
         "output_cost_per_token",
         prompt_tokens,
     )
 
-    if input_threshold is not None:
+    if input_threshold is not None and billable_input_tokens:
+        threshold_tokens = min(input_threshold, billable_input_tokens)
         input_cost = (
-            input_threshold * input_rate
-            + (prompt_tokens - input_threshold) * input_rate_tier
+            threshold_tokens * input_rate
+            + max(0, billable_input_tokens - input_threshold) * input_rate_tier
         )
     else:
-        input_cost = prompt_tokens * input_rate
+        input_cost = billable_input_tokens * input_rate
+
+    cache_read_cost = cached_tokens * cache_read_rate
 
     output_cost = completion_tokens * output_rate_tier
 
-    return input_cost + output_cost
+    return input_cost + cache_read_cost + output_cost
 
 
 def compute_cost(
     model: str,
     prompt_tokens: int,
     completion_tokens: int,
+    cached_tokens: int = 0,
 ) -> float:
     """
     Compute the cost of an LLM request using LiteLLM's pricing data.
@@ -153,7 +183,12 @@ def compute_cost(
         ValueError: If the model is not found in LiteLLM's pricing data.
     """
     model_info = _get_model_info(model)
-    return _compute_text_token_cost(model_info, prompt_tokens, completion_tokens)
+    return _compute_text_token_cost(
+        model_info,
+        prompt_tokens,
+        completion_tokens,
+        cached_tokens=cached_tokens,
+    )
 
 
 def compute_cost_from_response(
@@ -189,11 +224,22 @@ def compute_cost_from_response(
     else:
         return None
 
+    cached_tokens = _get_nested_attr(
+        usage,
+        "prompt_tokens_details",
+        "cached_tokens",
+    ) or _get_nested_attr(usage, "cache_read_input_tokens")
+
     if prompt_tokens == 0 and completion_tokens == 0:
         return None
 
     try:
-        return compute_cost(model, prompt_tokens, completion_tokens)
+        return compute_cost(
+            model,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens=cached_tokens,
+        )
     except ValueError:
         # Model not in LiteLLM's pricing database - skip cost tracking
         return None
@@ -314,4 +360,15 @@ def compute_full_cost_from_usage(model: str, usage: Union[dict, object]) -> floa
         prompt_tokens = _get_nested_attr(usage, "input_tokens")
         completion_tokens = _get_nested_attr(usage, "output_tokens")
 
-    return _compute_text_token_cost(model_info, prompt_tokens, completion_tokens)
+    cached_tokens = _get_nested_attr(
+        usage,
+        "prompt_tokens_details",
+        "cached_tokens",
+    ) or _get_nested_attr(usage, "cache_read_input_tokens")
+
+    return _compute_text_token_cost(
+        model_info,
+        prompt_tokens,
+        completion_tokens,
+        cached_tokens=cached_tokens,
+    )
