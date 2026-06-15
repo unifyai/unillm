@@ -1,8 +1,10 @@
 # global
 import abc
 import asyncio
+import copy
 import inspect
 import logging
+import os
 import re
 
 from typing import (
@@ -39,6 +41,43 @@ _OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS = ("parallel_tool_calls", "tool_choice")
 _OPENAI_GPT_MINOR_VERSION_RE = re.compile(r"^gpt-5\.(?P<minor>\d+)(?:[-.].*)?$")
 
 
+def _enforce_parallel_tool_call_response_limit(
+    chat_completion: Any,
+    parallel_tool_calls: Optional[bool],
+) -> bool:
+    if parallel_tool_calls is not False or chat_completion is None:
+        return False
+
+    try:
+        message = chat_completion.choices[0].message
+        tool_calls = message.tool_calls or []
+    except Exception:
+        return False
+
+    if len(tool_calls) <= 1:
+        return False
+
+    message.tool_calls = tool_calls[:1]
+    return True
+
+
+def _normalize_assistant_message_content(chat_completion: Any) -> bool:
+    try:
+        content = chat_completion.choices[0].message.content
+    except Exception:
+        return False
+
+    if not isinstance(content, str):
+        return False
+
+    normalized = content.strip()
+    if normalized == content:
+        return False
+
+    chat_completion.choices[0].message.content = normalized
+    return True
+
+
 def _safe_deduct_credits(
     amount: float,
     *,
@@ -63,6 +102,8 @@ def _safe_deduct_credits(
         detail["provider_cost"] = provider_cost
     if ctx.source:
         detail["source"] = ctx.source
+    if ctx.label:
+        detail["label"] = ctx.label
 
     try:
         unify.deduct_credits(
@@ -117,8 +158,8 @@ def _copy_tools_for_responses_bridge(tools: Iterable[Any] | None) -> list[Any] |
     return [_copy_tool_for_responses_bridge(tool) for tool in tools]
 
 
-def _allow_responses_bridge_params(kw: dict) -> None:
-    """Preserve chat tool controls that LiteLLM otherwise drops before bridging."""
+def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
+    """Preserve OpenAI-compatible params that LiteLLM provider metadata omits."""
     current = kw.get("allowed_openai_params")
     if current is None:
         allowed: set[str] = set()
@@ -127,8 +168,21 @@ def _allow_responses_bridge_params(kw: dict) -> None:
     else:
         allowed = {str(param) for param in current}
 
-    allowed.update(_OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS)
+    allowed.update(params)
     kw["allowed_openai_params"] = sorted(allowed)
+
+
+def _allow_responses_bridge_params(kw: dict) -> None:
+    """Preserve chat tool controls that LiteLLM otherwise drops before bridging."""
+    _allow_openai_params(kw, _OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS)
+
+
+def _xiaomi_mimo_token_plan_api_base() -> str | None:
+    api_key = os.environ.get("XIAOMI_MIMO_API_KEY", "")
+    for region in ("sgp", "cn", "ams"):
+        if api_key.startswith(f"tp-{region}"):
+            return f"https://token-plan-{region}.xiaomimimo.com/v1"
+    return None
 
 
 def _prepare_provider_request_kw(
@@ -151,6 +205,20 @@ def _prepare_provider_request_kw(
         kw["model"] = f"{_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX}{model}"
         kw["tools"] = _copy_tools_for_responses_bridge(tools)
         _allow_responses_bridge_params(kw)
+
+    if provider == "minimax" and kw.get("api_base") is None:
+        kw["api_base"] = "https://api.minimax.io/v1"
+
+    if provider == "xiaomi-mimo" and kw.get("api_base") is None:
+        api_base = _xiaomi_mimo_token_plan_api_base()
+        if api_base is not None:
+            kw["api_base"] = api_base
+    if provider == "xiaomi-mimo" and tools:
+        _allow_openai_params(kw, ("tools", "tool_choice"))
+        kw.setdefault("tool_choice", "auto")
+        extra_body = dict(kw.get("extra_body") or {})
+        extra_body["thinking"] = {"type": "disabled"}
+        kw["extra_body"] = extra_body
 
     return _canonical_model_for_accounting(str(kw.get("model") or model))
 
@@ -1053,6 +1121,7 @@ class Unify(_UniClient):
                 completion = retry_transient_400_sync(
                     lambda: litellm.completion(**retry_kw),
                 )
+                _normalize_assistant_message_content(completion)
         finally:
             try:
                 body = (
@@ -1104,6 +1173,7 @@ class Unify(_UniClient):
         endpoint: str,
         prompt: "Prompt",
         original_tool_choice: Optional[str],
+        original_request_messages: Optional[List[dict]] = None,
         origin: Optional[str] = None,
     ) -> "ChatCompletion":
         """Run all postprocessing checks, retrying once per check if needed."""
@@ -1122,6 +1192,8 @@ class Unify(_UniClient):
             original_tool_choice=original_tool_choice,
             reasoning_effort=prompt.components.get("reasoning_effort"),
             tools=list(raw_tools) if raw_tools is not None else None,
+            request_messages=kw.get("messages"),
+            original_request_messages=original_request_messages,
         )
         if needs_retry:
             retry_kw = build_retry_kw(
@@ -1175,6 +1247,7 @@ class Unify(_UniClient):
         )
         # Capture original tool_choice before preprocessing may modify it
         original_tool_choice = kw.get("tool_choice")
+        original_request_messages = copy.deepcopy(kw.get("messages"))
 
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
@@ -1243,9 +1316,12 @@ class Unify(_UniClient):
                         chat_completion = retry_transient_400_sync(
                             lambda: litellm.completion(**kw),
                         )
+                        _normalize_assistant_message_content(chat_completion)
                     except litellm.exceptions.APIError as e:
                         llm_error = Exception(e.message)
                         raise llm_error
+                else:
+                    _normalize_assistant_message_content(chat_completion)
 
                 # Determine cache status after resolution
                 if is_cache_enabled:
@@ -1338,7 +1414,12 @@ class Unify(_UniClient):
                 endpoint,
                 prompt,
                 original_tool_choice,
+                original_request_messages,
                 origin=origin,
+            )
+            _enforce_parallel_tool_call_response_limit(
+                chat_completion,
+                prompt.components.get("parallel_tool_calls"),
             )
 
         # Cache the FINAL response (after any post-processing), not intermediate ones
@@ -1461,7 +1542,7 @@ class AsyncUnify(_UniClient):
 
     # Providers whose litellm handler expects an OpenAI SDK client (AsyncOpenAI)
     # as the ``client`` kwarg.  We must NOT pass an AsyncHTTPHandler for these.
-    _OPENAI_SDK_PROVIDERS = frozenset({"openai", "azure", "azure_ai"})
+    _OPENAI_SDK_PROVIDERS = frozenset({"openai", "azure", "azure_ai", "xiaomi-mimo"})
 
     _async_http_client: Optional[AsyncHTTPHandler] = None
     _async_http_client_session = None  # tracks which aiohttp session the handler wraps
@@ -1689,6 +1770,7 @@ class AsyncUnify(_UniClient):
                         **retry_kw,
                     ),
                 )
+                _normalize_assistant_message_content(completion)
         finally:
             try:
                 body = (
@@ -1744,6 +1826,7 @@ class AsyncUnify(_UniClient):
         endpoint: str,
         prompt: "Prompt",
         original_tool_choice: Optional[str],
+        original_request_messages: Optional[List[dict]] = None,
         origin: Optional[str] = None,
     ) -> "ChatCompletion":
         """Run all postprocessing checks, retrying once per check if needed."""
@@ -1762,6 +1845,8 @@ class AsyncUnify(_UniClient):
             original_tool_choice=original_tool_choice,
             reasoning_effort=prompt.components.get("reasoning_effort"),
             tools=list(raw_tools) if raw_tools is not None else None,
+            request_messages=kw.get("messages"),
+            original_request_messages=original_request_messages,
         )
         if needs_retry:
             retry_kw = build_retry_kw(
@@ -1815,6 +1900,7 @@ class AsyncUnify(_UniClient):
         )
         # Capture original tool_choice before preprocessing may modify it
         original_tool_choice = kw.get("tool_choice")
+        original_request_messages = copy.deepcopy(kw.get("messages"))
 
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
@@ -1914,10 +2000,13 @@ class AsyncUnify(_UniClient):
 
                         # Limit check passed (or disabled), wait for LLM result
                         chat_completion = await llm_task
+                        _normalize_assistant_message_content(chat_completion)
                         llm_task = None  # Mark as consumed
                     except litellm.exceptions.APIError as e:
                         llm_error = Exception(e.message)
                         raise llm_error
+                else:
+                    _normalize_assistant_message_content(chat_completion)
 
                 # Determine cache status after resolution
                 if is_cache_enabled:
@@ -2033,7 +2122,12 @@ class AsyncUnify(_UniClient):
                 endpoint,
                 prompt,
                 original_tool_choice,
+                original_request_messages,
                 origin=origin,
+            )
+            _enforce_parallel_tool_call_response_limit(
+                chat_completion,
+                prompt.components.get("parallel_tool_calls"),
             )
 
         # Cache the FINAL response (after any post-processing), not intermediate ones
