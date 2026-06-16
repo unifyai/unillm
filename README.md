@@ -287,6 +287,11 @@ unillm/
 
 ## Local Development
 
+> `unillm` is the LLM access layer, not a runnable system. To run the whole
+> product locally (Orchestra + Unity + Console), use **`unity stack up`** from
+> the [unity repo](https://github.com/unifyai/unity). The steps below are for
+> developing this library itself.
+
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management. By default, local development installs the published [`unifyai`](https://pypi.org/project/unifyai/) package for the persistence/logging dependency.
 
 ### Setup
