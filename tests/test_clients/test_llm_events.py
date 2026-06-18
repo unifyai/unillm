@@ -796,7 +796,7 @@ class TestGlobalLLMEventHook:
         """Global hook should work when hook is set in thread A but event emitted in thread B.
 
         This mimics the production scenario where:
-        - unity.init() sets the hook (in a worker thread via asyncio.to_thread)
+        - droid.init() sets the hook (in a worker thread via asyncio.to_thread)
         - LLM calls happen from the main async context (different thread)
         """
         import concurrent.futures
