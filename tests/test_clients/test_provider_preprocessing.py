@@ -477,7 +477,7 @@ class TestApplyAnthropicCachingMultipleSystemMessages:
     time context), the cache breakpoint must land on the last _static=True block
     across ALL system messages — not just within the last system message.
 
-    This mirrors Unity's async tool loop where:
+    This mirrors Droid's async tool loop where:
       - messages[0]: main prompt (list content with _static annotations)
       - messages[1]: runtime context (string, static per-loop)
       - messages[2]: time context (string, _static=False, changes every turn)

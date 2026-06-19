@@ -1,6 +1,6 @@
 """Billing context for credit deduction attribution.
 
-Host applications (e.g. Unity) set the billing context so that
+Host applications (e.g. Droid) set the billing context so that
 ``_safe_deduct_credits`` can include assistant/user metadata in
 the ledger entry without UniLLM needing direct access to session state.
 
