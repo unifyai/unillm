@@ -78,6 +78,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Clone unify repo (public; no token needed)
+      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unify.git unify-sdk
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -93,6 +96,9 @@ jobs:
         if [ -n "$CLONE_TOKEN" ]; then
           git config --global url."https://x-access-token:${CLONE_TOKEN}@github.com/".insteadOf "https://github.com/"
         fi
+
+    - name: Configure unify path for CI
+      run: sed -i 's|path = "../unify"|path = "./unify-sdk"|g' pyproject.toml
 
     - name: Install deps
       run: uv sync --group dev
@@ -147,6 +153,11 @@ jobs:
       id: orchestra-sha
       run: echo "sha=$(git -C orchestra rev-parse HEAD)" >> $GITHUB_OUTPUT
 
+    # --- Clone unify (needed by all modes for uv sync) ---
+
+    - name: Clone unify repo (public; no token needed)
+      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unify.git unify-sdk
+
     # --- Common setup ---
 
     - name: Set up Python
@@ -199,6 +210,9 @@ jobs:
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
+
+    - name: Configure unify path for CI
+      run: sed -i 's|path = "../unify"|path = "./unify-sdk"|g' pyproject.toml
 
     - name: Install unillm deps
       run: uv sync --group dev
