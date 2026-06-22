@@ -78,14 +78,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Clone unify repo
-      uses: actions/checkout@v4
-      with:
-        repository: unifyai/unify
-        ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        path: unify-sdk
-        token: ${{ secrets.CLONE_TOKEN }}
-        fetch-depth: 1
+    - name: Clone unify repo (public; no token needed)
+      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unify.git unify-sdk
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -161,14 +155,8 @@ jobs:
 
     # --- Clone unify (needed by all modes for uv sync) ---
 
-    - name: Clone unify repo
-      uses: actions/checkout@v4
-      with:
-        repository: unifyai/unify
-        ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        path: unify-sdk
-        token: ${{ secrets.CLONE_TOKEN }}
-        fetch-depth: 1
+    - name: Clone unify repo (public; no token needed)
+      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unify.git unify-sdk
 
     # --- Common setup ---
 
