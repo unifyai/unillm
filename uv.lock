@@ -2040,6 +2040,10 @@ dev = [
     { name = "pytest-timeout" },
     { name = "ruff" },
 ]
+lint = [
+    { name = "autoflake" },
+    { name = "black" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -2062,6 +2066,10 @@ dev = [
     { name = "pytest-dotenv", specifier = ">=0.5.2" },
     { name = "pytest-timeout", specifier = ">=2.3.1" },
     { name = "ruff", specifier = ">=0.15.16" },
+]
+lint = [
+    { name = "autoflake", specifier = ">=2.3.1" },
+    { name = "black", specifier = "==26.5.1" },
 ]
 
 [[package]]
