@@ -7,7 +7,7 @@ These tests verify:
 3. Error handling (callback failures fail open)
 4. SpendingLimitExceededError exception
 
-The actual limit checking logic (HTTP calls to Orchestra) is implemented in Droid.
+The actual limit checking logic (HTTP calls to Orchestra) is implemented in Unity.
 UniLLM simply invokes a registered callback hook and respects its response.
 """
 

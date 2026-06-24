@@ -692,10 +692,10 @@ class TestTraceHierarchy:
         monkeypatch.setattr(logger, "_TRACER", None)
 
         exporter = reset_otel["exporter"]
-        parent_tracer = trace.get_tracer("droid")
+        parent_tracer = trace.get_tracer("unity")
 
-        # Simulate Droid creating a parent span
-        with parent_tracer.start_as_current_span("droid.conductor.ask") as parent:
+        # Simulate Unity creating a parent span
+        with parent_tracer.start_as_current_span("unity.conductor.ask") as parent:
             parent_ctx = parent.get_span_context()
 
             # Now unillm creates a child span
@@ -710,11 +710,11 @@ class TestTraceHierarchy:
         assert len(spans) == 2
 
         # Find the spans
-        droid_span = next(s for s in spans if "droid" in s.name)
+        unity_span = next(s for s in spans if "unity" in s.name)
         llm_span_obj = next(s for s in spans if "LLM" in s.name)
 
         # Verify parent-child relationship
-        assert llm_span_obj.parent.span_id == droid_span.context.span_id
+        assert llm_span_obj.parent.span_id == unity_span.context.span_id
 
     def test_nested_unillm_unify_hierarchy(self, reset_otel, monkeypatch):
         """Tests full hierarchy: parent -> unillm -> unify (simulated)."""
@@ -725,11 +725,11 @@ class TestTraceHierarchy:
         monkeypatch.setattr(logger, "_TRACER", None)
 
         exporter = reset_otel["exporter"]
-        parent_tracer = trace.get_tracer("droid")
+        parent_tracer = trace.get_tracer("unity")
         unify_tracer = trace.get_tracer("unify")
 
-        # Simulate: Droid -> Unillm -> Unify HTTP call
-        with parent_tracer.start_as_current_span("droid.conductor.ask") as droid_span:
+        # Simulate: Unity -> Unillm -> Unify HTTP call
+        with parent_tracer.start_as_current_span("unity.conductor.ask") as unity_span:
             with llm_span("gpt-4@openai", "gpt-4") as unillm_span:
                 # Simulate unify HTTP span (which would be created by unify/utils/http.py)
                 with unify_tracer.start_as_current_span("GET projects") as unify_span:
@@ -739,20 +739,20 @@ class TestTraceHierarchy:
         assert len(spans) == 3
 
         # Find spans by name
-        droid_s = next(s for s in spans if "droid" in s.name)
+        unity_s = next(s for s in spans if "unity" in s.name)
         unillm_s = next(s for s in spans if "LLM" in s.name)
         unify_s = next(s for s in spans if "GET" in s.name)
 
         # Verify hierarchy
         # All same trace
         assert (
-            droid_s.context.trace_id
+            unity_s.context.trace_id
             == unillm_s.context.trace_id
             == unify_s.context.trace_id
         )
 
-        # unillm is child of droid
-        assert unillm_s.parent.span_id == droid_s.context.span_id
+        # unillm is child of unity
+        assert unillm_s.parent.span_id == unity_s.context.span_id
 
         # unify is child of unillm
         assert unify_s.parent.span_id == unillm_s.context.span_id
