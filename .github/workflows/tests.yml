@@ -261,7 +261,11 @@ jobs:
         UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        UNILLM_CACHE: "true"
+        # Normal CI is read-only: it replays the shared LLM cache and never calls
+        # paid provider APIs (a cache miss fails loudly, signalling the cache needs
+        # a refresh). The dedicated llm-cache-refresh.yml workflow is the only place
+        # that writes the cache.
+        UNILLM_CACHE: "read-only"
         UNILLM_CACHE_BACKEND: "local_separate"
         UNILLM_OTEL: "true"
         UNILLM_OTEL_LOG_DIR: ${{ env.LOGS_DIR }}/all
