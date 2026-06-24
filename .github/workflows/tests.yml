@@ -83,7 +83,7 @@ jobs:
 
     - name: Format check (locked black)
       run: |
-        uv sync --only-group lint --no-install-project
+        uv sync --only-group lint --no-install-project --frozen
         uv run --no-sync black --check .
 
   pytest:
