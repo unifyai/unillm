@@ -1,0 +1,118 @@
+name: LLM Cache Refresh
+run-name: LLM cache refresh (${{ inputs.test_path }})
+
+# Dedicated, keyed workflow that (re)populates the shared LLM response cache
+# stored in the GitHub Actions cache (.cache.ndjson). Normal CI runs read-only
+# and never calls paid LLM APIs; this workflow is the only place that writes the
+# cache. Mirrors the pattern in unifyai/droid's llm-cache-refresh.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_path:
+        description: "Test path whose LLM calls to (re)cache"
+        required: false
+        type: string
+        default: "tests/test_clients"
+      confirm_llm_spend:
+        description: "Type LLM_SPEND_OK to acknowledge this calls paid LLM APIs"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: llm-cache-refresh-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    name: Refresh LLM cache
+    runs-on: ubuntu-latest-8-cores
+    # Keyed environment holds the provider API keys (write-only; never in source).
+    environment: unillm-llm-cache-refresh
+    timeout-minutes: 120
+    env:
+      LOGS_DIR: ${{ github.workspace }}/logs
+      # Read existing cache and write misses (the only workflow allowed to write).
+      UNILLM_CACHE: "true"
+      UNILLM_CACHE_BACKEND: "local_separate"
+      UNILLM_LOG_DIR: ${{ github.workspace }}/logs/unillm
+      # Provider keys for the real LLM calls that populate the cache.
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      XIAOMI_MIMO_API_KEY: ${{ secrets.XIAOMI_MIMO_API_KEY }}
+      UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
+    steps:
+    - name: Validate spend control
+      run: |
+        if [ "${{ inputs.confirm_llm_spend }}" != "LLM_SPEND_OK" ]; then
+          echo "Refusing to run: confirm_llm_spend must be LLM_SPEND_OK (got '${{ inputs.confirm_llm_spend }}')." >&2
+          exit 1
+        fi
+
+    - uses: actions/checkout@v4
+
+    - name: Clone unify repo (public; no token needed)
+      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unify.git unify-sdk
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+
+    - name: Configure unify path for CI
+      run: sed -i 's|path = "../unify"|path = "./unify-sdk"|g' pyproject.toml
+
+    - name: Install unillm deps
+      run: uv sync --group dev
+
+    - name: Setup logging directories
+      run: mkdir -p "$LOGS_DIR/unillm" "$LOGS_DIR/all"
+
+    # Restore the existing consolidated cache so we only spend on genuine misses.
+    - name: Restore LLM cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .cache.ndjson
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          cache-ndjson-${{ runner.os }}-
+
+    - name: Run tests to write cache misses
+      run: |
+        set +e
+        # Real LLM calls happen on cache miss and are written before assertions,
+        # so capture writes even if an individual assertion later fails.
+        uv run pytest --timeout=120 -p no:warnings -vv "${{ inputs.test_path }}" 2>&1 | tee pytest_output.txt
+        echo "pytest exit code: ${PIPESTATUS[0]}"
+
+    - name: Consolidate cache writes into .cache.ndjson
+      run: |
+        mkdir -p cache-artifacts/current
+        if [ -f .cache_write.ndjson ]; then
+          cp .cache_write.ndjson cache-artifacts/current/.cache_write.ndjson
+        fi
+        python3 .github/scripts/consolidate_cache.py --artifacts-dir cache-artifacts
+
+    - name: Store consolidated cache
+      uses: actions/cache/save@v4
+      with:
+        path: .cache.ndjson
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    - name: Upload cache diff
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: cache-diff-${{ github.run_id }}
+        path: .cache_write.ndjson
+        if-no-files-found: ignore
+        include-hidden-files: true
+        retention-days: 7
