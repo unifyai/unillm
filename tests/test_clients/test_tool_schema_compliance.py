@@ -83,6 +83,7 @@ def test_anthropic_no_tool_name_constraint():
     client = unillm.Unify(
         "claude-4.8-opus@anthropic",
         cache=SETTINGS.UNILLM_CACHE,
+        cache_backend=SETTINGS.UNILLM_CACHE_BACKEND,
         stateful=True,  # Enable stateful to test history cleanup
     )
 
@@ -149,6 +150,7 @@ def test_anthropic_no_tool_name_constraint_with_thinking():
     client = unillm.Unify(
         "claude-4.8-opus@anthropic",
         cache=SETTINGS.UNILLM_CACHE,
+        cache_backend=SETTINGS.UNILLM_CACHE_BACKEND,
         stateful=True,  # Enable stateful to test history cleanup
     )
 
