@@ -74,7 +74,7 @@ def test_response_format_enforced_despite_contradictory_prompt():
     nudges with "Respond with text content only."  That nudge conflicts with
     response_format -- the response must still be valid JSON.
 
-    This reproduces the exact failure pattern from the droid CI: the retry
+    This reproduces the exact failure pattern from the unity CI: the retry
     after a phantom tool-call returns unstructured prose instead of JSON.
     """
     import unillm

@@ -4,7 +4,7 @@ Lightweight LLM access layer with provider normalization, caching, and observabi
 
 ## What layer is this?
 
-UniLLM is the model-access layer in the wider Droid stack:
+UniLLM is the model-access layer in the wider Unity stack:
 
 ```
          User (Console/Phone/SMS/Email)
@@ -15,7 +15,7 @@ UniLLM is the model-access layer in the wider Droid stack:
     └────┬───────────────────────────────┘
          │
     ┌────┴────┐    ┌─────────┐    ┌─────────┐
-    │  Droid  │    │  Unify  │    │Orchestra│
+    │  Unity  │    │  Unify  │    │Orchestra│
     │ (Brain) │───▶│  (SDK)  │───▶│  (API)  │
     │         │    │         │    │  (DB)   │
     └────┬────┘    └────┬────┘    └────┬────┘
@@ -27,12 +27,12 @@ UniLLM is the model-access layer in the wider Droid stack:
               └───────────┘       └────────────┘
 ```
 
-**This repo (UniLLM)** handles LLM inference for Droid. It normalizes requests across providers (OpenAI, Anthropic, Vertex AI, etc.), provides response caching for test determinism, and can integrate with Unify for logging and billing context.
+**This repo (UniLLM)** handles LLM inference for Unity. It normalizes requests across providers (OpenAI, Anthropic, Vertex AI, etc.), provides response caching for test determinism, and can integrate with Unify for logging and billing context.
 
-If you're here from the Droid quickstart, this is the layer that talks to model providers. OpenAI and Anthropic are the simplest documented paths, but the point of UniLLM is that the provider choice is yours, including other supported providers and compatible local endpoints.
+If you're here from the Unity quickstart, this is the layer that talks to model providers. OpenAI and Anthropic are the simplest documented paths, but the point of UniLLM is that the provider choice is yours, including other supported providers and compatible local endpoints.
 
 Related repositories:
-- [Droid](https://github.com/unifyai/droid) — AI assistant brain (primary consumer)
+- [Unity](https://github.com/unifyai/unity) — AI assistant brain (primary consumer)
 - [Unify](https://github.com/unifyai/unify) — Python SDK for logging and persistence
 - [Orchestra](https://github.com/unifyai/orchestra) — Backend API and database
 
@@ -288,8 +288,8 @@ unillm/
 ## Local Development
 
 > `unillm` is the LLM access layer, not a runnable system. To run the whole
-> product locally (Orchestra + Droid + Console), use **`droid stack up`** from
-> the [droid repo](https://github.com/unifyai/droid). The steps below are for
+> product locally (Orchestra + Unity + Console), use **`unity stack up`** from
+> the [unity repo](https://github.com/unifyai/unity). The steps below are for
 > developing this library itself.
 
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management. By default, local development installs the published [`unifyai`](https://pypi.org/project/unifyai/) package for the persistence/logging dependency.
