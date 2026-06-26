@@ -37,7 +37,17 @@ jobs:
         EVENT_NAME: ${{ github.event_name }}
         COMMIT_MSG: ${{ github.event.head_commit.message }}
         PR_TITLE: ${{ github.event.pull_request.title }}
+        BASE_REF: ${{ github.base_ref }}
       run: |
+        # A PR into main is the staging->main promotion gate: always run the
+        # (read-only, no-cost) suite regardless of the [run-tests] marker, so it
+        # is a meaningful required status check for merging into main.
+        if [[ "$EVENT_NAME" == "pull_request" && "$BASE_REF" == "main" ]]; then
+          echo "run_tests=true" >> "$GITHUB_OUTPUT"
+          echo "Tests triggered by staging->main promotion gate"
+          exit 0
+        fi
+
         # workflow_dispatch always runs tests
         if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
           echo "run_tests=true" >> "$GITHUB_OUTPUT"
