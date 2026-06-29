@@ -1981,7 +1981,7 @@ wheels = [
 [[package]]
 name = "unify"
 version = "0.0.0"
-source = { editable = "../unify" }
+source = { editable = "../unisdk" }
 dependencies = [
     { name = "aiohttp" },
     { name = "requests" },
@@ -2055,7 +2055,7 @@ requires-dist = [
     { name = "litellm", specifier = "==1.88.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
-    { name = "unify", editable = "../unify" },
+    { name = "unify", editable = "../unisdk" },
 ]
 
 [package.metadata.requires-dev]
