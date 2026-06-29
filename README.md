@@ -33,32 +33,28 @@ If you're here from the Unity quickstart, this is the layer that talks to model 
 
 Related repositories:
 - [Unity](https://github.com/unifyai/unity) — AI assistant brain (primary consumer)
-- [Unify](https://github.com/unifyai/unify) — Python SDK for logging and persistence
+- [unisdk](https://github.com/unifyai/unisdk) — Python SDK for logging and persistence
 - [Orchestra](https://github.com/unifyai/orchestra) — Backend API and database
 
 ## Installation
 
+Install from Git:
+
 ```bash
-pip install unifyai-unillm
+pip install "unillm @ git+https://github.com/unifyai/unillm.git"
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv add unifyai-unillm
+uv add "unillm @ git+https://github.com/unifyai/unillm.git"
 ```
 
-The import name stays `unillm`:
+The import name is `unillm`:
 
 ```python
 import unillm
 ```
-
-If you're reading the repo name, package name, and import side-by-side:
-
-- **Repo:** `unillm`
-- **PyPI package:** `unifyai-unillm`
-- **Python import:** `unillm`
 
 ## Configuration
 
@@ -292,20 +288,15 @@ unillm/
 > the [unity repo](https://github.com/unifyai/unity). The steps below are for
 > developing this library itself.
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management. By default, local development installs the published [`unifyai`](https://pypi.org/project/unifyai/) package for the persistence/logging dependency.
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management. The persistence/logging dependency (`unisdk`) is resolved from a sibling checkout via `[tool.uv.sources]`, so clone it alongside this repo before syncing.
 
 ### Setup
 
 ```bash
+git clone https://github.com/unifyai/unisdk.git
 git clone https://github.com/unifyai/unillm.git
 cd unillm
 uv sync
-```
-
-If you're iterating on a sibling checkout of `unify` as well, override the installed dependency with an editable install after `uv sync`:
-
-```bash
-uv pip install -e ../unify
 ```
 
 ### Running Tests
