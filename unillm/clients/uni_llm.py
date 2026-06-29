@@ -185,6 +185,65 @@ def _xiaomi_mimo_token_plan_api_base() -> str | None:
     return None
 
 
+def _apply_deepseek_v4_reasoning_effort(kw: dict, model: str) -> None:
+    """Forward DeepSeek V4 graded ``reasoning_effort`` via ``extra_body``.
+
+    WORKAROUND (BerriAI/litellm#27439): litellm's
+    ``DeepSeekChatConfig.map_openai_params()`` discards the ``reasoning_effort``
+    *value* for DeepSeek — it pops the param and only flips
+    ``thinking={"type": "enabled"}``, so ``high`` / ``max`` / ``xhigh`` all
+    collapse to DeepSeek's server default (``high``) with no way to request
+    ``max``. The upstream fix is in flight via BerriAI/litellm#28702 (which
+    supersedes #28138 / #28134; the earlier #27445 / #27829 were flawed) but is
+    not yet released (still absent in litellm 1.88.0 and v1.89.0).
+
+    Until that PR — or an equivalent — lands and we bump litellm, we forward the
+    graded value ourselves through ``extra_body``, which litellm passes to the
+    provider verbatim (bypassing ``map_openai_params``). ``thinking`` stays a
+    top-level param so litellm still treats the turn as thinking-mode and keeps
+    its multi-turn ``reasoning_content`` handling intact.
+
+    REMOVE this function and its call site in ``_prepare_provider_request_kw``
+    once litellm forwards ``reasoning_effort`` for DeepSeek natively.
+    """
+    effort = kw.get("reasoning_effort")
+    if effort is None:
+        return
+    model_l = model.lower()
+    # Always-on reasoners (deepseek-reasoner / R1) reject these fields.
+    if "reasoner" in model_l or "r1" in model_l:
+        return
+    # Graded effort is a V4+ opt-in feature; older chat models ignore it.
+    if "v4" not in model_l:
+        return
+
+    effort_l = str(effort).lower()
+    extra_body = dict(kw.get("extra_body") or {})
+    if effort_l == "none":
+        # Disabled must go through extra_body: litellm only re-adds ``thinking``
+        # when its type is "enabled", silently dropping the disabled form.
+        kw.pop("reasoning_effort", None)
+        extra_body["thinking"] = {"type": "disabled"}
+        kw["extra_body"] = extra_body
+        return
+
+    # DeepSeek accepts only "high" and "max"; normalize per its docs.
+    normalized = {
+        "low": "high",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "max",
+        "max": "max",
+    }.get(effort_l)
+    if normalized is None:
+        return  # unknown value: leave it for litellm to handle
+
+    kw.pop("reasoning_effort", None)
+    kw["thinking"] = {"type": "enabled"}
+    extra_body["reasoning_effort"] = normalized
+    kw["extra_body"] = extra_body
+
+
 def _prepare_provider_request_kw(
     *,
     kw: dict,
@@ -219,6 +278,9 @@ def _prepare_provider_request_kw(
         extra_body = dict(kw.get("extra_body") or {})
         extra_body["thinking"] = {"type": "disabled"}
         kw["extra_body"] = extra_body
+
+    if provider == "deepseek":
+        _apply_deepseek_v4_reasoning_effort(kw, model)
 
     return _canonical_model_for_accounting(str(kw.get("model") or model))
 

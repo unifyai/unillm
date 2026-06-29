@@ -77,6 +77,7 @@ def test_sync_openai_tool_reasoning_call_uses_responses_bridge() -> None:
             "gpt-5.5@openai",
             reasoning_effort="low",
             api_key="test-key",
+            cache=False,
         )
         response = client.generate(
             messages=[{"role": "user", "content": prompt}],
@@ -123,6 +124,7 @@ async def test_async_openai_responses_bridge_preserves_stateful_tool_history() -
             reasoning_effort="low",
             stateful=True,
             api_key="test-key",
+            cache=False,
         )
         await client.generate(
             messages=[{"role": "user", "content": prompt}],
@@ -162,6 +164,7 @@ async def test_openai_responses_bridge_cost_events_use_canonical_model() -> None
             "gpt-5.5@openai",
             reasoning_effort="low",
             api_key="test-key",
+            cache=False,
         )
         llm_events = []
         with unillm.capture_costs() as events:

@@ -57,7 +57,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Clone unify repo (public; no token needed)
-      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unify.git unify-sdk
+      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unisdk.git unify-sdk
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -68,7 +68,7 @@ jobs:
       uses: astral-sh/setup-uv@v5
 
     - name: Configure unify path for CI
-      run: sed -i 's|path = "../unify"|path = "./unify-sdk"|g' pyproject.toml
+      run: sed -i 's|path = "../unisdk"|path = "./unify-sdk"|g' pyproject.toml
 
     - name: Install unillm deps
       run: uv sync --group dev
@@ -90,7 +90,10 @@ jobs:
         set +e
         # Real LLM calls happen on cache miss and are written before assertions,
         # so capture writes even if an individual assertion later fails.
-        uv run pytest --timeout=120 -p no:warnings -vv "${{ inputs.test_path }}" 2>&1 | tee pytest_output.txt
+        # Timeout is generous because reasoning-mode calls (e.g. DeepSeek V4
+        # thinking with reasoning_effort=max) can take minutes; a miss that
+        # times out is never written, leaving the read-only suite unable to hit.
+        uv run pytest --timeout=600 -p no:warnings -vv "${{ inputs.test_path }}" 2>&1 | tee pytest_output.txt
         echo "pytest exit code: ${PIPESTATUS[0]}"
 
     - name: Consolidate cache writes into .cache.ndjson
@@ -106,6 +109,19 @@ jobs:
       with:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    # The Actions cache above is branch-scoped, so promotion PRs into main
+    # (which run as pull_request with base=main) cannot restore it. Publish the
+    # full consolidated cache as an artifact too — artifacts are not
+    # branch-scoped — so tests.yml can hydrate from it across branches.
+    - name: Publish consolidated cache as cross-branch artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: llm-cache-ndjson
+        path: .cache.ndjson
+        if-no-files-found: warn
+        include-hidden-files: true
+        retention-days: 90
 
     - name: Upload cache diff
       if: always()

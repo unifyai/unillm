@@ -37,7 +37,17 @@ jobs:
         EVENT_NAME: ${{ github.event_name }}
         COMMIT_MSG: ${{ github.event.head_commit.message }}
         PR_TITLE: ${{ github.event.pull_request.title }}
+        BASE_REF: ${{ github.base_ref }}
       run: |
+        # A PR into main is the staging->main promotion gate: always run the
+        # (read-only, no-cost) suite regardless of the [run-tests] marker, so it
+        # is a meaningful required status check for merging into main.
+        if [[ "$EVENT_NAME" == "pull_request" && "$BASE_REF" == "main" ]]; then
+          echo "run_tests=true" >> "$GITHUB_OUTPUT"
+          echo "Tests triggered by staging->main promotion gate"
+          exit 0
+        fi
+
         # workflow_dispatch always runs tests
         if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
           echo "run_tests=true" >> "$GITHUB_OUTPUT"
@@ -91,6 +101,11 @@ jobs:
     needs: should-run-tests
     if: needs.should-run-tests.outputs.run_tests == 'true'
     timeout-minutes: 120
+    # actions:read lets the cross-branch cache hydrate step list and download
+    # the llm-cache-refresh artifact; contents:read is for checkout.
+    permissions:
+      contents: read
+      actions: read
     env:
       LOGS_DIR: ${{ github.workspace }}/logs
     steps:
@@ -136,7 +151,7 @@ jobs:
     # --- Clone unify (needed by all modes for uv sync) ---
 
     - name: Clone unify repo (public; no token needed)
-      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unify.git unify-sdk
+      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unisdk.git unify-sdk
 
     # --- Common setup ---
 
@@ -191,8 +206,51 @@ jobs:
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
 
+    # The Actions cache is branch-scoped: a promotion PR into main runs as
+    # pull_request (base=main) and can't restore the staging-scoped cache, so
+    # the read-only suite would miss every entry. Artifacts are not
+    # branch-scoped, so hydrate the consolidated cache from the latest
+    # successful llm-cache-refresh run on the head branch (fallback: staging).
+    # This makes the staging->main promotion pytest a meaningful, passable gate.
+    - name: Hydrate LLM cache from refresh artifact
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REPO: ${{ github.repository }}
+        BRANCH: ${{ github.head_ref || github.ref_name }}
+      run: |
+        run_id="$(gh run list --repo "$REPO" --workflow=llm-cache-refresh.yml \
+          --status=success --branch "$BRANCH" --limit 1 \
+          --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null)"
+        if [ -z "$run_id" ] && [ "$BRANCH" != "staging" ]; then
+          run_id="$(gh run list --repo "$REPO" --workflow=llm-cache-refresh.yml \
+            --status=success --branch staging --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null)"
+        fi
+        if [ -n "$run_id" ]; then
+          echo "Hydrating LLM cache from llm-cache-refresh run $run_id"
+          # gh run download refuses to overwrite an existing file, and the
+          # Actions-cache restore above may have already written a (stale,
+          # branch-scoped) .cache.ndjson. Download into a temp dir and move it
+          # over so the cross-branch artifact always wins.
+          tmpdir="$(mktemp -d)"
+          if gh run download "$run_id" --repo "$REPO" -n llm-cache-ndjson -D "$tmpdir"; then
+            mv -f "$tmpdir/.cache.ndjson" .cache.ndjson
+            echo "Hydrated .cache.ndjson from artifact"
+          else
+            echo "No llm-cache-ndjson artifact on run $run_id; keeping Actions-cache copy"
+          fi
+          rm -rf "$tmpdir"
+        else
+          echo "No successful llm-cache-refresh run found; keeping Actions-cache copy"
+        fi
+        if [ -s .cache.ndjson ]; then
+          echo "LLM cache ready: $(wc -l < .cache.ndjson) entries"
+        else
+          echo "WARNING: no .cache.ndjson present after hydrate step"
+        fi
+
     - name: Configure unify path for CI
-      run: sed -i 's|path = "../unify"|path = "./unify-sdk"|g' pyproject.toml
+      run: sed -i 's|path = "../unisdk"|path = "./unify-sdk"|g' pyproject.toml
 
     - name: Install unillm deps
       run: uv sync --group dev
