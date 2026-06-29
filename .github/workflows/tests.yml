@@ -266,7 +266,7 @@ jobs:
     - name: Setup logging directories
       run: |
         mkdir -p "$LOGS_DIR/unillm"
-        mkdir -p "$LOGS_DIR/unify"
+        mkdir -p "$LOGS_DIR/unisdk"
         mkdir -p "$LOGS_DIR/orchestra"
         mkdir -p "$LOGS_DIR/all"
 
@@ -406,8 +406,8 @@ jobs:
         fi
 
         # --- unify logs ---
-        if [ -d "$LOGS_DIR/unify" ]; then
-          file_count=$(find "$LOGS_DIR/unify" -type f 2>/dev/null | wc -l | tr -d ' ')
+        if [ -d "$LOGS_DIR/unisdk" ]; then
+          file_count=$(find "$LOGS_DIR/unisdk" -type f 2>/dev/null | wc -l | tr -d ' ')
           echo "✓ unify logs: $file_count files"
         else
           echo "○ unify logs: directory not found"
