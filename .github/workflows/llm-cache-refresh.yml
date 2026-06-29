@@ -110,6 +110,19 @@ jobs:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
+    # The Actions cache above is branch-scoped, so promotion PRs into main
+    # (which run as pull_request with base=main) cannot restore it. Publish the
+    # full consolidated cache as an artifact too — artifacts are not
+    # branch-scoped — so tests.yml can hydrate from it across branches.
+    - name: Publish consolidated cache as cross-branch artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: llm-cache-ndjson
+        path: .cache.ndjson
+        if-no-files-found: warn
+        include-hidden-files: true
+        retention-days: 90
+
     - name: Upload cache diff
       if: always()
       uses: actions/upload-artifact@v4
