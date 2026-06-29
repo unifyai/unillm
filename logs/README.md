@@ -11,7 +11,7 @@ All logs are organized under `logs/` with four main subdirectories:
 | Directory | Purpose | Structure | Control |
 |-----------|---------|-----------|---------|
 | `logs/unillm/` | Raw LLM request/response traces | `.txt` files per request | `UNILLM_LOG_DIR` (+ `UNILLM_TERMINAL_LOG` for console) |
-| `logs/unify/` | Unify SDK HTTP traces | JSON files per request | `UNISDK_LOG_DIR` (+ `UNISDK_TERMINAL_LOG` for console) |
+| `logs/unisdk/` | Unify SDK HTTP traces | JSON files per request | `UNISDK_LOG_DIR` (+ `UNISDK_TERMINAL_LOG` for console) |
 | `logs/orchestra/` | Orchestra API traces (server-side) | Per-request JSON with spans | `ORCHESTRA_LOG_DIR` |
 | `logs/all/` | Cross-repo OpenTelemetry traces | `{trace_id}.jsonl` per trace | `*_OTEL_LOG_DIR` |
 
@@ -104,14 +104,14 @@ If an LLM call hangs or crashes, the `.pending.txt` or `.cache_pending.txt` file
 
 ---
 
-## Unify SDK Logs (`logs/unify/`)
+## Unify SDK Logs (`logs/unisdk/`)
 
 Unify SDK HTTP traces capture all requests to the Orchestra API. These are useful for debugging API issues, inspecting request/response payloads, and correlating with server-side traces.
 
 ### Directory Structure
 
 ```
-logs/unify/
+logs/unisdk/
 ├── 14-26-27.611_POST_projects-contexts_210ms_200_no-trace.json
 ├── 14-26-46.175_GET_logs_331ms_200_f124f0d3.json
 ├── 14-27-01.234_POST_logs_PENDING_a1b2c3d4.json
@@ -163,7 +163,7 @@ Each JSON file contains the full request and response:
 **Quiet terminal, verbose files:**
 ```bash
 export UNISDK_TERMINAL_LOG=false
-export UNISDK_LOG_DIR=/path/to/logs/unify
+export UNISDK_LOG_DIR=/path/to/logs/unisdk
 ```
 
 ### Trace Correlation
@@ -255,7 +255,7 @@ Orchestra logs are only created when:
 2. The server was started with `ORCHESTRA_LOG_DIR` set
 3. Requests are made to the local server
 
-For production API calls, you only get client-side traces in `logs/unify/`.
+For production API calls, you only get client-side traces in `logs/unisdk/`.
 
 ---
 
