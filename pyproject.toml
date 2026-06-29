@@ -50,7 +50,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-unify = { path = "../unify", editable = true }
+unify = { path = "../unisdk", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["unillm"]
