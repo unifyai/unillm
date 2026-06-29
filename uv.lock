@@ -1979,7 +1979,64 @@ wheels = [
 ]
 
 [[package]]
-name = "unify"
+name = "unillm"
+version = "0.0.0"
+source = { editable = "." }
+dependencies = [
+    { name = "litellm" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "unisdk" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "autoflake" },
+    { name = "black" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp" },
+    { name = "opentelemetry-sdk" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-dotenv" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
+]
+lint = [
+    { name = "autoflake" },
+    { name = "black" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "litellm", specifier = "==1.88.0" },
+    { name = "pydantic", specifier = ">=2.12.5" },
+    { name = "pydantic-settings", specifier = ">=2.12.0" },
+    { name = "unisdk", editable = "../unisdk" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "autoflake", specifier = ">=2.3.1" },
+    { name = "black", specifier = "==26.5.1" },
+    { name = "opentelemetry-api", specifier = ">=1.20.0" },
+    { name = "opentelemetry-exporter-otlp", specifier = ">=1.20.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
+    { name = "pre-commit", specifier = ">=4.0.1" },
+    { name = "pytest", specifier = ">=8.4.2" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-dotenv", specifier = ">=0.5.2" },
+    { name = "pytest-timeout", specifier = ">=2.3.1" },
+    { name = "ruff", specifier = ">=0.15.16" },
+]
+lint = [
+    { name = "autoflake", specifier = ">=2.3.1" },
+    { name = "black", specifier = "==26.5.1" },
+]
+
+[[package]]
+name = "unisdk"
 version = "0.0.0"
 source = { editable = "../unisdk" }
 dependencies = [
@@ -2018,63 +2075,6 @@ lint = [
     { name = "autoflake", specifier = ">=1.6.1" },
     { name = "black", specifier = "==26.5.1" },
     { name = "isort", specifier = ">=5.11.4" },
-]
-
-[[package]]
-name = "unillm"
-version = "0.0.0"
-source = { editable = "." }
-dependencies = [
-    { name = "litellm" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "unify" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "autoflake" },
-    { name = "black" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp" },
-    { name = "opentelemetry-sdk" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-dotenv" },
-    { name = "pytest-timeout" },
-    { name = "ruff" },
-]
-lint = [
-    { name = "autoflake" },
-    { name = "black" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "litellm", specifier = "==1.88.0" },
-    { name = "pydantic", specifier = ">=2.12.5" },
-    { name = "pydantic-settings", specifier = ">=2.12.0" },
-    { name = "unify", editable = "../unisdk" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "autoflake", specifier = ">=2.3.1" },
-    { name = "black", specifier = "==26.5.1" },
-    { name = "opentelemetry-api", specifier = ">=1.20.0" },
-    { name = "opentelemetry-exporter-otlp", specifier = ">=1.20.0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
-    { name = "pre-commit", specifier = ">=4.0.1" },
-    { name = "pytest", specifier = ">=8.4.2" },
-    { name = "pytest-asyncio", specifier = ">=0.24.0" },
-    { name = "pytest-dotenv", specifier = ">=0.5.2" },
-    { name = "pytest-timeout", specifier = ">=2.3.1" },
-    { name = "ruff", specifier = ">=0.15.16" },
-]
-lint = [
-    { name = "autoflake", specifier = ">=2.3.1" },
-    { name = "black", specifier = "==26.5.1" },
 ]
 
 [[package]]

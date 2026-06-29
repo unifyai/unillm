@@ -11,7 +11,7 @@ All logs are organized under `logs/` with four main subdirectories:
 | Directory | Purpose | Structure | Control |
 |-----------|---------|-----------|---------|
 | `logs/unillm/` | Raw LLM request/response traces | `.txt` files per request | `UNILLM_LOG_DIR` (+ `UNILLM_TERMINAL_LOG` for console) |
-| `logs/unify/` | Unify SDK HTTP traces | JSON files per request | `UNIFY_LOG_DIR` (+ `UNIFY_TERMINAL_LOG` for console) |
+| `logs/unify/` | Unify SDK HTTP traces | JSON files per request | `UNISDK_LOG_DIR` (+ `UNISDK_TERMINAL_LOG` for console) |
 | `logs/orchestra/` | Orchestra API traces (server-side) | Per-request JSON with spans | `ORCHESTRA_LOG_DIR` |
 | `logs/all/` | Cross-repo OpenTelemetry traces | `{trace_id}.jsonl` per trace | `*_OTEL_LOG_DIR` |
 
@@ -157,13 +157,13 @@ Each JSON file contains the full request and response:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `UNIFY_TERMINAL_LOG` | `true` | Terminal (console) output for HTTP requests |
-| `UNIFY_LOG_DIR` | `""` (disabled) | Directory for file-based request traces (independent of terminal) |
+| `UNISDK_TERMINAL_LOG` | `true` | Terminal (console) output for HTTP requests |
+| `UNISDK_LOG_DIR` | `""` (disabled) | Directory for file-based request traces (independent of terminal) |
 
 **Quiet terminal, verbose files:**
 ```bash
-export UNIFY_TERMINAL_LOG=false
-export UNIFY_LOG_DIR=/path/to/logs/unify
+export UNISDK_TERMINAL_LOG=false
+export UNISDK_LOG_DIR=/path/to/logs/unify
 ```
 
 ### Trace Correlation
@@ -332,9 +332,9 @@ Each `.jsonl` file contains one JSON object per line, representing a span:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `UNIFY_OTEL` | `false` | Master switch for Unify SDK OTel tracing |
-| `UNIFY_OTEL_ENDPOINT` | `""` | OTLP endpoint for remote export |
-| `UNIFY_OTEL_LOG_DIR` | `""` | Directory for file-based span export |
+| `UNISDK_OTEL` | `false` | Master switch for Unify SDK OTel tracing |
+| `UNISDK_OTEL_ENDPOINT` | `""` | OTLP endpoint for remote export |
+| `UNISDK_OTEL_LOG_DIR` | `""` | Directory for file-based span export |
 
 **Orchestra OTEL settings** (server-side):
 
@@ -347,8 +347,8 @@ Each `.jsonl` file contains one JSON object per line, representing a span:
 # Enable OTEL for all services, writing to same directory for correlation
 export UNILLM_OTEL=true
 export UNILLM_OTEL_LOG_DIR=/path/to/logs/all
-export UNIFY_OTEL=true
-export UNIFY_OTEL_LOG_DIR=/path/to/logs/all
+export UNISDK_OTEL=true
+export UNISDK_OTEL_LOG_DIR=/path/to/logs/all
 export ORCHESTRA_OTEL_LOG_DIR=/path/to/logs/all  # Server-side
 ```
 
