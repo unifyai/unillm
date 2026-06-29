@@ -90,7 +90,10 @@ jobs:
         set +e
         # Real LLM calls happen on cache miss and are written before assertions,
         # so capture writes even if an individual assertion later fails.
-        uv run pytest --timeout=120 -p no:warnings -vv "${{ inputs.test_path }}" 2>&1 | tee pytest_output.txt
+        # Timeout is generous because reasoning-mode calls (e.g. DeepSeek V4
+        # thinking with reasoning_effort=max) can take minutes; a miss that
+        # times out is never written, leaving the read-only suite unable to hit.
+        uv run pytest --timeout=600 -p no:warnings -vv "${{ inputs.test_path }}" 2>&1 | tee pytest_output.txt
         echo "pytest exit code: ${PIPESTATUS[0]}"
 
     - name: Consolidate cache writes into .cache.ndjson
