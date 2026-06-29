@@ -328,8 +328,8 @@ jobs:
         UNILLM_OTEL: "true"
         UNILLM_OTEL_LOG_DIR: ${{ env.LOGS_DIR }}/all
         UNILLM_LOG_DIR: ${{ env.LOGS_DIR }}/unillm
-        UNIFY_OTEL: "true"
-        UNIFY_OTEL_LOG_DIR: ${{ env.LOGS_DIR }}/all
+        UNISDK_OTEL: "true"
+        UNISDK_OTEL_LOG_DIR: ${{ env.LOGS_DIR }}/all
 
     # --- Post-test reporting and cleanup ---
 

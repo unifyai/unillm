@@ -23,7 +23,7 @@ from typing import (
 import litellm
 
 # local
-import unify
+import unisdk
 from openai._types import Headers
 from ..costs import compute_cost_from_response
 from ..limit_hooks import (
@@ -106,7 +106,7 @@ def _safe_deduct_credits(
         detail["label"] = ctx.label
 
     try:
-        unify.deduct_credits(
+        unisdk.deduct_credits(
             amount,
             api_key=api_key,
             category="llm",

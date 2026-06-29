@@ -202,7 +202,7 @@ class TestCacheEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        with patch("unillm.clients.uni_llm.unify.deduct_credits"):
+                        with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
                             client = unillm.Unify("gpt-4@openai", cache=True)
                             with capture_cache_events() as events:
                                 client.generate(
@@ -294,7 +294,7 @@ class TestCacheEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        with patch("unillm.clients.uni_llm.unify.deduct_credits"):
+                        with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
                             client = unillm.Unify(
                                 "gpt-4@openai",
                                 cache=True,
@@ -327,7 +327,7 @@ class TestCacheEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        with patch("unillm.clients.uni_llm.unify.deduct_credits"):
+                        with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
                             client = unillm.Unify("gpt-4@openai", cache=True)
                             # No capture context - should not error
                             response = client.generate(
