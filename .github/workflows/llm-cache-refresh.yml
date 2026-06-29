@@ -57,7 +57,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Clone unify repo (public; no token needed)
-      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unify.git unify-sdk
+      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unisdk.git unify-sdk
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -68,7 +68,7 @@ jobs:
       uses: astral-sh/setup-uv@v5
 
     - name: Configure unify path for CI
-      run: sed -i 's|path = "../unify"|path = "./unify-sdk"|g' pyproject.toml
+      run: sed -i 's|path = "../unisdk"|path = "./unify-sdk"|g' pyproject.toml
 
     - name: Install unillm deps
       run: uv sync --group dev
