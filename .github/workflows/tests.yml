@@ -228,9 +228,18 @@ jobs:
         fi
         if [ -n "$run_id" ]; then
           echo "Hydrating LLM cache from llm-cache-refresh run $run_id"
-          gh run download "$run_id" --repo "$REPO" -n llm-cache-ndjson -D . \
-            && echo "Hydrated .cache.ndjson from artifact" \
-            || echo "No llm-cache-ndjson artifact on run $run_id; keeping Actions-cache copy"
+          # gh run download refuses to overwrite an existing file, and the
+          # Actions-cache restore above may have already written a (stale,
+          # branch-scoped) .cache.ndjson. Download into a temp dir and move it
+          # over so the cross-branch artifact always wins.
+          tmpdir="$(mktemp -d)"
+          if gh run download "$run_id" --repo "$REPO" -n llm-cache-ndjson -D "$tmpdir"; then
+            mv -f "$tmpdir/.cache.ndjson" .cache.ndjson
+            echo "Hydrated .cache.ndjson from artifact"
+          else
+            echo "No llm-cache-ndjson artifact on run $run_id; keeping Actions-cache copy"
+          fi
+          rm -rf "$tmpdir"
         else
           echo "No successful llm-cache-refresh run found; keeping Actions-cache copy"
         fi
