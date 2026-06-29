@@ -726,7 +726,7 @@ class TestTraceHierarchy:
 
         exporter = reset_otel["exporter"]
         parent_tracer = trace.get_tracer("unity")
-        unify_tracer = trace.get_tracer("unify")
+        unify_tracer = trace.get_tracer("unisdk")
 
         # Simulate: Unity -> Unillm -> Unify HTTP call
         with parent_tracer.start_as_current_span("unity.conductor.ask") as unity_span:
@@ -798,7 +798,7 @@ class TestLogUsage:
             {"role": "assistant", "content": "Let me check on that for you."},
         ]
 
-        with patch("unillm.logger.unify.deduct_credits"):
+        with patch("unillm.logger.unisdk.deduct_credits"):
             billed_cost = log_usage(
                 "gpt-4o-realtime-preview",
                 usage,
@@ -829,7 +829,7 @@ class TestLogUsage:
         assert "billed_cost" in content
 
     def test_deducts_credits(self, tmp_path, monkeypatch):
-        """log_usage deducts the billed cost via unify.deduct_credits with full attribution."""
+        """log_usage deducts the billed cost via unisdk.deduct_credits with full attribution."""
         from unittest.mock import patch, MagicMock
         from unillm import settings
         from unillm import logger
@@ -864,7 +864,7 @@ class TestLogUsage:
         }
 
         mock_deduct = MagicMock()
-        with patch("unillm.logger.unify.deduct_credits", mock_deduct):
+        with patch("unillm.logger.unisdk.deduct_credits", mock_deduct):
             billed_cost = log_usage("gpt-4o-realtime-preview", usage)
 
         mock_deduct.assert_called_once()
@@ -899,7 +899,7 @@ class TestLogUsage:
 
         usage = {"input_tokens": 50, "output_tokens": 30}
 
-        with patch("unillm.logger.unify.deduct_credits"):
+        with patch("unillm.logger.unisdk.deduct_credits"):
             billed_cost = log_usage("gpt-4o-realtime-preview", usage)
 
         assert billed_cost > 0
@@ -934,7 +934,7 @@ class TestLogUsage:
         }
 
         with patch(
-            "unillm.logger.unify.deduct_credits",
+            "unillm.logger.unisdk.deduct_credits",
             side_effect=ConnectionError("no connection"),
         ):
             # Should not raise
@@ -976,7 +976,7 @@ class TestLogUsage:
             captured_events.append(event)
 
         with (
-            patch("unillm.logger.unify.deduct_credits"),
+            patch("unillm.logger.unisdk.deduct_credits"),
             patch(
                 "unillm.llm_events._emit_llm_event",
                 side_effect=lambda e: captured_events.append(e),

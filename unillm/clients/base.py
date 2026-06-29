@@ -19,10 +19,10 @@ from pydantic import BaseModel, create_model
 from typing_extensions import Self
 
 # local
-from unify import BASE_URL
-from unify.utils import http
+from unisdk import BASE_URL
+from unisdk.utils import http
 
-from unify.utils.helpers import _create_request_header, _validate_api_key
+from unisdk.utils.helpers import _create_request_header, _validate_api_key
 from unillm.types import PromptCacheParam
 
 

@@ -49,11 +49,11 @@ def pytest_sessionstart(session):
     unify_log_dir = root_path / "logs" / "unify" / subdir
     unify_log_dir.mkdir(parents=True, exist_ok=True)
     try:
-        from unify.utils.http import configure_log_dir as configure_unify_log_dir
+        from unisdk.utils.http import configure_log_dir as configure_unify_log_dir
 
         configure_unify_log_dir(str(unify_log_dir))
     except ImportError:
-        os.environ["UNIFY_LOG_DIR"] = str(unify_log_dir)
+        os.environ["UNISDK_LOG_DIR"] = str(unify_log_dir)
 
     # Orchestra log directory (for local orchestra server, if running)
     # This sets the env var so that if a local orchestra is started, it knows where to log
@@ -65,7 +65,7 @@ def pytest_sessionstart(session):
     otel_log_dir = root_path / "logs" / "all" / subdir
     otel_log_dir.mkdir(parents=True, exist_ok=True)
     os.environ["UNILLM_OTEL_LOG_DIR"] = str(otel_log_dir)
-    os.environ["UNIFY_OTEL_LOG_DIR"] = str(otel_log_dir)
+    os.environ["UNISDK_OTEL_LOG_DIR"] = str(otel_log_dir)
     os.environ["ORCHESTRA_OTEL_LOG_DIR"] = str(otel_log_dir)
 
 

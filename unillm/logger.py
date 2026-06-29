@@ -51,7 +51,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-import unify
+import unisdk
 
 from .settings import SETTINGS
 
@@ -629,7 +629,7 @@ def log_usage(
                 detail["source"] = ctx.source
             if ctx.label:
                 detail["label"] = ctx.label
-            unify.deduct_credits(
+            unisdk.deduct_credits(
                 billed_cost,
                 category="llm",
                 assistant_id=ctx.assistant_id,

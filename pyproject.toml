@@ -20,7 +20,7 @@ dependencies = [
     "litellm==1.88.0",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
-    "unify",
+    "unisdk",
 ]
 
 [project.urls]
@@ -50,7 +50,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-unify = { path = "../unisdk", editable = true }
+unisdk = { path = "../unisdk", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["unillm"]
