@@ -694,7 +694,7 @@ class TestTraceHierarchy:
         exporter = reset_otel["exporter"]
         parent_tracer = trace.get_tracer("unity")
 
-        # Simulate Unity creating a parent span
+        # Simulate Unify creating a parent span
         with parent_tracer.start_as_current_span("unity.conductor.ask") as parent:
             parent_ctx = parent.get_span_context()
 
@@ -728,7 +728,7 @@ class TestTraceHierarchy:
         parent_tracer = trace.get_tracer("unity")
         unify_tracer = trace.get_tracer("unisdk")
 
-        # Simulate: Unity -> Unillm -> Unify HTTP call
+        # Simulate: Unify -> Unillm -> Unify HTTP call
         with parent_tracer.start_as_current_span("unity.conductor.ask") as unity_span:
             with llm_span("gpt-4@openai", "gpt-4") as unillm_span:
                 # Simulate unify HTTP span (which would be created by unify/utils/http.py)

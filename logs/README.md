@@ -261,7 +261,7 @@ For production API calls, you only get client-side traces in `logs/unisdk/`.
 
 ## OpenTelemetry Traces (`logs/all/`)
 
-When OTEL tracing is enabled, both unillm and the Unify SDK create spans that can be correlated with parent spans (from Unity) and exported for distributed tracing analysis.
+When OTEL tracing is enabled, both unillm and the Unify SDK create spans that can be correlated with parent spans (from Unify) and exported for distributed tracing analysis.
 
 ### Directory Structure
 
@@ -272,7 +272,7 @@ logs/all/
 └── ...
 ```
 
-Files are keyed by the 32-character trace ID. When running as part of a larger system (e.g., Unity), spans from all services are aggregated into the same file.
+Files are keyed by the 32-character trace ID. When running as part of a larger system (e.g., Unify), spans from all services are aggregated into the same file.
 
 ### Trace File Format (JSONL)
 
@@ -354,10 +354,10 @@ export ORCHESTRA_OTEL_LOG_DIR=/path/to/logs/all  # Server-side
 
 ### Parent TracerProvider Integration
 
-When unillm runs within a larger system (e.g., Unity), it automatically detects and uses the parent's TracerProvider. This ensures all spans share the same trace context for end-to-end correlation.
+When unillm runs within a larger system (e.g., Unify), it automatically detects and uses the parent's TracerProvider. This ensures all spans share the same trace context for end-to-end correlation.
 
 The integration flow:
-1. Parent (Unity) creates a TracerProvider and root span
+1. Parent (Unify) creates a TracerProvider and root span
 2. Unillm detects the existing provider and creates child spans
 3. All spans are exported to the same destination (file or collector)
 
