@@ -23,8 +23,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # OpenAI
-    OPENAI_API_KEY: SecretStr = SecretStr("")
+    # OpenRouter
+    OPENROUTER_API_KEY: SecretStr = SecretStr("")
 
     # Anthropic
     ANTHROPIC_API_KEY: SecretStr = SecretStr("")

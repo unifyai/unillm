@@ -5,7 +5,6 @@ import copy
 import inspect
 import logging
 import os
-import re
 
 from typing import (
     Any,
@@ -36,9 +35,7 @@ from ..limit_hooks import (
 
 _LOGGER = logging.getLogger("unillm")
 
-_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX = "openai/responses/"
-_OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS = ("parallel_tool_calls", "tool_choice")
-_OPENAI_GPT_MINOR_VERSION_RE = re.compile(r"^gpt-5\.(?P<minor>\d+)(?:[-.].*)?$")
+_OPENROUTER_MODEL_PREFIX = "openrouter/"
 
 
 def _enforce_parallel_tool_call_response_limit(
@@ -124,38 +121,7 @@ def _canonical_model_for_accounting(model: str | None) -> str:
     """Return the provider model name used for pricing, limits, and ledger metadata."""
     if not model:
         return ""
-    if model.startswith(_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX):
-        return model.removeprefix(_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX)
     return model
-
-
-def _is_openai_gpt_responses_tool_model(model: str) -> bool:
-    """Return whether an OpenAI model needs Responses for tools with reasoning."""
-    match = _OPENAI_GPT_MINOR_VERSION_RE.match(model)
-    return bool(match and int(match.group("minor")) >= 4)
-
-
-def _copy_tool_for_responses_bridge(tool: Any) -> Any:
-    """Copy a chat tool while placing strictness where LiteLLM's bridge reads it."""
-    if not isinstance(tool, dict):
-        return tool
-
-    tool_copy = dict(tool)
-    function = tool_copy.get("function")
-    if tool_copy.get("type") == "function" and isinstance(function, dict):
-        function_copy = dict(function)
-        if "strict" in tool_copy and "strict" not in function_copy:
-            function_copy["strict"] = tool_copy["strict"]
-        tool_copy["function"] = function_copy
-        tool_copy.pop("strict", None)
-    return tool_copy
-
-
-def _copy_tools_for_responses_bridge(tools: Iterable[Any] | None) -> list[Any] | None:
-    """Return response-bridge-compatible tool definitions without mutating callers."""
-    if tools is None:
-        return None
-    return [_copy_tool_for_responses_bridge(tool) for tool in tools]
 
 
 def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
@@ -170,11 +136,6 @@ def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
 
     allowed.update(params)
     kw["allowed_openai_params"] = sorted(allowed)
-
-
-def _allow_responses_bridge_params(kw: dict) -> None:
-    """Preserve chat tool controls that LiteLLM otherwise drops before bridging."""
-    _allow_openai_params(kw, _OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS)
 
 
 def _xiaomi_mimo_token_plan_api_base() -> str | None:
@@ -254,17 +215,6 @@ def _prepare_provider_request_kw(
     model = str(kw.get("model") or "")
     tools = kw.get("tools")
 
-    if (
-        provider == "openai"
-        and not stream
-        and tools
-        and kw.get("reasoning_effort") is not None
-        and _is_openai_gpt_responses_tool_model(model)
-    ):
-        kw["model"] = f"{_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX}{model}"
-        kw["tools"] = _copy_tools_for_responses_bridge(tools)
-        _allow_responses_bridge_params(kw)
-
     if provider == "minimax" and kw.get("api_base") is None:
         kw["api_base"] = "https://api.minimax.io/v1"
 
@@ -297,6 +247,30 @@ def _request_kw_for_event(kw: dict, accounting_model: str) -> dict:
     return event_kw
 
 
+def _request_kw_for_transport(kw: dict, transport_model: str) -> dict:
+    request_kw = dict(kw)
+    request_kw["model"] = transport_model
+    return request_kw
+
+
+def _prepare_request_models(
+    *,
+    kw: dict,
+    provider: str,
+    transport_model: str,
+    stream: bool,
+) -> tuple[str, dict]:
+    public_model = str(kw.get("model") or "")
+    accounting_model = _canonical_model_for_accounting(public_model)
+    request_kw = _request_kw_for_transport(kw, transport_model)
+    _prepare_provider_request_kw(
+        kw=request_kw,
+        provider=provider,
+        stream=stream,
+    )
+    return accounting_model, request_kw
+
+
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionMessageParam,
@@ -320,7 +294,7 @@ from ..helpers import (
     UNSET,
 )
 from ..clients.base import _Client
-from ..endpoints.utils import get_model_alias
+from ..endpoints.utils import get_model_alias, get_transport_model_alias
 from ..logger import (
     write_request_pending,
     append_response_and_finalize,
@@ -570,6 +544,7 @@ class _UniClient(_Client, abc.ABC):
             This client, useful for chaining inplace calls.
         """
         self._model_alias = get_model_alias(value)
+        self._transport_model_alias = get_transport_model_alias(value)
         self._endpoint = value
         self._model, self._provider = value.split("@")
         return self
@@ -1066,9 +1041,10 @@ class Unify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
-        accounting_model = _prepare_provider_request_kw(
+        accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
             provider=self._provider,
+            transport_model=self._transport_model_alias,
             stream=True,
         )
 
@@ -1090,7 +1066,7 @@ class Unify(_UniClient):
 
         try:
             chat_completion = retry_transient_400_sync(
-                lambda: litellm.completion(**kw),
+                lambda: litellm.completion(**transport_kw),
             )
             for chunk in chat_completion:
                 # Capture usage if present in the chunk (final chunk with include_usage)
@@ -1136,7 +1112,7 @@ class Unify(_UniClient):
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
                 LLMEvent(
-                    request=_request_kw_for_event(kw, accounting_model),
+                    request=_request_kw_for_event(transport_kw, accounting_model),
                     response=None,  # No single response for streams
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
@@ -1173,6 +1149,12 @@ class Unify(_UniClient):
         if pending and self._on_log_file_pending:
             self._on_log_file_pending(pending)
         completion = None
+        _, transport_kw = _prepare_request_models(
+            kw=retry_kw,
+            provider=self._provider,
+            transport_model=self._transport_model_alias,
+            stream=False,
+        )
         try:
             with llm_span(
                 label,
@@ -1181,7 +1163,7 @@ class Unify(_UniClient):
                 origin=origin,
             ):
                 completion = retry_transient_400_sync(
-                    lambda: litellm.completion(**retry_kw),
+                    lambda: litellm.completion(**transport_kw),
                 )
                 _normalize_assistant_message_content(completion)
         finally:
@@ -1313,9 +1295,10 @@ class Unify(_UniClient):
 
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
-        accounting_model = _prepare_provider_request_kw(
+        accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
             provider=self._provider,
+            transport_model=self._transport_model_alias,
             stream=False,
         )
 
@@ -1376,7 +1359,7 @@ class Unify(_UniClient):
 
                     try:
                         chat_completion = retry_transient_400_sync(
-                            lambda: litellm.completion(**kw),
+                            lambda: litellm.completion(**transport_kw),
                         )
                         _normalize_assistant_message_content(chat_completion)
                     except litellm.exceptions.APIError as e:
@@ -1449,7 +1432,7 @@ class Unify(_UniClient):
             # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
             _emit_llm_event(
                 LLMEvent(
-                    request=_request_kw_for_event(kw, accounting_model),
+                    request=_request_kw_for_event(transport_kw, accounting_model),
                     response=resp_body,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
@@ -1604,7 +1587,9 @@ class AsyncUnify(_UniClient):
 
     # Providers whose litellm handler expects an OpenAI SDK client (AsyncOpenAI)
     # as the ``client`` kwarg.  We must NOT pass an AsyncHTTPHandler for these.
-    _OPENAI_SDK_PROVIDERS = frozenset({"openai", "azure", "azure_ai", "xiaomi-mimo"})
+    _OPENAI_SDK_PROVIDERS = frozenset(
+        {"openai", "azure", "azure_ai", "openrouter", "xiaomi-mimo"},
+    )
 
     _async_http_client: Optional[AsyncHTTPHandler] = None
     _async_http_client_session = None  # tracks which aiohttp session the handler wraps
@@ -1615,7 +1600,10 @@ class AsyncUnify(_UniClient):
         Anthropic).  For OpenAI-SDK providers the ``client`` kwarg has a
         different meaning (``AsyncOpenAI``), so we return ``None`` to avoid
         interfering."""
-        if self._provider in self._OPENAI_SDK_PROVIDERS:
+        if (
+            self._provider in self._OPENAI_SDK_PROVIDERS
+            or self._transport_model_alias.startswith(_OPENROUTER_MODEL_PREFIX)
+        ):
             return None
 
         session = get_shared_session()
@@ -1646,9 +1634,10 @@ class AsyncUnify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
-        accounting_model = _prepare_provider_request_kw(
+        accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
             provider=self._provider,
+            transport_model=self._transport_model_alias,
             stream=True,
         )
 
@@ -1690,7 +1679,7 @@ class AsyncUnify(_UniClient):
                     lambda: litellm.acompletion(
                         shared_session=get_shared_session(),
                         client=self._get_async_http_client(),
-                        **kw,
+                        **transport_kw,
                     ),
                 ),
                 name="llm_stream_init",
@@ -1781,7 +1770,7 @@ class AsyncUnify(_UniClient):
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
                 LLMEvent(
-                    request=_request_kw_for_event(kw, accounting_model),
+                    request=_request_kw_for_event(transport_kw, accounting_model),
                     response=None,  # No single response for streams
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,
@@ -1818,6 +1807,12 @@ class AsyncUnify(_UniClient):
         if pending and self._on_log_file_pending:
             self._on_log_file_pending(pending)
         completion = None
+        _, transport_kw = _prepare_request_models(
+            kw=retry_kw,
+            provider=self._provider,
+            transport_model=self._transport_model_alias,
+            stream=False,
+        )
         try:
             with llm_span(
                 label,
@@ -1829,7 +1824,7 @@ class AsyncUnify(_UniClient):
                     lambda: litellm.acompletion(
                         shared_session=get_shared_session(),
                         client=self._get_async_http_client(),
-                        **retry_kw,
+                        **transport_kw,
                     ),
                 )
                 _normalize_assistant_message_content(completion)
@@ -1966,9 +1961,10 @@ class AsyncUnify(_UniClient):
 
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider, prompt_caching)
-        accounting_model = _prepare_provider_request_kw(
+        accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
             provider=self._provider,
+            transport_model=self._transport_model_alias,
             stream=False,
         )
 
@@ -2039,7 +2035,7 @@ class AsyncUnify(_UniClient):
                             lambda: litellm.acompletion(
                                 shared_session=get_shared_session(),
                                 client=self._get_async_http_client(),
-                                **kw,
+                                **transport_kw,
                             ),
                         ),
                         name="llm_call",
@@ -2144,7 +2140,7 @@ class AsyncUnify(_UniClient):
             # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
             _emit_llm_event(
                 LLMEvent(
-                    request=_request_kw_for_event(kw, accounting_model),
+                    request=_request_kw_for_event(transport_kw, accounting_model),
                     response=resp_body,
                     provider_cost=provider_cost,
                     billed_cost=billed_cost,

@@ -1,16 +1,22 @@
-from .utils import register_litellm_model_info, register_model_alias_map
+from .utils import (
+    openrouter_model,
+    register_model_alias_map,
+    register_openrouter_model_info,
+)
 
 provider = "minimax"
 
 models = {
-    "minimax-v3": "minimax/MiniMax-M3",
+    "minimax-v3": openrouter_model("minimax/minimax-m3"),
 }
 
 register_model_alias_map(provider, models)
-register_litellm_model_info(
+register_openrouter_model_info(
     {
-        models["minimax-v3"]: {
+        "minimax/minimax-m3": {
             "max_input_tokens": 1_000_000,
+            "input_cost_per_token": 0.30 / 1_000_000,
+            "output_cost_per_token": 1.20 / 1_000_000,
         },
     },
 )

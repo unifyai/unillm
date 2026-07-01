@@ -1,9 +1,9 @@
-from .utils import register_model_alias_map
+from .utils import openrouter_model, register_model_alias_map
 
 models = {
-    "mistral-large": "mistral/mistral-large-latest",
-    "mistral-medium": "mistral/mistral-medium-latest",
-    "mistral-small": "mistral/mistral-small-latest",
+    "mistral-large": openrouter_model("mistralai/mistral-large"),
+    "mistral-medium": openrouter_model("mistralai/mistral-medium-3.1"),
+    "mistral-small": openrouter_model("mistralai/mistral-small-2603"),
 }
 
 register_model_alias_map("mistral", models)
