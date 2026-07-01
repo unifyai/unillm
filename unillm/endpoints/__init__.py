@@ -5,6 +5,7 @@ from . import groq
 from . import minimax
 from . import mistral
 from . import openai
+from . import openrouter_overrides
 from . import replicate
 from . import togetherai
 from . import vertexai
