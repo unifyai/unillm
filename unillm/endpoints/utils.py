@@ -4,8 +4,31 @@ from typing import Any, Dict
 import litellm
 
 _MODEL_ALIAS_MAP: Dict[str, str] = {}
+_MODEL_TRANSPORT_ALIAS_MAP: Dict[str, str] = {}
 _MODEL_INFO_MAP: Dict[str, Dict[str, Any]] = {}
 _ENDPOINTS_IMPORTED = False
+_OPENROUTER_PREFIX = "openrouter/"
+
+_ANTHROPIC_PUBLIC_ALIASES = {
+    "claude-3-haiku": "anthropic/claude-3-haiku-20240307",
+    "claude-3.5-haiku": "anthropic/claude-3-5-haiku-20241022",
+    "claude-4-sonnet": "anthropic/claude-sonnet-4-20250514",
+    "claude-4-opus": "anthropic/claude-opus-4-20250514",
+    "claude-4.1-opus": "anthropic/claude-opus-4-1-20250805",
+    "claude-4.5-sonnet": "anthropic/claude-sonnet-4-5-20250929",
+    "claude-4.5-haiku": "anthropic/claude-haiku-4-5-20251001",
+    "claude-4.5-opus": "anthropic/claude-opus-4-5-20251101",
+    "claude-4.6-opus": "anthropic/claude-opus-4-6",
+    "claude-4.6-sonnet": "anthropic/claude-sonnet-4-6",
+    "claude-4.8-opus": "anthropic/claude-opus-4-8",
+}
+
+_DEEPSEEK_PUBLIC_ALIASES = {
+    "deepseek-v4-max": "deepseek/deepseek-v4-pro",
+    "deepseek-v4": "deepseek/deepseek-chat",
+    "deepseek-v3": "deepseek/deepseek-chat",
+    "deepseek-r1": "deepseek/deepseek-reasoner",
+}
 
 
 def ensure_endpoints_imported() -> None:
@@ -22,8 +45,14 @@ def register_model_alias_map(
     provider: str,
     model_map: Dict[str, Any],
 ) -> None:
-    _MODEL_ALIAS_MAP.update(
+    _MODEL_TRANSPORT_ALIAS_MAP.update(
         {f"{model}@{provider}": alias for model, alias in model_map.items()},
+    )
+    _MODEL_ALIAS_MAP.update(
+        {
+            f"{model}@{provider}": _public_model_alias(provider, model, alias)
+            for model, alias in model_map.items()
+        },
     )
 
 
@@ -42,6 +71,45 @@ def register_litellm_model_info(model_info: Dict[str, Dict[str, Any]]) -> None:
     litellm.register_model(model_info)
 
 
+def openrouter_model(model_id: str) -> str:
+    """Return the LiteLLM model id for an OpenRouter catalog model."""
+
+    return (
+        model_id
+        if model_id.startswith(_OPENROUTER_PREFIX)
+        else f"{_OPENROUTER_PREFIX}{model_id}"
+    )
+
+
+def _public_model_alias(provider: str, model: str, alias: str) -> str:
+    if provider == "openai":
+        return model
+    if provider == "anthropic":
+        return _ANTHROPIC_PUBLIC_ALIASES.get(model, alias)
+    if provider == "deepseek":
+        return _DEEPSEEK_PUBLIC_ALIASES.get(model, alias)
+    if provider == "minimax" and model == "minimax-v3":
+        return "minimax/MiniMax-M3"
+    if provider == "xiaomi-mimo":
+        return f"xiaomi_mimo/{model}"
+    return alias
+
+
+def register_openrouter_model_info(model_info: Dict[str, Dict[str, Any]]) -> None:
+    """Register OpenRouter metadata not yet present in the pinned LiteLLM release."""
+
+    register_litellm_model_info(
+        {
+            openrouter_model(model): {
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+                **info,
+            }
+            for model, info in model_info.items()
+        },
+    )
+
+
 def get_model_alias(endpoint: str) -> str:
     """
     Get the alias for a model. If the model is not found, throws an exception.
@@ -55,6 +123,21 @@ def get_model_alias(endpoint: str) -> str:
     alias = _MODEL_ALIAS_MAP.get(endpoint)
     if alias is None:
         raise ValueError(f"Model {endpoint} not found")
+    return alias
+
+
+def get_transport_model_alias(endpoint: str) -> str:
+    """
+    Return the LiteLLM transport model for *endpoint*.
+
+    Public aliases remain stable for accounting, logs, and cache keys; transport
+    aliases select the configured backend for inference.
+    """
+
+    ensure_endpoints_imported()
+    alias = _MODEL_TRANSPORT_ALIAS_MAP.get(endpoint)
+    if alias is None:
+        return get_model_alias(endpoint)
     return alias
 
 
