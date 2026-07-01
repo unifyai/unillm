@@ -1,4 +1,7 @@
-from .utils import register_litellm_model_info, register_model_alias_map
+from .utils import (
+    register_litellm_model_info,
+    register_model_alias_map,
+)
 
 provider = "anthropic"
 models = {
@@ -17,6 +20,11 @@ models = {
 
 CONTEXT_1M_BETA = "context-1m-2025-08-07"
 CONTEXT_1M_MODELS = {
+    "anthropic/claude-sonnet-4-20250514",
+    "anthropic/claude-sonnet-4-5-20250929",
+    "anthropic/claude-opus-4-6",
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-opus-4-8",
     models["claude-4-sonnet"],
     models["claude-4.5-sonnet"],
     models["claude-4.6-opus"],
@@ -25,13 +33,14 @@ CONTEXT_1M_MODELS = {
 }
 
 ADAPTIVE_THINKING_MODELS = {
+    "anthropic/claude-opus-4-8",
     models["claude-4.8-opus"],
 }
 
 register_model_alias_map(provider, models)
 register_litellm_model_info(
     {
-        models["claude-3.5-haiku"]: {
+        "anthropic/claude-3-5-haiku-20241022": {
             "litellm_provider": provider,
             "mode": "chat",
             "max_input_tokens": 200_000,
@@ -39,6 +48,27 @@ register_litellm_model_info(
             "cache_creation_input_token_cost": 1.00 / 1_000_000,
             "cache_read_input_token_cost": 0.08 / 1_000_000,
             "output_cost_per_token": 4.00 / 1_000_000,
+        },
+        "anthropic/claude-opus-4-6": {
+            "litellm_provider": provider,
+            "mode": "chat",
+            "max_input_tokens": 1_000_000,
+            "input_cost_per_token": 5.00 / 1_000_000,
+            "output_cost_per_token": 25.00 / 1_000_000,
+        },
+        "anthropic/claude-sonnet-4-6": {
+            "litellm_provider": provider,
+            "mode": "chat",
+            "max_input_tokens": 1_000_000,
+            "input_cost_per_token": 3.00 / 1_000_000,
+            "output_cost_per_token": 15.00 / 1_000_000,
+        },
+        "anthropic/claude-opus-4-8": {
+            "litellm_provider": provider,
+            "mode": "chat",
+            "max_input_tokens": 1_000_000,
+            "input_cost_per_token": 5.00 / 1_000_000,
+            "output_cost_per_token": 25.00 / 1_000_000,
         },
     },
 )
