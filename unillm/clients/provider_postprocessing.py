@@ -14,9 +14,15 @@ Currently handles:
 
 import json
 import logging
-from typing import Any, List, Optional, Set, Tuple, Type, TYPE_CHECKING
+from typing import Any, List, Optional, Set, Tuple, TYPE_CHECKING
 
-from pydantic import BaseModel
+from .response_format import (
+    RESPONSE_FORMAT_SPEC_KEY,
+    ResponseFormatSpec,
+    get_response_format_spec,
+    parse_structured_content,
+    validate_against_spec,
+)
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion, ChatCompletionMessage
@@ -251,8 +257,8 @@ def _build_invalid_tool_name_retry_messages(
             )
     else:
         # No tools available — determine Case B vs Case C
-        rf_model = _get_response_format_model(kw)
-        schema = rf_model.model_json_schema() if rf_model is not None else None
+        rf_spec = get_response_format_spec(kw)
+        schema = rf_spec.json_schema if rf_spec is not None else None
         for tc in tool_calls:
             if schema is not None:
                 # Case C: response_format schema is set
@@ -445,55 +451,32 @@ RESPONSE_FORMAT_RETRY_NUDGE = (
 )
 
 
-def _get_response_format_model(
-    kw: dict,
-) -> Optional[Type[BaseModel]]:
-    """Extract the Pydantic model from the request kwargs, if present."""
-    rf = kw.get("response_format") or kw.get("_unillm_response_format")
-    if rf is None:
-        return None
-    # response_format may be the Pydantic class directly
-    if isinstance(rf, type) and issubclass(rf, BaseModel):
-        return rf
-    # Or it may be a dict with __pydantic_schema__ (unillm internal serialization)
-    if isinstance(rf, dict) and "__pydantic_schema__" in rf:
-        # We can't reconstruct the class from the schema dict alone, but the
-        # original Pydantic class is stored on the *prompt* by callers.  Return
-        # None here — validation will be skipped (no worse than today).
-        return None
-    return None
-
-
 def check_response_format_compliance(
     *,
     response: "ChatCompletion",
     kw: dict,
-) -> Tuple[bool, Optional[str], Optional[Type[BaseModel]]]:
-    """Check whether the response satisfies the response_format Pydantic schema.
+) -> Tuple[bool, Optional[str], Optional[ResponseFormatSpec]]:
+    """Check whether the response satisfies the response_format schema.
 
-    Returns (needs_retry, validation_error_message, pydantic_model).
+    Returns (needs_retry, validation_error_message, response_format_spec).
     If needs_retry is False the other values are None.
     """
-    model_cls = _get_response_format_model(kw)
-    if model_cls is None:
+    spec = get_response_format_spec(kw)
+    if spec is None:
         return False, None, None
 
     msg = response.choices[0].message
     content = msg.content
     if content is None:
-        # tool_calls response or empty — nothing to validate here
         return False, None, None
 
-    # Try JSON parse then Pydantic validation
-    try:
-        parsed = json.loads(content)
-    except (json.JSONDecodeError, TypeError) as exc:
-        return True, f"Response is not valid JSON: {exc}", model_cls
+    parsed, parse_error = parse_structured_content(content)
+    if parse_error is not None:
+        return True, parse_error, spec
 
-    try:
-        model_cls.model_validate(parsed)
-    except Exception as exc:
-        return True, str(exc), model_cls
+    validation_error = validate_against_spec(parsed, spec)
+    if validation_error is not None:
+        return True, validation_error, spec
 
     return False, None, None
 
@@ -503,14 +486,12 @@ def build_response_format_retry_kw(
     kw: dict,
     response: "ChatCompletion",
     validation_error: str,
-    pydantic_model: Type[BaseModel],
+    response_format_spec: ResponseFormatSpec,
 ) -> dict:
     """Build retry kwargs with a nudge explaining the schema violation."""
     msg = response.choices[0].message
 
     retry_messages = list(kw.get("messages", []))
-
-    # Append the non-compliant assistant reply
     retry_messages.append(
         {
             "role": "assistant",
@@ -518,9 +499,7 @@ def build_response_format_retry_kw(
         },
     )
 
-    # Build a compact schema representation for the nudge
-    schema_str = json.dumps(pydantic_model.model_json_schema(), indent=2)
-
+    schema_str = json.dumps(response_format_spec.json_schema, indent=2)
     nudge = RESPONSE_FORMAT_RETRY_NUDGE.format(
         error=validation_error,
         response=msg.content[:500] if msg.content else "(empty)",
@@ -535,12 +514,8 @@ def build_response_format_retry_kw(
 
     retry_kw = dict(kw)
     retry_kw["messages"] = retry_messages
-    # Remove tools and response_format from the retry.  The presence of
-    # tools=[] interferes with response_format enforcement on some providers
-    # (notably Anthropic), and response_format itself can be silently ignored
-    # when the conversation context is tool-heavy.  We rely on the explicit
-    # text-based nudge above to enforce the schema instead.
     retry_kw.pop("tools", None)
     retry_kw.pop("tool_choice", None)
-    retry_kw.pop("response_format", None)
+    retry_kw["response_format"] = response_format_spec.source
+    retry_kw[RESPONSE_FORMAT_SPEC_KEY] = response_format_spec
     return retry_kw

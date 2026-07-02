@@ -123,3 +123,72 @@ def test_response_format_enforced_despite_contradictory_prompt():
     assert len(summary.participants) >= 1, "participants is empty"
     assert isinstance(summary.action_items, list), "action_items is not a list"
     assert summary.summary, "summary is empty"
+
+
+def test_response_format_enforced_despite_contradictory_prompt_deepseek():
+    """DeepSeek must still return schema-valid JSON after tool-style prompt conflict."""
+    import unillm
+
+    client = unillm.Unify(
+        "deepseek-v4-max@deepseek",
+        cache=SETTINGS.UNILLM_CACHE,
+        cache_backend=SETTINGS.UNILLM_CACHE_BACKEND,
+    )
+    response = client.generate(
+        system_message=(
+            "You are an assistant specialised in querying communication transcripts.\n"
+            "Work strictly through the tools provided.\n\n"
+            "Tools (name → argspec):\n"
+            "{\n"
+            '    "filter_messages": "(*, filter: str, offset: int = 0, limit: int = 100) -> Dict",\n'
+            '    "search_messages": "(*, references: Dict[str, str], k: int = 10) -> Dict"\n'
+            "}\n\n"
+            "Use the tools to gather context before answering."
+        ),
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "What topics were discussed in recent emails? "
+                    "Give me a thorough summary."
+                ),
+            },
+        ],
+        tools=[],
+        response_format=MeetingSummary,
+    )
+
+    parsed = json.loads(response)
+    summary = MeetingSummary.model_validate(parsed)
+    assert summary.topic
+    assert isinstance(summary.participants, list)
+    assert len(summary.participants) >= 1
+    assert isinstance(summary.action_items, list)
+    assert summary.summary
+
+
+def test_response_format_openai_dict_envelope(model):
+    envelope = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "ResponseFormat",
+            "schema": ResponseFormat.model_json_schema(),
+            "strict": True,
+        },
+    }
+    client = new_llm_client(model)
+    response = client.generate(
+        system_message="You are a helpful assistant that can answer questions about the user's name and age.",
+        messages=[
+            {"role": "user", "content": "My name is John and I am 30 years old"},
+            {
+                "role": "user",
+                "content": "What is my name and age? respond in JSON format",
+            },
+        ],
+        response_format=envelope,
+    )
+
+    response_json = json.loads(response)
+    assert response_json["name"] == "John"
+    assert response_json["age"] == 30
