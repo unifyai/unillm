@@ -1228,57 +1228,22 @@ class Unify(_UniClient):
         origin: Optional[str] = None,
     ) -> "ChatCompletion":
         """Run all postprocessing checks, retrying once per check if needed."""
-        from .provider_postprocessing import (
-            check_needs_postprocessing,
-            build_retry_kw,
-            check_response_format_compliance,
-            build_response_format_retry_kw,
-        )
+        from .provider_postprocessing import apply_postprocessing_pipeline
 
-        # Step 1: Provider-specific postprocessing (tool retries)
-        raw_tools = kw.get("tools")
-        needs_retry, retry_reason = check_needs_postprocessing(
-            response=chat_completion,
+        return apply_postprocessing_pipeline(
+            chat_completion,
+            kw=kw,
             provider=self._provider,
             original_tool_choice=original_tool_choice,
             reasoning_effort=prompt.components.get("reasoning_effort"),
-            tools=list(raw_tools) if raw_tools is not None else None,
-            request_messages=kw.get("messages"),
             original_request_messages=original_request_messages,
-        )
-        if needs_retry:
-            retry_kw = build_retry_kw(
-                kw=kw,
-                response=chat_completion,
-                retry_reason=retry_reason,
-            )
-            chat_completion = self._execute_postprocessing_retry(
+            execute_retry=lambda retry_kw, label: self._execute_postprocessing_retry(
                 retry_kw,
                 endpoint,
-                "retry",
+                label,
                 origin=origin,
-            )
-
-        # Step 2: response_format schema validation
-        rf_needs_retry, rf_error, rf_spec = check_response_format_compliance(
-            response=chat_completion,
-            kw=kw,
+            ),
         )
-        if rf_needs_retry and rf_spec is not None:
-            rf_retry_kw = build_response_format_retry_kw(
-                kw=kw,
-                response=chat_completion,
-                validation_error=rf_error,
-                response_format_spec=rf_spec,
-            )
-            chat_completion = self._execute_postprocessing_retry(
-                rf_retry_kw,
-                endpoint,
-                "rf-retry",
-                origin=origin,
-            )
-
-        return chat_completion
 
     def _generate_non_stream(
         self,
@@ -1895,57 +1860,22 @@ class AsyncUnify(_UniClient):
         origin: Optional[str] = None,
     ) -> "ChatCompletion":
         """Run all postprocessing checks, retrying once per check if needed."""
-        from .provider_postprocessing import (
-            check_needs_postprocessing,
-            build_retry_kw,
-            check_response_format_compliance,
-            build_response_format_retry_kw,
-        )
+        from .provider_postprocessing import apply_postprocessing_pipeline_async
 
-        # Step 1: Provider-specific postprocessing (tool retries)
-        raw_tools = kw.get("tools")
-        needs_retry, retry_reason = check_needs_postprocessing(
-            response=chat_completion,
+        return await apply_postprocessing_pipeline_async(
+            chat_completion,
+            kw=kw,
             provider=self._provider,
             original_tool_choice=original_tool_choice,
             reasoning_effort=prompt.components.get("reasoning_effort"),
-            tools=list(raw_tools) if raw_tools is not None else None,
-            request_messages=kw.get("messages"),
             original_request_messages=original_request_messages,
-        )
-        if needs_retry:
-            retry_kw = build_retry_kw(
-                kw=kw,
-                response=chat_completion,
-                retry_reason=retry_reason,
-            )
-            chat_completion = await self._execute_postprocessing_retry(
+            execute_retry=lambda retry_kw, label: self._execute_postprocessing_retry(
                 retry_kw,
                 endpoint,
-                "retry",
+                label,
                 origin=origin,
-            )
-
-        # Step 2: response_format schema validation
-        rf_needs_retry, rf_error, rf_spec = check_response_format_compliance(
-            response=chat_completion,
-            kw=kw,
+            ),
         )
-        if rf_needs_retry and rf_spec is not None:
-            rf_retry_kw = build_response_format_retry_kw(
-                kw=kw,
-                response=chat_completion,
-                validation_error=rf_error,
-                response_format_spec=rf_spec,
-            )
-            chat_completion = await self._execute_postprocessing_retry(
-                rf_retry_kw,
-                endpoint,
-                "rf-retry",
-                origin=origin,
-            )
-
-        return chat_completion
 
     async def _generate_non_stream(
         self,
