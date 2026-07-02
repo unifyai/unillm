@@ -18,6 +18,11 @@ on:
         description: "Type LLM_SPEND_OK to acknowledge this calls paid LLM APIs"
         required: true
         type: string
+      publish_seed:
+        description: "Type PUBLISH_SEED_OK to publish .github/cache-seed/cache.ndjson without running tests"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -47,8 +52,12 @@ jobs:
       XIAOMI_MIMO_API_KEY: ${{ secrets.XIAOMI_MIMO_API_KEY }}
       UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
     steps:
-    - name: Validate spend control
+    - name: Validate inputs
       run: |
+        if [ "${{ inputs.publish_seed }}" = "PUBLISH_SEED_OK" ]; then
+          echo "Seed publish mode: skipping LLM spend and pytest."
+          exit 0
+        fi
         if [ "${{ inputs.confirm_llm_spend }}" != "LLM_SPEND_OK" ]; then
           echo "Refusing to run: confirm_llm_spend must be LLM_SPEND_OK (got '${{ inputs.confirm_llm_spend }}')." >&2
           exit 1
@@ -56,28 +65,45 @@ jobs:
 
     - uses: actions/checkout@v4
 
+    - name: Publish seeded cache
+      if: inputs.publish_seed == 'PUBLISH_SEED_OK'
+      run: |
+        if [ ! -s .github/cache-seed/cache.ndjson ]; then
+          echo "Missing .github/cache-seed/cache.ndjson" >&2
+          exit 1
+        fi
+        cp .github/cache-seed/cache.ndjson .cache.ndjson
+        echo "Publishing seeded cache with $(wc -l < .cache.ndjson) entries"
+
     - name: Clone unify repo (public; no token needed)
+      if: inputs.publish_seed != 'PUBLISH_SEED_OK'
       run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unisdk.git unify-sdk
 
     - name: Set up Python
+      if: inputs.publish_seed != 'PUBLISH_SEED_OK'
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
 
     - name: Install uv
+      if: inputs.publish_seed != 'PUBLISH_SEED_OK'
       uses: astral-sh/setup-uv@v5
 
     - name: Configure unify path for CI
+      if: inputs.publish_seed != 'PUBLISH_SEED_OK'
       run: sed -i 's|path = "../unisdk"|path = "./unify-sdk"|g' pyproject.toml
 
     - name: Install unillm deps
+      if: inputs.publish_seed != 'PUBLISH_SEED_OK'
       run: uv sync --group dev
 
     - name: Setup logging directories
+      if: inputs.publish_seed != 'PUBLISH_SEED_OK'
       run: mkdir -p "$LOGS_DIR/unillm" "$LOGS_DIR/all"
 
     # Restore the existing consolidated cache so we only spend on genuine misses.
     - name: Restore LLM cache
+      if: inputs.publish_seed != 'PUBLISH_SEED_OK'
       uses: actions/cache/restore@v4
       with:
         path: .cache.ndjson
@@ -86,6 +112,7 @@ jobs:
           cache-ndjson-${{ runner.os }}-
 
     - name: Run tests to write cache misses
+      if: inputs.publish_seed != 'PUBLISH_SEED_OK'
       run: |
         set +e
         # Real LLM calls happen on cache miss and are written before assertions,
@@ -97,6 +124,7 @@ jobs:
         echo "pytest exit code: ${PIPESTATUS[0]}"
 
     - name: Consolidate cache writes into .cache.ndjson
+      if: inputs.publish_seed != 'PUBLISH_SEED_OK'
       run: |
         mkdir -p cache-artifacts/current
         if [ -f .cache_write.ndjson ]; then

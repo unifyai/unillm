@@ -412,6 +412,12 @@ def _serialize_kw(kw: dict) -> dict:
         if hasattr(obj, "model_json_schema"):
             # Pydantic model class (not instance)
             return {"__pydantic_schema__": obj.model_json_schema()}
+        from unillm.clients.response_format import ResponseFormatSpec
+
+        if isinstance(obj, ResponseFormatSpec):
+            from unillm.clients.response_format import serialize_response_format_spec
+
+            return serialize_response_format_spec(obj)
         try:
             json.dumps(obj)
             return obj
