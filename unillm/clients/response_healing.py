@@ -25,6 +25,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Provider JSON often uses these keys for the primary string payload field.
+_ARGUMENT_ALIASES = (
+    "text",
+    "query",
+    "input",
+    "message",
+    "content",
+    "prompt",
+    "request",
+    "q",
+)
+
 
 def _forced_tool_name(tool_choice: Any) -> Optional[str]:
     if not isinstance(tool_choice, dict):
@@ -131,6 +143,55 @@ def _tool_required_parameters(
         if isinstance(required, list):
             return {name for name in required if isinstance(name, str)}
     return set()
+
+
+def _parse_arguments_dict(arguments: Any) -> Optional[dict[str, Any]]:
+    if isinstance(arguments, dict):
+        return dict(arguments)
+    if isinstance(arguments, str):
+        if not arguments.strip():
+            return {}
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _coerce_tool_arguments(
+    tool_name: str,
+    arguments: Any,
+    tools: Optional[List[dict]],
+) -> Optional[dict[str, Any]]:
+    """Map provider-specific argument shapes onto the tool schema."""
+
+    parsed = _parse_arguments_dict(arguments)
+    if parsed is None:
+        return None
+
+    properties = _tool_parameter_properties(tool_name, tools)
+    required = _tool_required_parameters(tool_name, tools)
+    if not properties and not required:
+        return {} if not parsed else None
+
+    coerced = dict(parsed)
+
+    for key in required:
+        if key in coerced and coerced[key] is not None:
+            continue
+        for alias in _ARGUMENT_ALIASES:
+            if alias == key or alias not in coerced:
+                continue
+            if alias not in properties:
+                coerced[key] = coerced.pop(alias)
+                break
+
+    coerced = {key: value for key, value in coerced.items() if key in properties}
+
+    if not _validate_tool_arguments(tool_name, coerced, tools):
+        return None
+    return coerced
 
 
 def _validate_tool_arguments(
@@ -387,10 +448,50 @@ def _normalize_embedded_call(
 
     raw_call = _unwrap_embedded_call_shape(raw_call)
     name = _embedded_call_name(raw_call)
-    if name is None:
+    if not name:
         return None
     arguments = _embedded_call_arguments(raw_call, tool_name=name, tools=tools)
-    return name, _serialize_arguments(arguments)
+    coerced = _coerce_tool_arguments(name, arguments, tools)
+    if coerced is None:
+        return None
+    return name, _serialize_arguments(coerced)
+
+
+def _nested_embedded_tool_calls(raw_call: dict) -> Optional[list[Any]]:
+    nested = raw_call.get("tool_calls")
+    if isinstance(nested, str):
+        try:
+            nested = json.loads(nested) if nested else []
+        except json.JSONDecodeError:
+            return None
+    if isinstance(nested, list):
+        return nested
+    return None
+
+
+def _collect_embedded_calls(
+    items: list[Any],
+    *,
+    tools: Optional[List[dict]],
+) -> list[tuple[str, str]]:
+    """Extract valid tool calls, flattening nested provider ``tool_calls`` trees."""
+
+    calls: list[tuple[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        raw_call = _unwrap_embedded_call_shape(item)
+        normalized = _normalize_embedded_call(raw_call, tools=tools)
+        if normalized is not None:
+            calls.append(normalized)
+            continue
+
+        nested = _nested_embedded_tool_calls(raw_call)
+        if nested:
+            calls.extend(_collect_embedded_calls(nested, tools=tools))
+
+    return calls
 
 
 def _promoted_tool_call_dicts(
@@ -419,11 +520,11 @@ def _extract_embedded_calls(
             inner = json.loads(inner) if inner else []
         if not isinstance(inner, list) or not inner:
             return [], set()
-        calls = [_normalize_embedded_call(item, tools=tools) for item in inner]
-        if any(call is None for call in calls):
+        calls = _collect_embedded_calls(inner, tools=tools)
+        if not calls:
             return [], set()
         promoted_keys.add("tool_calls")
-        return calls, promoted_keys  # type: ignore[return-value]
+        return calls, promoted_keys
 
     if _embedded_call_name(parsed) is not None and any(
         key in parsed
