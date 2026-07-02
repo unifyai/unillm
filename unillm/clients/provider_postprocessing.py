@@ -112,15 +112,13 @@ def check_needs_postprocessing(
             reasoning_effort=reasoning_effort,
             tools=tools,
         )
-    if provider in SOFT_FORCED_TOOL_CHOICE_PROVIDERS:
-        return _check_soft_forced_tool_choice_postprocessing(
-            response=response,
-            original_tool_choice=original_tool_choice,
-            tools=tools,
-            request_messages=request_messages,
-            original_request_messages=original_request_messages,
-        )
-    return False, None
+    return _check_soft_forced_tool_choice_postprocessing(
+        response=response,
+        original_tool_choice=original_tool_choice,
+        tools=tools,
+        request_messages=request_messages,
+        original_request_messages=original_request_messages,
+    )
 
 
 def _get_valid_tool_names(tools: Optional[List[dict]]) -> List[str]:
@@ -539,6 +537,7 @@ def apply_postprocessing_pipeline(
         original_tool_choice=original_tool_choice,
         tools=tools,
         response_format_spec=response_format_spec,
+        request_messages=kw.get("messages"),
     )
 
     needs_retry, retry_reason = check_needs_postprocessing(
@@ -563,6 +562,7 @@ def apply_postprocessing_pipeline(
             original_tool_choice=original_tool_choice,
             tools=tools,
             response_format_spec=response_format_spec,
+            request_messages=retry_kw.get("messages"),
         )
         check_needs_postprocessing(
             response=chat_completion,
@@ -611,6 +611,7 @@ async def apply_postprocessing_pipeline_async(
         original_tool_choice=original_tool_choice,
         tools=tools,
         response_format_spec=response_format_spec,
+        request_messages=kw.get("messages"),
     )
 
     needs_retry, retry_reason = check_needs_postprocessing(
@@ -635,6 +636,7 @@ async def apply_postprocessing_pipeline_async(
             original_tool_choice=original_tool_choice,
             tools=tools,
             response_format_spec=response_format_spec,
+            request_messages=retry_kw.get("messages"),
         )
         check_needs_postprocessing(
             response=chat_completion,
