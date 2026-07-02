@@ -215,7 +215,11 @@ def _prepare_provider_request_kw(
     model = str(kw.get("model") or "")
     tools = kw.get("tools")
 
-    if provider == "minimax" and kw.get("api_base") is None:
+    if (
+        provider == "minimax"
+        and kw.get("api_base") is None
+        and not model.startswith(_OPENROUTER_MODEL_PREFIX)
+    ):
         kw["api_base"] = "https://api.minimax.io/v1"
 
     if provider == "xiaomi-mimo" and kw.get("api_base") is None:

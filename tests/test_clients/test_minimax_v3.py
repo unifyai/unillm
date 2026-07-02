@@ -4,7 +4,12 @@ import pytest
 
 import unillm
 from unillm.clients.uni_llm import _prepare_provider_request_kw
-from unillm.endpoints.utils import get_model_alias, get_model_info, list_models
+from unillm.endpoints.utils import (
+    get_model_alias,
+    get_model_info,
+    get_transport_model_alias,
+    list_models,
+)
 
 MINIMAX_V3_ENDPOINT = "minimax-v3@minimax"
 MINIMAX_V3_PROVIDER_MODEL = "minimax/MiniMax-M3"
@@ -32,6 +37,19 @@ def test_minimax_request_uses_default_api_base() -> None:
     _prepare_provider_request_kw(kw=kw, provider="minimax", stream=False)
 
     assert kw["api_base"] == "https://api.minimax.io/v1"
+
+
+def test_minimax_openrouter_transport_skips_direct_api_base() -> None:
+    transport_model = get_transport_model_alias(MINIMAX_V3_ENDPOINT)
+    kw = {
+        "model": transport_model,
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    _prepare_provider_request_kw(kw=kw, provider="minimax", stream=False)
+
+    assert transport_model.startswith("openrouter/")
+    assert "api_base" not in kw
 
 
 @pytest.mark.skipif(not _HAS_MINIMAX_API_KEY, reason="No MiniMax API key available")
