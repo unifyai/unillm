@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
+import re
 from typing import Any, List, Optional, TYPE_CHECKING
 
 from openai.types.chat.chat_completion_message_tool_call import (
@@ -80,6 +82,234 @@ def _embedded_call_name(raw_call: dict) -> Optional[str]:
         if isinstance(name, str) and name:
             return name
     return None
+
+
+def _tool_is_argumentless(tool_name: str, tools: Optional[List[dict]]) -> bool:
+    if not tools:
+        return False
+    for tool in tools:
+        if tool.get("type") != "function":
+            continue
+        function = tool.get("function", {})
+        if function.get("name") != tool_name:
+            continue
+        parameters = function.get("parameters", {})
+        if not isinstance(parameters, dict):
+            return True
+        required = parameters.get("required", [])
+        return not required
+    return False
+
+
+def _candidate_tool_names(
+    tools: Optional[List[dict]],
+    *,
+    only_name: Optional[str] = None,
+) -> list[str]:
+    names = sorted(_valid_tool_names(tools), key=len, reverse=True)
+    if only_name is None:
+        return names
+    return [only_name] if only_name in names else []
+
+
+def _tool_required_parameters(
+    tool_name: str,
+    tools: Optional[List[dict]],
+) -> set[str]:
+    if not tools:
+        return set()
+    for tool in tools:
+        if tool.get("type") != "function":
+            continue
+        function = tool.get("function", {})
+        if function.get("name") != tool_name:
+            continue
+        parameters = function.get("parameters", {})
+        if not isinstance(parameters, dict):
+            return set()
+        required = parameters.get("required", [])
+        if isinstance(required, list):
+            return {name for name in required if isinstance(name, str)}
+    return set()
+
+
+def _validate_tool_arguments(
+    tool_name: str,
+    arguments: dict[str, Any],
+    tools: Optional[List[dict]],
+) -> bool:
+    properties = _tool_parameter_properties(tool_name, tools)
+    required = _tool_required_parameters(tool_name, tools)
+    if not properties and not required:
+        return not arguments
+    for key in arguments:
+        if key not in properties:
+            return False
+    for key in required:
+        if key not in arguments:
+            return False
+    return True
+
+
+def _parse_python_call_arguments(args_str: str) -> Optional[dict[str, Any]]:
+    args_str = args_str.strip()
+    if not args_str:
+        return {}
+
+    try:
+        tree = ast.parse(f"_placeholder({args_str})", mode="eval")
+    except SyntaxError:
+        return None
+
+    call = tree.body
+    if not isinstance(call, ast.Call):
+        return None
+    if call.args:
+        return None
+    if any(keyword.arg is None for keyword in call.keywords):
+        return None
+
+    arguments: dict[str, Any] = {}
+    for keyword in call.keywords:
+        assert keyword.arg is not None
+        arguments[keyword.arg] = ast.literal_eval(keyword.value)
+    return arguments
+
+
+def _find_python_tool_call_in_text(
+    text: str,
+    *,
+    tools: Optional[List[dict]],
+    candidates: list[str],
+) -> Optional[tuple[str, dict[str, Any]]]:
+    best: Optional[tuple[int, int, str, dict[str, Any]]] = None
+
+    for name in candidates:
+        pattern = re.compile(rf"\b{re.escape(name)}\s*\(([^)]*)\)")
+        for match in pattern.finditer(text):
+            arguments = _parse_python_call_arguments(match.group(1))
+            if arguments is None:
+                continue
+            if not _validate_tool_arguments(name, arguments, tools):
+                continue
+            position = match.start()
+            candidate = (position, len(name), name, arguments)
+            if best is None:
+                best = candidate
+                continue
+            if candidate[0] < best[0]:
+                best = candidate
+                continue
+            if candidate[0] == best[0] and candidate[1] > best[1]:
+                best = candidate
+
+    if best is None:
+        return None
+    return best[2], best[3]
+
+
+def _argumentless_tool_names(
+    tools: Optional[List[dict]],
+    *,
+    only_name: Optional[str] = None,
+) -> list[str]:
+    return [
+        name
+        for name in _candidate_tool_names(tools, only_name=only_name)
+        if _tool_is_argumentless(name, tools)
+    ]
+
+
+def _content_search_text(content: str) -> str:
+    try:
+        parsed = json.loads(content.strip())
+    except json.JSONDecodeError:
+        return content
+
+    if not isinstance(parsed, dict):
+        return content
+
+    parts = [content]
+    for value in parsed.values():
+        if isinstance(value, str):
+            parts.append(value)
+    return "\n".join(parts)
+
+
+def _tool_name_in_text(tool_name: str, text: str) -> bool:
+    return re.search(rf"\b{re.escape(tool_name)}\b", text) is not None
+
+
+def _exact_tool_name_values(parsed: dict, allowed: set[str]) -> set[str]:
+    found: set[str] = set()
+    for value in parsed.values():
+        if isinstance(value, str) and value in allowed:
+            found.add(value)
+    return found
+
+
+def _infer_argumentless_tool_name(
+    content: str,
+    *,
+    tools: Optional[List[dict]],
+    original_tool_choice: Any,
+) -> Optional[str]:
+    forced_name = _forced_tool_name(original_tool_choice)
+    candidates = _argumentless_tool_names(
+        tools,
+        only_name=forced_name,
+    )
+    if not candidates:
+        return None
+
+    allowed = set(candidates)
+    exact_matches: set[str] = set()
+    try:
+        parsed = json.loads(content.strip())
+        if isinstance(parsed, dict):
+            exact_matches = _exact_tool_name_values(parsed, allowed)
+    except json.JSONDecodeError:
+        pass
+
+    search_text = _content_search_text(content)
+    matched = [
+        name
+        for name in candidates
+        if name in exact_matches or _tool_name_in_text(name, search_text)
+    ]
+    if not matched:
+        return None
+    return matched[0]
+
+
+def _infer_tool_call_from_content(
+    content: str,
+    *,
+    tools: Optional[List[dict]],
+    original_tool_choice: Any,
+) -> Optional[tuple[str, dict[str, Any]]]:
+    forced_name = _forced_tool_name(original_tool_choice)
+    candidates = _candidate_tool_names(tools, only_name=forced_name)
+    if not candidates:
+        return None
+
+    search_text = _content_search_text(content)
+    python_call = _find_python_tool_call_in_text(
+        search_text,
+        tools=tools,
+        candidates=candidates,
+    )
+    if python_call is not None:
+        return python_call
+
+    argumentless_name = _infer_argumentless_tool_name(
+        content,
+        tools=tools,
+        original_tool_choice=original_tool_choice,
+    )
+    if argumentless_name is None:
+        return None
+    return argumentless_name, {}
 
 
 def _tool_parameter_properties(
@@ -332,6 +562,52 @@ def try_heal_embedded_tool_calls(
     return response
 
 
+def try_infer_tool_call_from_content(
+    response: "ChatCompletion",
+    *,
+    provider: str,
+    original_tool_choice: Any,
+    tools: Optional[List[dict]],
+    response_format_spec: Optional[ResponseFormatSpec],
+) -> Optional["ChatCompletion"]:
+    msg = response.choices[0].message
+    if not should_attempt_tool_call_healing(provider, original_tool_choice, msg):
+        return None
+
+    content = msg.content
+    if not isinstance(content, str) or not content.strip():
+        return None
+
+    inferred = _infer_tool_call_from_content(
+        content,
+        tools=tools,
+        original_tool_choice=original_tool_choice,
+    )
+    if inferred is None:
+        return None
+
+    tool_name, arguments = inferred
+    if not _content_passes_response_format(content, response_format_spec):
+        return None
+
+    promoted_tool_calls = _promoted_tool_call_dicts(
+        [(tool_name, _serialize_arguments(arguments))],
+    )
+
+    msg.tool_calls = promoted_tool_calls
+    response.choices[0].finish_reason = "tool_calls"
+
+    logger.info(
+        "Inferred tool call from text for provider=%s tool=%s",
+        provider,
+        tool_name,
+    )
+    return response
+
+
+try_infer_argumentless_tool_from_content = try_infer_tool_call_from_content
+
+
 def maybe_heal_tool_calls_in_completion(
     chat_completion: "ChatCompletion",
     *,
@@ -347,4 +623,13 @@ def maybe_heal_tool_calls_in_completion(
         tools=tools,
         response_format_spec=response_format_spec,
     )
-    return healed if healed is not None else chat_completion
+    if healed is not None:
+        return healed
+    inferred = try_infer_tool_call_from_content(
+        chat_completion,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        tools=tools,
+        response_format_spec=response_format_spec,
+    )
+    return inferred if inferred is not None else chat_completion
