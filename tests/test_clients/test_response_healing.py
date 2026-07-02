@@ -559,6 +559,102 @@ def test_heal_deepseek_tool_name_query_format():
     }
 
 
+WAIT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "wait",
+        "description": "Pause until the next event.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+}
+
+
+def test_heal_deepseek_tool_call_name_format():
+    """DeepSeek V4 sometimes emits ``tool_call_name`` / ``tool_call_parameters``."""
+
+    thoughts = (
+        "The in-flight action is already searching for Alice's contact record. "
+        "I've already acknowledged with 'Let me check.' I should wait for the "
+        "action to complete."
+    )
+    content = json.dumps(
+        {
+            "thoughts": thoughts,
+            "tool_calls": [
+                {
+                    "tool_call_id": "wait",
+                    "tool_call_name": "wait",
+                    "tool_call_parameters": {},
+                },
+            ],
+        },
+    )
+    response = _completion(content)
+    spec = canonicalize_response_format(TextResponse)
+
+    healed = try_heal_embedded_tool_calls(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[WAIT_TOOL],
+        response_format_spec=spec,
+    )
+
+    assert healed is not None
+    msg = healed.choices[0].message
+    assert msg.tool_calls is not None
+    call = _tool_call_from_message(msg)
+    assert call["function"]["name"] == "wait"
+    assert json.loads(call["function"]["arguments"]) == {}
+    assert json.loads(msg.content) == {"thoughts": thoughts}
+    assert healed.choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+def test_heal_tool_call_name_avoids_tool_choice_retry(provider):
+    content = json.dumps(
+        {
+            "thoughts": "Wait for the in-flight contact lookup to finish.",
+            "tool_calls": [
+                {
+                    "tool_call_id": "wait",
+                    "tool_call_name": "wait",
+                    "tool_call_parameters": {},
+                },
+            ],
+        },
+    )
+    response = _completion(content)
+    kw = {
+        "messages": [{"role": "user", "content": "What's Alice's phone number?"}],
+        "tools": [WAIT_TOOL],
+    }
+    retry_calls: list[str] = []
+
+    def execute_retry(retry_kw, label):
+        retry_calls.append(label)
+        raise AssertionError("tool-choice retry should not run when healing succeeds")
+
+    result = apply_postprocessing_pipeline(
+        response,
+        kw=kw,
+        provider=provider,
+        original_tool_choice="required",
+        reasoning_effort=None,
+        execute_retry=execute_retry,
+    )
+
+    assert retry_calls == []
+    assert result.choices[0].message.tool_calls is not None
+    assert (
+        _tool_call_from_message(result.choices[0].message)["function"]["name"] == "wait"
+    )
+
+
 ACT_TOOL = {
     "type": "function",
     "function": {
