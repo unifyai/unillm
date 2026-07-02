@@ -3,7 +3,7 @@ import copy
 import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Literal, Optional, Type, Union
+from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Type, Union
 
 import requests
 
@@ -41,7 +41,7 @@ class _Client(ABC):
         max_completion_tokens: Optional[int],
         n: Optional[int],
         presence_penalty: Optional[float],
-        response_format: Optional[Union[Type[BaseModel], Dict[str, str]]],
+        response_format: Optional[Union[Type[BaseModel], Dict[str, Any]]],
         seed: Optional[int],
         stop: Union[Optional[str], List[str]],
         stream: Optional[bool],
@@ -262,7 +262,7 @@ class _Client(ABC):
         return self._presence_penalty
 
     @property
-    def response_format(self) -> Optional[Union[Type[BaseModel], Dict[str, str]]]:
+    def response_format(self) -> Optional[Union[Type[BaseModel], Dict[str, Any]]]:
         """
         Get the default response format, if set.
 
@@ -607,7 +607,7 @@ class _Client(ABC):
 
     def set_response_format(
         self,
-        value: Optional[Union[Type[BaseModel], Dict[str, str]]],
+        value: Optional[Union[Type[BaseModel], Dict[str, Any]]],
     ) -> Self:
         """
         Set the default response format.
@@ -1254,7 +1254,7 @@ class _Client(ABC):
         max_completion_tokens: Optional[int],
         n: Optional[int],
         presence_penalty: Optional[float],
-        response_format: Optional[Union[Type[BaseModel], Dict[str, str]]],
+        response_format: Optional[Union[Type[BaseModel], Dict[str, Any]]],
         seed: Optional[int],
         stop: Union[Optional[str], List[str]],
         stream: Optional[bool],

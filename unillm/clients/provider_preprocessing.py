@@ -4,6 +4,11 @@ import copy
 import json
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from .response_format import (
+    apply_response_format_transport,
+    ensure_response_format_spec,
+    get_response_format_spec,
+)
 from ..types import PromptCacheParam
 
 CONCURRENT_USER_MESSAGES_EXPLANATION = (
@@ -634,29 +639,6 @@ def _apply_deepseek_thinking_compliance(kw: Dict[str, Any]) -> None:
             msg["reasoning_content"] = ""
 
 
-def _apply_deepseek_response_format_instructions(kw: Dict[str, Any]) -> None:
-    response_format = kw.pop("response_format", None)
-    if response_format is None:
-        return
-
-    if isinstance(response_format, type) and hasattr(
-        response_format,
-        "model_json_schema",
-    ):
-        schema = response_format.model_json_schema()
-    elif isinstance(response_format, dict):
-        schema = response_format
-    else:
-        schema = {"type": "object"}
-
-    instruction = (
-        "Respond with valid JSON only, with no markdown or commentary. "
-        "The JSON must conform to this schema:\n"
-        f"{json.dumps(schema, indent=2)}"
-    )
-    kw["messages"].insert(0, {"role": "system", "content": instruction})
-
-
 def _forced_tool_name(tool_choice: Any) -> Optional[str]:
     if not isinstance(tool_choice, dict):
         return None
@@ -742,6 +724,8 @@ def apply_provider_preprocessing(
     prompt_caching: Optional[PromptCacheParam] = None,
 ) -> Dict[str, Any]:
     """Apply provider-specific preprocessing to messages in kw dict (mutates kw)."""
+    ensure_response_format_spec(kw)
+
     messages = kw.get("messages")
     if not messages:
         return kw
@@ -750,7 +734,9 @@ def apply_provider_preprocessing(
     kw["messages"] = messages
 
     if provider == "deepseek":
-        _apply_deepseek_response_format_instructions(kw)
+        spec = get_response_format_spec(kw)
+        if spec is not None:
+            apply_response_format_transport(spec, provider, kw)
         _apply_deepseek_thinking_compliance(kw)
         _apply_soft_forced_tool_choice_compliance(kw)
         _strip_internal_annotations(kw)

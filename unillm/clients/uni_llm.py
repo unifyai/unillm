@@ -248,7 +248,9 @@ def _request_kw_for_event(kw: dict, accounting_model: str) -> dict:
 
 
 def _request_kw_for_transport(kw: dict, transport_model: str) -> dict:
-    request_kw = dict(kw)
+    request_kw = {
+        key: value for key, value in kw.items() if not key.startswith("_unillm_")
+    }
     request_kw["model"] = transport_model
     return request_kw
 
@@ -320,7 +322,7 @@ class _UniClient(_Client, abc.ABC):
         max_completion_tokens: Optional[int] = None,
         n: Optional[int] = None,
         presence_penalty: Optional[float] = None,
-        response_format: Optional[Union[Type[BaseModel], Dict[str, str]]] = None,
+        response_format: Optional[Union[Type[BaseModel], Dict[str, Any]]] = None,
         seed: Optional[int] = None,
         stop: Union[Optional[str], List[str]] = None,
         stream: Optional[bool] = False,
@@ -790,7 +792,7 @@ class _UniClient(_Client, abc.ABC):
         max_completion_tokens: Optional[int] = None,
         n: Optional[int] = None,
         presence_penalty: Optional[float] = None,
-        response_format: Optional[Union[Type[BaseModel], Dict[str, str]]] = None,
+        response_format: Optional[Union[Type[BaseModel], Dict[str, Any]]] = None,
         seed: Optional[int] = None,
         stop: Union[Optional[str], List[str]] = None,
         stream: Optional[bool] = None,
@@ -1149,6 +1151,7 @@ class Unify(_UniClient):
         if pending and self._on_log_file_pending:
             self._on_log_file_pending(pending)
         completion = None
+        apply_provider_preprocessing(retry_kw, self._provider, prompt_caching=None)
         _, transport_kw = _prepare_request_models(
             kw=retry_kw,
             provider=self._provider,
@@ -1253,16 +1256,16 @@ class Unify(_UniClient):
             )
 
         # Step 2: response_format schema validation
-        rf_needs_retry, rf_error, rf_model = check_response_format_compliance(
+        rf_needs_retry, rf_error, rf_spec = check_response_format_compliance(
             response=chat_completion,
             kw=kw,
         )
-        if rf_needs_retry and rf_model is not None:
+        if rf_needs_retry and rf_spec is not None:
             rf_retry_kw = build_response_format_retry_kw(
                 kw=kw,
                 response=chat_completion,
                 validation_error=rf_error,
-                pydantic_model=rf_model,
+                response_format_spec=rf_spec,
             )
             chat_completion = self._execute_postprocessing_retry(
                 rf_retry_kw,
@@ -1506,7 +1509,7 @@ class Unify(_UniClient):
         max_completion_tokens: Optional[int],
         n: Optional[int],
         presence_penalty: Optional[float],
-        response_format: Optional[Union[Type[BaseModel], Dict[str, str]]],
+        response_format: Optional[Union[Type[BaseModel], Dict[str, Any]]],
         seed: Optional[int],
         stop: Union[Optional[str], List[str]],
         stream: Optional[bool],
@@ -1807,6 +1810,7 @@ class AsyncUnify(_UniClient):
         if pending and self._on_log_file_pending:
             self._on_log_file_pending(pending)
         completion = None
+        apply_provider_preprocessing(retry_kw, self._provider, prompt_caching=None)
         _, transport_kw = _prepare_request_models(
             kw=retry_kw,
             provider=self._provider,
@@ -1919,16 +1923,16 @@ class AsyncUnify(_UniClient):
             )
 
         # Step 2: response_format schema validation
-        rf_needs_retry, rf_error, rf_model = check_response_format_compliance(
+        rf_needs_retry, rf_error, rf_spec = check_response_format_compliance(
             response=chat_completion,
             kw=kw,
         )
-        if rf_needs_retry and rf_model is not None:
+        if rf_needs_retry and rf_spec is not None:
             rf_retry_kw = build_response_format_retry_kw(
                 kw=kw,
                 response=chat_completion,
                 validation_error=rf_error,
-                pydantic_model=rf_model,
+                response_format_spec=rf_spec,
             )
             chat_completion = await self._execute_postprocessing_retry(
                 rf_retry_kw,
@@ -2218,7 +2222,7 @@ class AsyncUnify(_UniClient):
         max_completion_tokens: Optional[int],
         n: Optional[int],
         presence_penalty: Optional[float],
-        response_format: Optional[Union[Type[BaseModel], Dict[str, str]]],
+        response_format: Optional[Union[Type[BaseModel], Dict[str, Any]]],
         seed: Optional[int],
         stop: Union[Optional[str], List[str]],
         stream: Optional[bool],

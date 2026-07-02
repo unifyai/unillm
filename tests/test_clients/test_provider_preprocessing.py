@@ -706,9 +706,31 @@ class TestDeepSeekThinkingCompliance:
 
         apply_provider_preprocessing(kw, "deepseek")
 
-        assert "response_format" not in kw
+        assert kw["response_format"] == {"type": "json_object"}
+        assert "_unillm_response_format_spec" in kw
         assert kw["messages"][0]["role"] == "system"
         assert "valid JSON only" in kw["messages"][0]["content"]
+        assert '"answer"' in kw["messages"][0]["content"]
+
+    def test_response_format_json_schema_dict_uses_inner_schema(self):
+        envelope = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "Answer",
+                "schema": self._Answer.model_json_schema(),
+                "strict": True,
+            },
+        }
+        kw = {
+            "model": "deepseek/deepseek-v4-pro",
+            "response_format": envelope,
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        apply_provider_preprocessing(kw, "deepseek")
+
+        assert '"answer"' in kw["messages"][0]["content"]
+        assert '"type": "json_schema"' not in kw["messages"][0]["content"]
 
     def test_required_tool_choice_is_downgraded_to_auto(self):
         kw = {
