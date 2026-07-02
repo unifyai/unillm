@@ -75,7 +75,7 @@ def _embedded_call_name(raw_call: dict) -> Optional[str]:
         name = raw_call["function"].get("name")
         return name if isinstance(name, str) and name else None
 
-    for key in ("name", "tool_name", "tool"):
+    for key in ("name", "tool_name", "tool_call_name", "tool"):
         name = raw_call.get(key)
         if isinstance(name, str) and name:
             return name
@@ -124,7 +124,14 @@ def _embedded_call_arguments(
     if "function" in raw_call and isinstance(raw_call["function"], dict):
         return raw_call["function"].get("arguments", {})
 
-    for key in ("arguments", "tool_args", "input", "parameters", "args"):
+    for key in (
+        "arguments",
+        "tool_args",
+        "tool_call_parameters",
+        "input",
+        "parameters",
+        "args",
+    ):
         if key in raw_call:
             return raw_call[key]
 
@@ -193,6 +200,7 @@ def _extract_embedded_calls(
         for key in (
             "arguments",
             "tool_args",
+            "tool_call_parameters",
             "input",
             "parameters",
             "args",
@@ -209,9 +217,11 @@ def _extract_embedded_calls(
             for key in (
                 "name",
                 "tool_name",
+                "tool_call_name",
                 "tool",
                 "arguments",
                 "tool_args",
+                "tool_call_parameters",
                 "input",
                 "parameters",
                 "args",
