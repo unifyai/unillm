@@ -175,26 +175,30 @@ def test_heal_noop_when_native_tool_calls_present():
     assert healed is None
 
 
-def test_heal_noop_wrong_provider():
+def test_heal_works_for_any_provider():
     content = json.dumps(
         {
             "thoughts": "Try tool.",
             "tool_calls": [
-                {"name": "send_unify_message", "arguments": {"content": "x"}},
+                {
+                    "name": "send_unify_message",
+                    "arguments": {"content": "x", "contact_id": 1},
+                },
             ],
         },
     )
     response = _completion(content)
 
-    healed = try_heal_embedded_tool_calls(
-        response,
-        provider="anthropic",
-        original_tool_choice="required",
-        tools=[SEND_UNIFY_MESSAGE_TOOL],
-        response_format_spec=None,
-    )
-
-    assert healed is None
+    for provider in ("anthropic", "openai", "deepseek", "minimax"):
+        trial = _completion(content)
+        healed = try_heal_embedded_tool_calls(
+            trial,
+            provider=provider,
+            original_tool_choice="required",
+            tools=[SEND_UNIFY_MESSAGE_TOOL],
+            response_format_spec=None,
+        )
+        assert healed is not None
 
 
 def test_heal_noop_when_tool_choice_auto():
@@ -801,13 +805,20 @@ def test_infer_wait_from_exact_action_field():
 
     inferred = try_infer_argumentless_tool_from_content(
         response,
-        provider="deepseek",
+        provider="openai",
         original_tool_choice="required",
         tools=[WAIT_TOOL],
         response_format_spec=canonicalize_response_format(TextResponse),
     )
 
-    assert inferred is None
+    assert inferred is not None
+    assert (
+        _tool_call_from_message(inferred.choices[0].message)["function"]["name"]
+        == "wait"
+    )
+    assert json.loads(inferred.choices[0].message.content) == {
+        "thoughts": "Waiting for the contact lookup to finish.",
+    }
 
 
 def test_infer_wait_from_exact_action_field_without_response_format():
@@ -1159,3 +1170,182 @@ def test_heal_rejects_tool_call_missing_required_argument():
     )
 
     assert healed is None
+
+
+ACT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "act",
+        "description": "Search and act on information.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "requesting_contact_id": {"type": "integer"},
+            },
+            "required": ["query", "requesting_contact_id"],
+        },
+    },
+}
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "deepseek", "minimax"])
+def test_infer_ask_about_contacts_from_prose_intent(provider):
+    thoughts = (
+        "The boss is asking whether Sarah prefers phone or email. There's no Sarah "
+        "in active conversations, so I need to look her up. This is purely a "
+        "contact-related query, so I'll use ask_about_contacts directly."
+    )
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+    spec = canonicalize_response_format(TextResponse)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider=provider,
+        original_tool_choice="required",
+        tools=[ASK_ABOUT_CONTACTS_TOOL, WAIT_TOOL],
+        response_format_spec=spec,
+    )
+
+    assert inferred is not None
+    call = _tool_call_from_message(inferred.choices[0].message)
+    assert call["function"]["name"] == "ask_about_contacts"
+    arguments = json.loads(call["function"]["arguments"])
+    assert "text" in arguments
+    assert "Sarah" in arguments["text"]
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "deepseek", "minimax"])
+def test_infer_act_from_prose_intent_with_contact_id(provider):
+    thoughts = (
+        "My boss asked about office hours. I'll use act to search for office hours "
+        "for contact_id=1."
+    )
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider=provider,
+        original_tool_choice="required",
+        tools=[ACT_TOOL, WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is not None
+    call = _tool_call_from_message(inferred.choices[0].message)
+    assert call["function"]["name"] == "act"
+    assert json.loads(call["function"]["arguments"]) == {
+        "query": "search for office hours",
+        "requesting_contact_id": 1,
+    }
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "deepseek", "minimax"])
+def test_infer_prefers_prose_tool_over_wait_mention(provider):
+    thoughts = (
+        "The user is sharing their screen and asking what I can see on it. I should "
+        "use the act tool to view/analyze their screen share."
+    )
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider=provider,
+        original_tool_choice="required",
+        tools=[ACT_TOOL, WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is None
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "deepseek", "minimax"])
+def test_infer_contact_lookup_without_tool_name(provider):
+    thoughts = (
+        "The user is asking about Sarah's communication preference. I should check "
+        "my contacts to find Sarah's information. Let me search for Sarah in my "
+        "contacts."
+    )
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider=provider,
+        original_tool_choice="required",
+        tools=[ASK_ABOUT_CONTACTS_TOOL, WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is not None
+    assert (
+        _tool_call_from_message(inferred.choices[0].message)["function"]["name"]
+        == "ask_about_contacts"
+    )
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "deepseek", "minimax"])
+def test_infer_act_summarize_with_boss_contact_from_messages(provider):
+    thoughts = (
+        "The boss is asking me to summarize what's open across Alice and Bob's "
+        "threads and tell them what I would do next."
+    )
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+    request_messages = [
+        {
+            "role": "user",
+            "content": '<contact contact_id="1" first_name="Default" is_boss="True">',
+        },
+    ]
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider=provider,
+        original_tool_choice="required",
+        tools=[ACT_TOOL, WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+        request_messages=request_messages,
+    )
+
+    assert inferred is not None
+    call = _tool_call_from_message(inferred.choices[0].message)
+    assert call["function"]["name"] == "act"
+    assert json.loads(call["function"]["arguments"])["requesting_contact_id"] == 1
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "deepseek", "minimax"])
+def test_prose_inference_avoids_tool_choice_retry(provider):
+    thoughts = (
+        "The boss is asking about Sarah's communication preference. Let me use "
+        "ask_about_contacts to find Sarah's contact record."
+    )
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+    kw = {
+        "messages": [{"role": "user", "content": "Does Sarah prefer phone or email?"}],
+        "tools": [ASK_ABOUT_CONTACTS_TOOL],
+    }
+    retry_calls: list[str] = []
+
+    def execute_retry(retry_kw, label):
+        retry_calls.append(label)
+        raise AssertionError("tool-choice retry should not run when inference succeeds")
+
+    result = apply_postprocessing_pipeline(
+        response,
+        kw=kw,
+        provider=provider,
+        original_tool_choice="required",
+        reasoning_effort=None,
+        execute_retry=execute_retry,
+    )
+
+    assert retry_calls == []
+    assert (
+        _tool_call_from_message(result.choices[0].message)["function"]["name"]
+        == "ask_about_contacts"
+    )
