@@ -44,23 +44,31 @@ class BaseCache(ABC):
             ret = obj.model_dump()
         elif inspect.isclass(obj) and issubclass(obj, BaseModel):
             ret = json.dumps(obj.model_json_schema())
-        elif isinstance(obj, dict):
-            ret = {
-                k: BaseCache.serialize_object(v, cached_types, idx + ["k"])
-                for k, v in obj.items()
-            }
-        elif isinstance(obj, list):
-            ret = [
-                BaseCache.serialize_object(v, cached_types, idx + [i])
-                for i, v in enumerate(obj)
-            ]
-        elif isinstance(obj, tuple):
-            ret = tuple(
-                BaseCache.serialize_object(v, cached_types, idx + [i])
-                for i, v in enumerate(obj)
-            )
         else:
-            ret = obj
+            from unillm.clients.response_format import (
+                ResponseFormatSpec,
+                serialize_response_format_spec,
+            )
+
+            if isinstance(obj, ResponseFormatSpec):
+                ret = serialize_response_format_spec(obj)
+            elif isinstance(obj, dict):
+                ret = {
+                    k: BaseCache.serialize_object(v, cached_types, idx + ["k"])
+                    for k, v in obj.items()
+                }
+            elif isinstance(obj, list):
+                ret = [
+                    BaseCache.serialize_object(v, cached_types, idx + [i])
+                    for i, v in enumerate(obj)
+                ]
+            elif isinstance(obj, tuple):
+                ret = tuple(
+                    BaseCache.serialize_object(v, cached_types, idx + [i])
+                    for i, v in enumerate(obj)
+                )
+            else:
+                ret = obj
         return json.dumps(ret, indent=indent) if base else ret
 
     @classmethod

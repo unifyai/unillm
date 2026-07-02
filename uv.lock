@@ -1983,6 +1983,7 @@ name = "unillm"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "jsonschema" },
     { name = "litellm" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -2010,6 +2011,7 @@ lint = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jsonschema", specifier = ">=4.25.0" },
     { name = "litellm", specifier = "==1.88.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },

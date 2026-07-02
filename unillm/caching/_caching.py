@@ -18,6 +18,24 @@ from .base_cache import BaseCache
 from .local_cache import LocalCache
 from .local_separate_cache import LocalSeparateCache
 from .cache_benchmark import record_get_cache, record_write_to_cache
+from unillm.clients.response_format import RESPONSE_FORMAT_SPEC_KEY
+
+# Internal transport metadata must not affect cache keys.
+_CACHE_INTERNAL_KW_KEYS = frozenset(
+    {
+        RESPONSE_FORMAT_SPEC_KEY,
+        "_unillm_response_format",
+    },
+)
+
+
+def _cache_key_kwargs(kw: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        k: v
+        for k, v in kw.items()
+        if v is not None and k not in _CACHE_INTERNAL_KW_KEYS
+    }
+
 
 # Global state
 CACHE_LOCK = threading.Lock()
@@ -100,7 +118,7 @@ def _get_cache(
     try:
         current_backend = get_cache_backend(backend)
         current_backend.initialize_cache(filename)
-        kw = {k: v for k, v in kw.items() if v is not None}
+        kw = _cache_key_kwargs(kw)
         kw_str = BaseCache.serialize_object(kw)
         cache_str = f"{fn_name}_{kw_str}"
         if not current_backend.has_key(cache_str):
@@ -186,7 +204,7 @@ def _write_to_cache(
     try:
         current_backend = get_cache_backend(backend)
         current_backend.initialize_cache(filename)
-        kw = {k: v for k, v in kw.items() if v is not None}
+        kw = _cache_key_kwargs(kw)
         kw_str = BaseCache.serialize_object(kw)
         cache_str = f"{fn_name}_{kw_str}"
         res_types = {}
