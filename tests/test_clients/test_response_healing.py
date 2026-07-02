@@ -53,6 +53,14 @@ class TextResponse(BaseModel):
     thoughts: str
 
 
+def _tool_call_from_message(message, index: int = 0) -> dict:
+    tool_calls = message.tool_calls or []
+    tool_call = tool_calls[index]
+    if isinstance(tool_call, dict):
+        return tool_call
+    return tool_call.model_dump(warnings=False)
+
+
 def _completion(content: str | None, *, tool_calls=None, finish_reason="stop"):
     message = ChatCompletionMessage(
         role="assistant",
@@ -100,8 +108,9 @@ def test_heal_staging_embedded_tool_calls():
     msg = healed.choices[0].message
     assert msg.tool_calls is not None
     assert len(msg.tool_calls) == 1
-    assert msg.tool_calls[0].function.name == "send_unify_message"
-    assert json.loads(msg.tool_calls[0].function.arguments) == {"content": reply}
+    call = _tool_call_from_message(msg)
+    assert call["function"]["name"] == "send_unify_message"
+    assert json.loads(call["function"]["arguments"]) == {"content": reply}
     assert json.loads(msg.content) == {"thoughts": thoughts}
     assert healed.choices[0].finish_reason == "tool_calls"
 
@@ -268,7 +277,8 @@ def test_heal_top_level_name_arguments_shape():
     assert healed is not None
     msg = healed.choices[0].message
     assert msg.tool_calls is not None
-    assert msg.tool_calls[0].function.name == "send_unify_message"
+    call = _tool_call_from_message(msg)
+    assert call["function"]["name"] == "send_unify_message"
     assert json.loads(msg.content) == {"thoughts": "Send a greeting."}
 
 
@@ -307,7 +317,10 @@ def test_healing_avoids_tool_choice_retry(provider):
 
     assert retry_calls == []
     assert result.choices[0].message.tool_calls is not None
-    assert result.choices[0].message.tool_calls[0].function.name == "tool_a"
+    assert (
+        _tool_call_from_message(result.choices[0].message)["function"]["name"]
+        == "tool_a"
+    )
     needs_retry, retry_reason = check_needs_postprocessing(
         response=result,
         provider=provider,
@@ -351,7 +364,10 @@ def test_retry_response_gets_heal_attempt(provider):
 
     assert retry_calls == ["retry"]
     assert result.choices[0].message.tool_calls is not None
-    assert result.choices[0].message.tool_calls[0].function.name == "tool_a"
+    assert (
+        _tool_call_from_message(result.choices[0].message)["function"]["name"]
+        == "tool_a"
+    )
     needs_retry, retry_reason = check_needs_postprocessing(
         response=result,
         provider=provider,
@@ -381,4 +397,226 @@ def test_forced_tool_name_triggers_healing():
     )
 
     assert healed is not None
-    assert healed.choices[0].message.tool_calls[0].function.name == "tool_a"
+    assert (
+        _tool_call_from_message(healed.choices[0].message)["function"]["name"]
+        == "tool_a"
+    )
+
+
+ASK_ABOUT_CONTACTS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "ask_about_contacts",
+        "description": "Query contact records.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+            },
+            "required": ["text"],
+        },
+    },
+}
+
+
+def test_heal_deepseek_input_format_embedded_tool_calls():
+    """DeepSeek V4 via OpenRouter uses ``input`` instead of ``arguments``."""
+
+    query = "Find Sarah's contact preference for phone vs email."
+    reply = "Let me check."
+    content = json.dumps(
+        {
+            "thoughts": "Look up Sarah and acknowledge.",
+            "tool_calls": [
+                {
+                    "type": "tool_call",
+                    "name": "ask_about_contacts",
+                    "id": "tool-1",
+                    "input": {"text": query},
+                },
+                {
+                    "type": "tool_call",
+                    "name": "send_unify_message",
+                    "id": "tool-2",
+                    "input": {"contact_id": 1, "content": reply},
+                },
+            ],
+        },
+    )
+    response = _completion(content)
+    spec = canonicalize_response_format(TextResponse)
+
+    healed = try_heal_embedded_tool_calls(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[ASK_ABOUT_CONTACTS_TOOL, SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=spec,
+    )
+
+    assert healed is not None
+    msg = healed.choices[0].message
+    assert msg.tool_calls is not None
+    assert len(msg.tool_calls) == 2
+    first = _tool_call_from_message(msg, 0)
+    second = _tool_call_from_message(msg, 1)
+    assert first["function"]["name"] == "ask_about_contacts"
+    assert json.loads(first["function"]["arguments"]) == {"text": query}
+    assert second["function"]["name"] == "send_unify_message"
+    assert json.loads(second["function"]["arguments"]) == {
+        "contact_id": 1,
+        "content": reply,
+    }
+
+
+def test_healed_tool_calls_survive_litellm_message_model_dump():
+    """Promoted tool calls must remain executable after LiteLLM Message serialization."""
+
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    query = "Find Sarah."
+    content = json.dumps(
+        {
+            "thoughts": "Look up Sarah.",
+            "tool_calls": [
+                {
+                    "type": "tool_call",
+                    "name": "ask_about_contacts",
+                    "id": "tool-1",
+                    "input": {"text": query},
+                },
+                {
+                    "type": "tool_call",
+                    "name": "send_unify_message",
+                    "id": "tool-2",
+                    "input": {"contact_id": 1, "content": "One moment."},
+                },
+            ],
+        },
+    )
+    message = Message(role="assistant", content=content, tool_calls=None)
+    response = ModelResponse(
+        id="test-id",
+        choices=[Choices(finish_reason="stop", index=0, message=message)],
+        created=1234567890,
+        model="deepseek/deepseek-v4-pro",
+        object="chat.completion",
+    )
+
+    healed = try_heal_embedded_tool_calls(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[ASK_ABOUT_CONTACTS_TOOL, SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=None,
+    )
+
+    assert healed is not None
+    dumped = healed.choices[0].message.model_dump(warnings=False)
+    tool_calls = dumped["tool_calls"]
+    assert len(tool_calls) == 2
+    assert tool_calls[0]["function"]["name"] == "ask_about_contacts"
+    assert json.loads(tool_calls[0]["function"]["arguments"]) == {"text": query}
+    assert tool_calls[1]["function"]["name"] == "send_unify_message"
+    assert tool_calls[0] != {}
+    assert tool_calls[1] != {}
+
+
+def test_heal_deepseek_tool_name_query_format():
+    query = "Find Sarah's contact record and check her preferred communication method."
+    content = json.dumps(
+        {
+            "thoughts": "Look up Sarah.",
+            "tool_calls": [
+                {
+                    "tool_name": "ask_about_contacts",
+                    "query": query,
+                },
+                {
+                    "tool_name": "send_unify_message",
+                    "query": {"contact_id": 1, "content": "Let me check."},
+                },
+            ],
+        },
+    )
+    response = _completion(content)
+
+    healed = try_heal_embedded_tool_calls(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[ASK_ABOUT_CONTACTS_TOOL, SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=None,
+    )
+
+    assert healed is not None
+    first = _tool_call_from_message(healed.choices[0].message, 0)
+    second = _tool_call_from_message(healed.choices[0].message, 1)
+    assert json.loads(first["function"]["arguments"]) == {"text": query}
+    assert json.loads(second["function"]["arguments"]) == {
+        "contact_id": 1,
+        "content": "Let me check.",
+    }
+
+
+ACT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "act",
+        "description": "Run a general action.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "requesting_contact_id": {"type": "integer"},
+            },
+            "required": ["query", "requesting_contact_id"],
+        },
+    },
+}
+
+
+def test_heal_deepseek_invoke_wrapper_format():
+    content = json.dumps(
+        {
+            "thoughts": "Search knowledge for office hours.",
+            "tool_calls": [
+                {
+                    "invoke": {
+                        "name": "act",
+                        "args": {
+                            "query": "What are the office hours?",
+                            "requesting_contact_id": 1,
+                        },
+                    },
+                },
+                {
+                    "invoke": {
+                        "name": "send_unify_message",
+                        "args": {"contact_id": 1, "content": "Let me check."},
+                    },
+                },
+            ],
+        },
+    )
+    response = _completion(content)
+
+    healed = try_heal_embedded_tool_calls(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[ACT_TOOL, SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=None,
+    )
+
+    assert healed is not None
+    first = _tool_call_from_message(healed.choices[0].message, 0)
+    second = _tool_call_from_message(healed.choices[0].message, 1)
+    assert json.loads(first["function"]["arguments"]) == {
+        "query": "What are the office hours?",
+        "requesting_contact_id": 1,
+    }
+    assert json.loads(second["function"]["arguments"]) == {
+        "contact_id": 1,
+        "content": "Let me check.",
+    }

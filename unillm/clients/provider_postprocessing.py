@@ -29,6 +29,37 @@ from .response_healing import maybe_heal_tool_calls_in_completion
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion, ChatCompletionMessage
 
+
+def _tool_call_name(tool_call: Any) -> Optional[str]:
+    if isinstance(tool_call, dict):
+        function = tool_call.get("function")
+        if isinstance(function, dict):
+            name = function.get("name")
+            return name if isinstance(name, str) and name else None
+        return None
+    function = getattr(tool_call, "function", None)
+    if function is None:
+        return None
+    return function.name
+
+
+def _tool_call_arguments(tool_call: Any) -> str:
+    if isinstance(tool_call, dict):
+        function = tool_call.get("function")
+        if isinstance(function, dict):
+            return str(function.get("arguments", ""))
+        return ""
+    return str(tool_call.function.arguments)
+
+
+def _tool_call_id(tool_call: Any) -> Optional[str]:
+    if isinstance(tool_call, dict):
+        call_id = tool_call.get("id")
+        return call_id if isinstance(call_id, str) else None
+    call_id = getattr(tool_call, "id", None)
+    return call_id if isinstance(call_id, str) else None
+
+
 logger = logging.getLogger(__name__)
 
 # Retry reason constants
@@ -116,7 +147,8 @@ def _forced_tool_name(tool_choice: Any) -> Optional[str]:
 
 
 def _called_tool_names(msg: "ChatCompletionMessage") -> List[str]:
-    return [tc.function.name for tc in (msg.tool_calls or [])]
+    names = [_tool_call_name(tc) for tc in (msg.tool_calls or [])]
+    return [name for name in names if name]
 
 
 def _has_tool_result_history(messages: Optional[List[dict]]) -> bool:
@@ -170,7 +202,7 @@ def _repeats_completed_tool_call(
         return False
 
     return all(
-        (tool_call.function.name, str(tool_call.function.arguments)) in completed
+        (_tool_call_name(tool_call), _tool_call_arguments(tool_call)) in completed
         for tool_call in msg.tool_calls
     )
 
@@ -237,9 +269,10 @@ def _build_invalid_tool_name_retry_messages(
     if valid_tool_names:
         # Case A: at least one valid tool is available
         for tc in tool_calls:
-            if tc.function.name not in valid_tool_names:
+            called_name = _tool_call_name(tc)
+            if called_name not in valid_tool_names:
                 error_obj = _make_tool_error(
-                    f"'{tc.function.name}' is not callable on this turn. "
+                    f"'{called_name}' is not callable on this turn. "
                     "It may be mentioned in the system message but is "
                     "not in the current tool schema. "
                     "Please select from the available tools only.",
@@ -253,7 +286,7 @@ def _build_invalid_tool_name_retry_messages(
             retry_messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": tc.id,
+                    "tool_call_id": _tool_call_id(tc),
                     "content": json.dumps(error_obj),
                 },
             )
@@ -262,10 +295,11 @@ def _build_invalid_tool_name_retry_messages(
         rf_spec = get_response_format_spec(kw)
         schema = rf_spec.json_schema if rf_spec is not None else None
         for tc in tool_calls:
+            called_name = _tool_call_name(tc)
             if schema is not None:
                 # Case C: response_format schema is set
                 error_obj = _make_tool_error(
-                    f"'{tc.function.name}' is not callable. "
+                    f"'{called_name}' is not callable. "
                     "No tools are available on this turn. "
                     "Do not call any tools. "
                     "Respond with valid JSON only, nothing else, "
@@ -275,7 +309,7 @@ def _build_invalid_tool_name_retry_messages(
             else:
                 # Case B: no schema, no tools
                 error_obj = _make_tool_error(
-                    f"'{tc.function.name}' is not callable. "
+                    f"'{_tool_call_name(tc)}' is not callable. "
                     "No tools are available on this turn. "
                     "Do not call any tools. "
                     "Respond with text content only.",
@@ -386,7 +420,7 @@ def _check_anthropic_postprocessing(
     if msg.tool_calls:
         valid_names = set(_get_valid_tool_names(tools))
         for tool_call in msg.tool_calls:
-            called_name = tool_call.function.name
+            called_name = _tool_call_name(tool_call)
             if called_name not in valid_names:
                 # Model called a tool not in the schema
                 return True, RETRY_REASON_INVALID_TOOL_NAME
@@ -413,7 +447,8 @@ def _check_soft_forced_tool_choice_postprocessing(
     if msg.tool_calls:
         valid_names = set(_get_valid_tool_names(tools))
         for tool_call in msg.tool_calls:
-            if tool_call.function.name not in valid_names:
+            called_name = _tool_call_name(tool_call)
+            if called_name not in valid_names:
                 return True, RETRY_REASON_INVALID_TOOL_NAME
 
         if original_tool_choice in (None, "auto") and _repeats_completed_tool_call(

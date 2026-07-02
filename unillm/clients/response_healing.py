@@ -70,25 +70,110 @@ def _serialize_arguments(arguments: Any) -> str:
     return json.dumps(arguments)
 
 
-def _normalize_embedded_call(raw_call: Any) -> Optional[tuple[str, str]]:
+def _embedded_call_name(raw_call: dict) -> Optional[str]:
+    if "function" in raw_call and isinstance(raw_call["function"], dict):
+        name = raw_call["function"].get("name")
+        return name if isinstance(name, str) and name else None
+
+    for key in ("name", "tool_name", "tool"):
+        name = raw_call.get(key)
+        if isinstance(name, str) and name:
+            return name
+    return None
+
+
+def _tool_parameter_properties(
+    tool_name: str,
+    tools: Optional[List[dict]],
+) -> set[str]:
+    if not tools:
+        return set()
+    for tool in tools:
+        if tool.get("type") != "function":
+            continue
+        function = tool.get("function", {})
+        if function.get("name") != tool_name:
+            continue
+        parameters = function.get("parameters", {})
+        properties = parameters.get("properties", {})
+        if isinstance(properties, dict):
+            return set(properties)
+    return set()
+
+
+def _unwrap_embedded_call_shape(raw_call: dict) -> dict:
+    invoke = raw_call.get("invoke")
+    if isinstance(invoke, dict):
+        name = invoke.get("name")
+        if isinstance(name, str) and name:
+            for args_key in ("args", "arguments", "input", "parameters"):
+                if args_key in invoke:
+                    return {"name": name, "arguments": invoke[args_key]}
+            return {"name": name, "arguments": {}}
+    return raw_call
+
+
+def _embedded_call_arguments(
+    raw_call: dict,
+    *,
+    tool_name: str,
+    tools: Optional[List[dict]],
+) -> Any:
+    raw_call = _unwrap_embedded_call_shape(raw_call)
+
+    if "function" in raw_call and isinstance(raw_call["function"], dict):
+        return raw_call["function"].get("arguments", {})
+
+    for key in ("arguments", "tool_args", "input", "parameters", "args"):
+        if key in raw_call:
+            return raw_call[key]
+
+    query = raw_call.get("query")
+    if isinstance(query, dict):
+        return query
+    if isinstance(query, str):
+        props = _tool_parameter_properties(tool_name, tools)
+        if "text" in props:
+            return {"text": query}
+        if "query" in props:
+            return {"query": query}
+    return {}
+
+
+def _normalize_embedded_call(
+    raw_call: Any,
+    *,
+    tools: Optional[List[dict]],
+) -> Optional[tuple[str, str]]:
     if not isinstance(raw_call, dict):
         return None
 
-    if "function" in raw_call and isinstance(raw_call["function"], dict):
-        function = raw_call["function"]
-        name = function.get("name")
-        if not isinstance(name, str) or not name:
-            return None
-        return name, _serialize_arguments(function.get("arguments", {}))
-
-    name = raw_call.get("name") or raw_call.get("tool_name")
-    if not isinstance(name, str) or not name:
+    raw_call = _unwrap_embedded_call_shape(raw_call)
+    name = _embedded_call_name(raw_call)
+    if name is None:
         return None
-    arguments = raw_call.get("arguments", raw_call.get("tool_args", {}))
+    arguments = _embedded_call_arguments(raw_call, tool_name=name, tools=tools)
     return name, _serialize_arguments(arguments)
 
 
-def _extract_embedded_calls(parsed: dict) -> tuple[list[tuple[str, str]], set[str]]:
+def _promoted_tool_call_dicts(
+    embedded_calls: list[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    return [
+        ChatCompletionMessageToolCall(
+            id=f"call_healed_{index}",
+            type="function",
+            function=Function(name=name, arguments=arguments),
+        ).model_dump(warnings=False)
+        for index, (name, arguments) in enumerate(embedded_calls)
+    ]
+
+
+def _extract_embedded_calls(
+    parsed: dict,
+    *,
+    tools: Optional[List[dict]],
+) -> tuple[list[tuple[str, str]], set[str]]:
     promoted_keys: set[str] = set()
 
     if "tool_calls" in parsed:
@@ -97,21 +182,46 @@ def _extract_embedded_calls(parsed: dict) -> tuple[list[tuple[str, str]], set[st
             inner = json.loads(inner) if inner else []
         if not isinstance(inner, list) or not inner:
             return [], set()
-        calls = [_normalize_embedded_call(item) for item in inner]
+        calls = [_normalize_embedded_call(item, tools=tools) for item in inner]
         if any(call is None for call in calls):
             return [], set()
         promoted_keys.add("tool_calls")
         return calls, promoted_keys  # type: ignore[return-value]
 
-    if ("name" in parsed or "tool_name" in parsed) and (
-        "arguments" in parsed or "tool_args" in parsed
+    if _embedded_call_name(parsed) is not None and any(
+        key in parsed
+        for key in (
+            "arguments",
+            "tool_args",
+            "input",
+            "parameters",
+            "args",
+            "query",
+            "function",
+            "invoke",
+        )
     ):
-        call = _normalize_embedded_call(parsed)
+        call = _normalize_embedded_call(parsed, tools=tools)
         if call is None:
             return [], set()
         promoted_keys.update(
             key
-            for key in ("name", "tool_name", "arguments", "tool_args", "function")
+            for key in (
+                "name",
+                "tool_name",
+                "tool",
+                "arguments",
+                "tool_args",
+                "input",
+                "parameters",
+                "args",
+                "query",
+                "function",
+                "invoke",
+                "type",
+                "id",
+                "response_format",
+            )
             if key in parsed
         )
         return [call], promoted_keys
@@ -171,7 +281,10 @@ def try_heal_embedded_tool_calls(
     if not isinstance(parsed, dict):
         return None
 
-    embedded_calls, promoted_keys = _extract_embedded_calls(parsed)
+    embedded_calls, promoted_keys = _extract_embedded_calls(
+        parsed,
+        tools=tools,
+    )
     if not embedded_calls:
         return None
 
@@ -191,14 +304,7 @@ def try_heal_embedded_tool_calls(
     if not _content_passes_response_format(cleaned_content, response_format_spec):
         return None
 
-    promoted_tool_calls = [
-        ChatCompletionMessageToolCall(
-            id=f"call_healed_{index}",
-            type="function",
-            function=Function(name=name, arguments=arguments),
-        )
-        for index, (name, arguments) in enumerate(embedded_calls)
-    ]
+    promoted_tool_calls = _promoted_tool_call_dicts(embedded_calls)
 
     msg.content = cleaned_content
     msg.tool_calls = promoted_tool_calls
@@ -207,7 +313,11 @@ def try_heal_embedded_tool_calls(
     logger.info(
         "Healed embedded tool_calls from JSON content for provider=%s tools=%s",
         provider,
-        [call.function.name for call in promoted_tool_calls],
+        [
+            call["function"]["name"]
+            for call in promoted_tool_calls
+            if isinstance(call.get("function"), dict)
+        ],
     )
     return response
 
