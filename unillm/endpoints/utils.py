@@ -92,6 +92,8 @@ def _public_model_alias(provider: str, model: str, alias: str) -> str:
         return "minimax/MiniMax-M3"
     if provider == "xiaomi-mimo":
         return f"xiaomi_mimo/{model}"
+    if provider == "zai":
+        return f"z-ai/{model}"
     return alias
 
 
