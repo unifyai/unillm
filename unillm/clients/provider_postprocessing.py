@@ -9,6 +9,7 @@ Currently handles:
 - Anthropic: tool_choice="required" compliance with thinking mode
 - Anthropic/DeepSeek: invalid tool name detection (tool called not in schema)
 - DeepSeek/MiniMax/Xiaomi MiMo: soft forced tool choice compliance
+- DeepSeek/MiniMax/Xiaomi MiMo: embedded tool_calls recovery from JSON content
 - response_format schema validation with retry (all providers)
 """
 
@@ -23,6 +24,7 @@ from .response_format import (
     parse_structured_content,
     validate_against_spec,
 )
+from .response_healing import maybe_heal_tool_calls_in_completion
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion, ChatCompletionMessage
@@ -479,6 +481,150 @@ def check_response_format_compliance(
         return True, validation_error, spec
 
     return False, None, None
+
+
+def apply_postprocessing_pipeline(
+    chat_completion: "ChatCompletion",
+    *,
+    kw: dict,
+    provider: str,
+    original_tool_choice: Optional[Any],
+    reasoning_effort: Optional[str],
+    original_request_messages: Optional[List[dict]] = None,
+    execute_retry,
+) -> "ChatCompletion":
+    """Run healing, tool-choice retries, and response_format validation."""
+    raw_tools = kw.get("tools")
+    tools = list(raw_tools) if raw_tools is not None else None
+    response_format_spec = get_response_format_spec(kw)
+
+    chat_completion = maybe_heal_tool_calls_in_completion(
+        chat_completion,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        tools=tools,
+        response_format_spec=response_format_spec,
+    )
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=chat_completion,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        reasoning_effort=reasoning_effort,
+        tools=tools,
+        request_messages=kw.get("messages"),
+        original_request_messages=original_request_messages,
+    )
+    if needs_retry:
+        retry_kw = build_retry_kw(
+            kw=kw,
+            response=chat_completion,
+            retry_reason=retry_reason,
+        )
+        chat_completion = execute_retry(retry_kw, "retry")
+        chat_completion = maybe_heal_tool_calls_in_completion(
+            chat_completion,
+            provider=provider,
+            original_tool_choice=original_tool_choice,
+            tools=tools,
+            response_format_spec=response_format_spec,
+        )
+        check_needs_postprocessing(
+            response=chat_completion,
+            provider=provider,
+            original_tool_choice=original_tool_choice,
+            reasoning_effort=reasoning_effort,
+            tools=tools,
+            request_messages=kw.get("messages"),
+            original_request_messages=original_request_messages,
+        )
+
+    rf_needs_retry, rf_error, rf_spec = check_response_format_compliance(
+        response=chat_completion,
+        kw=kw,
+    )
+    if rf_needs_retry and rf_spec is not None:
+        rf_retry_kw = build_response_format_retry_kw(
+            kw=kw,
+            response=chat_completion,
+            validation_error=rf_error,
+            response_format_spec=rf_spec,
+        )
+        chat_completion = execute_retry(rf_retry_kw, "rf-retry")
+
+    return chat_completion
+
+
+async def apply_postprocessing_pipeline_async(
+    chat_completion: "ChatCompletion",
+    *,
+    kw: dict,
+    provider: str,
+    original_tool_choice: Optional[Any],
+    reasoning_effort: Optional[str],
+    original_request_messages: Optional[List[dict]] = None,
+    execute_retry,
+) -> "ChatCompletion":
+    """Async variant of apply_postprocessing_pipeline."""
+    raw_tools = kw.get("tools")
+    tools = list(raw_tools) if raw_tools is not None else None
+    response_format_spec = get_response_format_spec(kw)
+
+    chat_completion = maybe_heal_tool_calls_in_completion(
+        chat_completion,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        tools=tools,
+        response_format_spec=response_format_spec,
+    )
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=chat_completion,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        reasoning_effort=reasoning_effort,
+        tools=tools,
+        request_messages=kw.get("messages"),
+        original_request_messages=original_request_messages,
+    )
+    if needs_retry:
+        retry_kw = build_retry_kw(
+            kw=kw,
+            response=chat_completion,
+            retry_reason=retry_reason,
+        )
+        chat_completion = await execute_retry(retry_kw, "retry")
+        chat_completion = maybe_heal_tool_calls_in_completion(
+            chat_completion,
+            provider=provider,
+            original_tool_choice=original_tool_choice,
+            tools=tools,
+            response_format_spec=response_format_spec,
+        )
+        check_needs_postprocessing(
+            response=chat_completion,
+            provider=provider,
+            original_tool_choice=original_tool_choice,
+            reasoning_effort=reasoning_effort,
+            tools=tools,
+            request_messages=kw.get("messages"),
+            original_request_messages=original_request_messages,
+        )
+
+    rf_needs_retry, rf_error, rf_spec = check_response_format_compliance(
+        response=chat_completion,
+        kw=kw,
+    )
+    if rf_needs_retry and rf_spec is not None:
+        rf_retry_kw = build_response_format_retry_kw(
+            kw=kw,
+            response=chat_completion,
+            validation_error=rf_error,
+            response_format_spec=rf_spec,
+        )
+        chat_completion = await execute_retry(rf_retry_kw, "rf-retry")
+
+    return chat_completion
 
 
 def build_response_format_retry_kw(
