@@ -122,3 +122,30 @@ def probe_native_image_input(
             f"transport={transport_model!r}). Response: {response!r}",
         )
     return response
+
+
+def assert_native_image_input_rejected(endpoint: str) -> None:
+    """Assert *endpoint* rejects ``image_url`` blocks on the configured transport."""
+    png_b64 = solid_color_png_b64(32, 32, (255, 0, 0))
+    messages = native_image_messages(color="red", png_b64=png_b64)
+    public_model = get_model_alias(endpoint)
+    transport_model = get_transport_model_alias(endpoint)
+
+    client = unillm.Unify(endpoint, temperature=0.0, cache=False)
+    try:
+        client.generate(messages=messages, max_completion_tokens=64)
+    except litellm.exceptions.AuthenticationError as exc:
+        pytest.skip(
+            f"{endpoint} credentials unavailable for native image probe "
+            f"(public={public_model!r}, transport={transport_model!r}): {exc}",
+        )
+    except Exception as exc:
+        message = str(exc).lower()
+        if any(marker in message for marker in IMAGE_INPUT_REJECTION_MARKERS):
+            return
+        raise
+
+    pytest.fail(
+        f"{endpoint} unexpectedly accepted native image input "
+        f"(public={public_model!r}, transport={transport_model!r})",
+    )

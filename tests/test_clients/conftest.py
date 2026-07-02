@@ -8,6 +8,7 @@ import pytest
 # skipif + _HAS_*_API_KEY convention in test_minimax_v3.py / test_xiaomi_mimo_v25.py.
 _HAS_MINIMAX_API_KEY = bool(os.environ.get("MINIMAX_API_KEY"))
 _HAS_XIAOMI_MIMO_API_KEY = bool(os.environ.get("XIAOMI_MIMO_API_KEY"))
+_HAS_OPENROUTER_API_KEY = bool(os.environ.get("OPENROUTER_API_KEY"))
 
 _TEST_MODELS = [
     "gpt-5.5@openai",
@@ -25,6 +26,13 @@ _TEST_MODELS = [
         marks=pytest.mark.skipif(
             not _HAS_XIAOMI_MIMO_API_KEY,
             reason="No Xiaomi MiMo API key available",
+        ),
+    ),
+    pytest.param(
+        "glm-5.2@zai",
+        marks=pytest.mark.skipif(
+            not _HAS_OPENROUTER_API_KEY,
+            reason="No OpenRouter API key available",
         ),
     ),
 ]
