@@ -92,7 +92,7 @@ def test_heal_staging_embedded_tool_calls():
             "tool_calls": [
                 {
                     "name": "send_unify_message",
-                    "arguments": {"content": reply},
+                    "arguments": {"content": reply, "contact_id": 1},
                 },
             ],
         },
@@ -114,7 +114,10 @@ def test_heal_staging_embedded_tool_calls():
     assert len(msg.tool_calls) == 1
     call = _tool_call_from_message(msg)
     assert call["function"]["name"] == "send_unify_message"
-    assert json.loads(call["function"]["arguments"]) == {"content": reply}
+    assert json.loads(call["function"]["arguments"]) == {
+        "content": reply,
+        "contact_id": 1,
+    }
     assert json.loads(msg.content) == {"thoughts": thoughts}
     assert healed.choices[0].finish_reason == "tool_calls"
 
@@ -264,7 +267,7 @@ def test_heal_top_level_name_arguments_shape():
     content = json.dumps(
         {
             "name": "send_unify_message",
-            "arguments": {"content": "hello"},
+            "arguments": {"content": "hello", "contact_id": 1},
             "thoughts": "Send a greeting.",
         },
     )
@@ -1058,3 +1061,101 @@ def test_heal_deepseek_invoke_wrapper_format():
         "contact_id": 1,
         "content": "Let me check.",
     }
+
+
+def test_heal_rejects_nested_tool_calls_without_required_arguments():
+    """DeepSeek sometimes nests tool names without any argument payloads."""
+
+    content = json.dumps(
+        {
+            "thoughts": "Look up Sarah and acknowledge.",
+            "tool_calls": [
+                {
+                    "tool_name": "ask_about_contacts",
+                    "tool_calls": [
+                        {
+                            "tool_name": "query_past_transcripts",
+                            "tool_calls": [
+                                {
+                                    "tool_name": "send_unify_message",
+                                    "tool_calls": [
+                                        {
+                                            "tool_name": "",
+                                            "tool_calls": [],
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    )
+    response = _completion(content)
+
+    healed = try_heal_embedded_tool_calls(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[ASK_ABOUT_CONTACTS_TOOL, SEND_UNIFY_MESSAGE_TOOL, WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert healed is None
+
+
+def test_heal_flattens_nested_tool_calls_with_valid_leaf():
+    content = json.dumps(
+        {
+            "thoughts": "Acknowledge while the lookup runs.",
+            "tool_calls": [
+                {
+                    "tool_name": "ask_about_contacts",
+                    "tool_calls": [
+                        {
+                            "tool_name": "send_unify_message",
+                            "query": {"contact_id": 1, "content": "Let me check."},
+                        },
+                    ],
+                },
+            ],
+        },
+    )
+    response = _completion(content)
+
+    healed = try_heal_embedded_tool_calls(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[ASK_ABOUT_CONTACTS_TOOL, SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=None,
+    )
+
+    assert healed is not None
+    call = _tool_call_from_message(healed.choices[0].message)
+    assert call["function"]["name"] == "send_unify_message"
+    assert json.loads(call["function"]["arguments"]) == {
+        "contact_id": 1,
+        "content": "Let me check.",
+    }
+
+
+def test_heal_rejects_tool_call_missing_required_argument():
+    content = json.dumps(
+        {
+            "thoughts": "Look up Sarah.",
+            "tool_calls": [{"tool_name": "ask_about_contacts"}],
+        },
+    )
+    response = _completion(content)
+
+    healed = try_heal_embedded_tool_calls(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[ASK_ABOUT_CONTACTS_TOOL],
+        response_format_spec=None,
+    )
+
+    assert healed is None
