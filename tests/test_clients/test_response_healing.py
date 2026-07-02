@@ -14,8 +14,11 @@ from unillm.clients.response_format import (
     canonicalize_response_format,
 )
 from unillm.clients.response_healing import (
+    maybe_heal_tool_calls_in_completion,
     should_attempt_tool_call_healing,
     try_heal_embedded_tool_calls,
+    try_infer_argumentless_tool_from_content,
+    try_infer_tool_call_from_content,
 )
 
 SEND_UNIFY_MESSAGE_TOOL = {
@@ -27,8 +30,9 @@ SEND_UNIFY_MESSAGE_TOOL = {
             "type": "object",
             "properties": {
                 "content": {"type": "string"},
+                "contact_id": {"type": "integer"},
             },
-            "required": ["content"],
+            "required": ["content", "contact_id"],
         },
     },
 }
@@ -652,6 +656,344 @@ def test_heal_tool_call_name_avoids_tool_choice_retry(provider):
     assert result.choices[0].message.tool_calls is not None
     assert (
         _tool_call_from_message(result.choices[0].message)["function"]["name"] == "wait"
+    )
+
+
+def test_infer_wait_from_python_call_substring():
+    thoughts = (
+        "The lookup is still running. Here is the tool call: wait(). "
+        "I'll stay idle until it completes."
+    )
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is not None
+    call = _tool_call_from_message(inferred.choices[0].message)
+    assert call["function"]["name"] == "wait"
+    assert json.loads(call["function"]["arguments"]) == {}
+
+
+def test_infer_tool_with_arguments_from_python_call_substring():
+    thoughts = (
+        "I'll acknowledge while the lookup runs. Tool call: "
+        'send_unify_message(content="Let me check.", contact_id=1)'
+    )
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[SEND_UNIFY_MESSAGE_TOOL, WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is not None
+    call = _tool_call_from_message(inferred.choices[0].message)
+    assert call["function"]["name"] == "send_unify_message"
+    assert json.loads(call["function"]["arguments"]) == {
+        "content": "Let me check.",
+        "contact_id": 1,
+    }
+
+
+def test_infer_python_call_requires_all_required_arguments():
+    thoughts = 'send_unify_message(content="Let me check.")'
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[SEND_UNIFY_MESSAGE_TOOL, WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is None
+
+
+def test_infer_python_call_rejects_unknown_argument_names():
+    thoughts = 'send_unify_message(content="Hi", contact_id=1, extra=True)'
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is None
+
+
+def test_infer_python_call_prefers_leftmost_valid_call():
+    thoughts = (
+        'send_unify_message(content="First", contact_id=1) and later '
+        'send_unify_message(content="Second", contact_id=2)'
+    )
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is not None
+    assert json.loads(
+        _tool_call_from_message(inferred.choices[0].message)["function"]["arguments"],
+    ) == {"content": "First", "contact_id": 1}
+
+
+def test_infer_wait_from_thoughts_only_json():
+    """DeepSeek often says it will wait in ``thoughts`` without calling the tool."""
+
+    thoughts = (
+        "The ask_about_contacts action is still executing. I've already acknowledged "
+        "the request. No new messages from the boss. I should wait for the action "
+        "to complete."
+    )
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+    spec = canonicalize_response_format(TextResponse)
+
+    inferred = try_infer_argumentless_tool_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[WAIT_TOOL],
+        response_format_spec=spec,
+    )
+
+    assert inferred is not None
+    call = _tool_call_from_message(inferred.choices[0].message)
+    assert call["function"]["name"] == "wait"
+    assert json.loads(call["function"]["arguments"]) == {}
+    assert json.loads(inferred.choices[0].message.content) == {"thoughts": thoughts}
+
+
+def test_infer_wait_from_exact_action_field():
+    content = json.dumps(
+        {
+            "thoughts": "Waiting for the contact lookup to finish.",
+            "action": "wait",
+        },
+    )
+    response = _completion(content)
+
+    inferred = try_infer_argumentless_tool_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is None
+
+
+def test_infer_wait_from_exact_action_field_without_response_format():
+    content = json.dumps(
+        {
+            "thoughts": "Waiting for the contact lookup to finish.",
+            "action": "wait",
+        },
+    )
+    response = _completion(content)
+
+    inferred = try_infer_argumentless_tool_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[WAIT_TOOL],
+        response_format_spec=None,
+    )
+
+    assert inferred is not None
+    assert (
+        _tool_call_from_message(inferred.choices[0].message)["function"]["name"]
+        == "wait"
+    )
+
+
+def test_infer_does_not_promote_tools_with_required_arguments():
+    thoughts = (
+        "I'll use send_unify_message once the lookup completes, but for now wait."
+    )
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_argumentless_tool_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[SEND_UNIFY_MESSAGE_TOOL, WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is not None
+    assert (
+        _tool_call_from_message(inferred.choices[0].message)["function"]["name"]
+        == "wait"
+    )
+
+
+def test_infer_ignores_required_argument_tool_even_when_name_appears():
+    thoughts = "Next I'll call send_unify_message with the answer."
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_argumentless_tool_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[SEND_UNIFY_MESSAGE_TOOL, WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is None
+
+
+def test_infer_noop_when_argumentless_tool_not_mentioned():
+    content = json.dumps(
+        {
+            "thoughts": "The contact lookup is still running. I'll stay idle.",
+        },
+    )
+    response = _completion(content)
+
+    inferred = try_infer_argumentless_tool_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is None
+
+
+def test_infer_prefers_longest_argumentless_tool_name():
+    pause_tool = {
+        "type": "function",
+        "function": {
+            "name": "wait_for_result",
+            "description": "Pause until a result arrives.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    }
+    thoughts = "The lookup is still running. I should wait_for_result now."
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_argumentless_tool_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[WAIT_TOOL, pause_tool],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is not None
+    assert (
+        _tool_call_from_message(inferred.choices[0].message)["function"]["name"]
+        == "wait_for_result"
+    )
+
+
+def test_infer_respects_forced_tool_choice_name():
+    thoughts = "I'll wait for the lookup to finish."
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_argumentless_tool_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice={"type": "function", "function": {"name": "wait"}},
+        tools=[WAIT_TOOL, TOOL_A],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is not None
+    assert (
+        _tool_call_from_message(inferred.choices[0].message)["function"]["name"]
+        == "wait"
+    )
+
+
+@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+def test_infer_argumentless_tool_avoids_tool_choice_retry(provider):
+    content = json.dumps(
+        {
+            "thoughts": (
+                "The in-flight action is still running. I should wait for it "
+                "to complete."
+            ),
+        },
+    )
+    response = _completion(content)
+    kw = {
+        "messages": [{"role": "user", "content": "What's Alice's phone number?"}],
+        "tools": [WAIT_TOOL],
+    }
+    retry_calls: list[str] = []
+
+    def execute_retry(retry_kw, label):
+        retry_calls.append(label)
+        raise AssertionError("tool-choice retry should not run when inference succeeds")
+
+    result = apply_postprocessing_pipeline(
+        response,
+        kw=kw,
+        provider=provider,
+        original_tool_choice="required",
+        reasoning_effort=None,
+        execute_retry=execute_retry,
+    )
+
+    assert retry_calls == []
+    assert (
+        _tool_call_from_message(result.choices[0].message)["function"]["name"] == "wait"
+    )
+
+
+def test_maybe_heal_falls_back_to_argumentless_inference():
+    content = json.dumps(
+        {
+            "thoughts": "The lookup is still running. I should wait for the result.",
+        },
+    )
+    response = _completion(content)
+
+    healed = maybe_heal_tool_calls_in_completion(
+        response,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert (
+        _tool_call_from_message(healed.choices[0].message)["function"]["name"] == "wait"
     )
 
 
