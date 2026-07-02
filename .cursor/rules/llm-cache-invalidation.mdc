@@ -1,0 +1,74 @@
+---
+description: Refresh or publish the LLM response cache when cache keys change or staging→main pytest fails on cache misses
+alwaysApply: true
+---
+
+# LLM Cache Invalidation & CI Hydration
+
+UniLLM tests replay LLM responses from `.cache.ndjson`. Normal CI is **read-only** (`UNILLM_CACHE=true`, `UNILLM_CACHE_BACKEND=local_separate` with write disabled): a cache miss fails loudly instead of calling paid APIs.
+
+## When the cache must be refreshed
+
+Refresh (or re-seed) the cache when a change alters cache keys or LLM payloads, for example:
+
+- Edits to `unillm/caching/_caching.py` or response-format preprocessing
+- New/changed test prompts, tools, or `response_format` handling
+- New model endpoints exercised by tests
+
+Symptom on a **`staging → main` promotion PR**: `pytest` fails with `Failed to get cache for function chat.completions.create ... from cache at None`.
+
+## Why promotion PRs need a separate publish step
+
+GitHub Actions cache for `.cache.ndjson` is **branch-scoped**. A promotion PR runs as `pull_request` with `base=main` and cannot restore the staging-scoped Actions cache.
+
+`tests.yml` therefore **hydrates** from the latest successful **`llm-cache-refresh.yml`** run on the PR head branch (fallback: `staging`), downloading the `llm-cache-ndjson` artifact. That artifact is the cross-branch source of truth for promotion pytest.
+
+## Path A — Local seed publish (preferred when keys change)
+
+Use when CI cache refresh misses entries (common for OpenRouter-routed models) or you already have a populated local cache.
+
+1. **Populate locally** (repo root, provider keys in `.env` or shell):
+
+```bash
+export UNILLM_CACHE=true UNILLM_CACHE_BACKEND=local_separate
+uv sync --group dev
+uv run pytest --timeout=600 -p no:warnings tests/test_clients   # or the failing paths
+```
+
+2. **Consolidate** existing cache + new writes:
+
+```bash
+mkdir -p cache-artifacts/current
+cp .cache_write.ndjson cache-artifacts/current/.cache_write.ndjson
+python3 .github/scripts/consolidate_cache.py --artifacts-dir cache-artifacts
+cp .cache.ndjson .github/cache-seed/cache.ndjson
+```
+
+3. **Commit** `.github/cache-seed/cache.ndjson` to **`staging`** (tracked name avoids `.gitignore` on `.cache.ndjson`).
+
+4. **Publish** the cross-branch artifact on **`staging`**:
+
+```bash
+gh workflow run llm-cache-refresh.yml --repo unifyai/unillm --ref staging \
+  -f confirm_llm_spend=skip -f publish_seed=PUBLISH_SEED_OK
+```
+
+5. **Wait** for that workflow to finish successfully, then **re-run** the promotion PR CI (or push an empty commit). If pytest hydrated before publish completed, it will still use a stale artifact — re-run failed jobs after publish.
+
+6. Merge once **`pytest`** and **`black`** are green on the promotion PR.
+
+## Path B — Paid CI cache refresh
+
+Dispatch `llm-cache-refresh.yml` on **`staging`** with real LLM spend:
+
+```bash
+gh workflow run llm-cache-refresh.yml --repo unifyai/unillm --ref staging \
+  -f test_path=tests/test_clients -f confirm_llm_spend=LLM_SPEND_OK
+```
+
+Requires the `unillm-llm-cache-refresh` environment secrets. Tests may still fail assertions while writing cache; the workflow uses `set +e` so misses are captured. Prefer Path A when refresh runs consistently miss OpenRouter-routed entries.
+
+## Verification
+
+- Published artifact should contain hundreds of entries (check workflow logs: `Publishing seeded cache with N entries` or `LLM cache ready: N entries` on promotion pytest).
+- Locally, `uv run pytest` with read-only cache should pass before publishing.
