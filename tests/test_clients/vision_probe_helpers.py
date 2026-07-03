@@ -11,6 +11,7 @@ import litellm
 import pytest
 
 import unillm
+from tests.settings import SETTINGS
 from unillm.endpoints.utils import get_model_alias, get_transport_model_alias
 
 IMAGE_INPUT_REJECTION_MARKERS = (
@@ -86,7 +87,12 @@ def probe_native_image_input(
     public_model = get_model_alias(endpoint)
     transport_model = get_transport_model_alias(endpoint)
 
-    client = unillm.Unify(endpoint, temperature=temperature, cache=False)
+    client = unillm.Unify(
+        endpoint,
+        temperature=temperature,
+        cache=SETTINGS.UNILLM_CACHE,
+        cache_backend=SETTINGS.UNILLM_CACHE_BACKEND,
+    )
     try:
         response = client.generate(
             messages=messages,

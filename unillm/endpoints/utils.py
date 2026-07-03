@@ -90,6 +90,8 @@ def _public_model_alias(provider: str, model: str, alias: str) -> str:
         return _DEEPSEEK_PUBLIC_ALIASES.get(model, alias)
     if provider == "minimax" and model == "minimax-v3":
         return "minimax/MiniMax-M3"
+    if provider == "qwen" and model == "qwen3.7-plus":
+        return "qwen/qwen3.7-plus"
     if provider == "xiaomi-mimo":
         return f"xiaomi_mimo/{model}"
     if provider == "zai":
