@@ -1,5 +1,3 @@
-import os
-
 import pytest
 
 import unillm
@@ -13,7 +11,6 @@ from unillm.endpoints.utils import (
 
 MINIMAX_V3_ENDPOINT = "minimax-v3@minimax"
 MINIMAX_V3_PROVIDER_MODEL = "minimax/MiniMax-M3"
-_HAS_MINIMAX_API_KEY = bool(os.environ.get("MINIMAX_API_KEY"))
 
 
 def test_minimax_v3_alias_registered() -> None:
@@ -52,7 +49,6 @@ def test_minimax_openrouter_transport_skips_direct_api_base() -> None:
     assert "api_base" not in kw
 
 
-@pytest.mark.skipif(not _HAS_MINIMAX_API_KEY, reason="No MiniMax API key available")
 def test_sync_minimax_v3_simple_message() -> None:
     client = unillm.Unify(MINIMAX_V3_ENDPOINT, temperature=0)
     response = client.generate(
@@ -66,7 +62,6 @@ def test_sync_minimax_v3_simple_message() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _HAS_MINIMAX_API_KEY, reason="No MiniMax API key available")
 async def test_async_minimax_v3_simple_message() -> None:
     client = unillm.AsyncUnify(MINIMAX_V3_ENDPOINT, temperature=0)
     response = await client.generate(

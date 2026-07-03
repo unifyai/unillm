@@ -1,6 +1,5 @@
 """Tests for cache event capture using context managers."""
 
-import os
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -338,13 +337,6 @@ class TestCacheEventEmissionMocked:
         assert response is not None
 
 
-# Integration tests - only run when API keys are available
-_HAS_API_KEYS = bool(
-    os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"),
-)
-
-
-@pytest.mark.skipif(not _HAS_API_KEYS, reason="No API keys available")
 class TestCacheEventEmissionIntegration:
     """Integration tests for cache events with real LLM calls."""
 

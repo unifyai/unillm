@@ -1,5 +1,3 @@
-import os
-
 import pytest
 
 import unillm
@@ -14,7 +12,6 @@ from tests.test_clients.vision_probe_helpers import assert_native_image_input_re
 
 GLM_52_ENDPOINT = "glm-5.2@zai"
 GLM_52_PROVIDER_MODEL = "z-ai/glm-5.2"
-_HAS_OPENROUTER_API_KEY = bool(os.environ.get("OPENROUTER_API_KEY"))
 
 
 def test_glm_52_alias_registered() -> None:
@@ -42,10 +39,6 @@ def test_glm_52_openrouter_transport_has_no_direct_api_base() -> None:
     assert "api_base" not in kw
 
 
-@pytest.mark.skipif(
-    not _HAS_OPENROUTER_API_KEY,
-    reason="No OpenRouter API key available",
-)
 def test_sync_glm_52_simple_message() -> None:
     client = unillm.Unify(GLM_52_ENDPOINT, temperature=0)
     response = client.generate(
@@ -59,10 +52,6 @@ def test_sync_glm_52_simple_message() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not _HAS_OPENROUTER_API_KEY,
-    reason="No OpenRouter API key available",
-)
 async def test_async_glm_52_simple_message() -> None:
     client = unillm.AsyncUnify(GLM_52_ENDPOINT, temperature=0)
     response = await client.generate(
@@ -75,9 +64,5 @@ async def test_async_glm_52_simple_message() -> None:
     assert "paris" in response.lower()
 
 
-@pytest.mark.skipif(
-    not _HAS_OPENROUTER_API_KEY,
-    reason="No OpenRouter API key available",
-)
 def test_glm_52_rejects_native_image_input_on_openrouter() -> None:
     assert_native_image_input_rejected(GLM_52_ENDPOINT)
