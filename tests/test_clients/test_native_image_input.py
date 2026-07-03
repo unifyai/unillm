@@ -17,6 +17,7 @@ from .vision_probe_helpers import probe_native_image_input
 
 MINIMAX_V3_ENDPOINT = "minimax-v3@minimax"
 MIMO_V25_ENDPOINT = "mimo-v2.5@xiaomi-mimo"
+QWEN_37_PLUS_ENDPOINT = "qwen3.7-plus@qwen"
 
 
 def test_minimax_v3_accepts_native_image_input() -> None:
@@ -25,3 +26,7 @@ def test_minimax_v3_accepts_native_image_input() -> None:
 
 def test_mimo_v25_accepts_native_image_input() -> None:
     probe_native_image_input(MIMO_V25_ENDPOINT)
+
+
+def test_qwen_37_plus_accepts_native_image_input() -> None:
+    probe_native_image_input(QWEN_37_PLUS_ENDPOINT)
