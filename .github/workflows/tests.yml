@@ -5,8 +5,8 @@
 #     and runs tests against it. Full observability (GCP, OTel, logs).
 #   External (no CLONE_TOKEN): Tests run without a local Orchestra. Credit
 #     deduction falls back to the production API (or silently warns if no
-#     UNIFY_KEY). External contributors only need OPENAI_API_KEY /
-#     ANTHROPIC_API_KEY as repo secrets (or can rely on cached responses).
+#     UNIFY_KEY). External contributors can rely on cached responses; cache refresh
+#     needs OPENROUTER_API_KEY and ANTHROPIC_API_KEY in the llm-cache-refresh env.
 
 name: Testing unillm
 
@@ -317,7 +317,7 @@ jobs:
         exit $exit_code
       env:
         UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         # Normal CI is read-only: it replays the shared LLM cache and never calls
         # paid provider APIs (a cache miss fails loudly, signalling the cache needs
