@@ -10,6 +10,7 @@ Currently handles:
 - Anthropic/DeepSeek: invalid tool name detection (tool called not in schema)
 - DeepSeek/MiniMax/Xiaomi MiMo: soft forced tool choice compliance
 - DeepSeek/MiniMax/Xiaomi MiMo: embedded tool_calls recovery from JSON content
+- json_tool_call wrapper normalization (structured output + inner tool unwrapping)
 - response_format schema validation with retry (all providers)
 """
 
@@ -24,6 +25,7 @@ from .response_format import (
     parse_structured_content,
     validate_against_spec,
 )
+from .json_tool_call_normalization import normalize_json_tool_call_wrappers
 from .response_healing import maybe_heal_tool_calls_in_completion
 
 if TYPE_CHECKING:
@@ -539,6 +541,11 @@ def apply_postprocessing_pipeline(
         response_format_spec=response_format_spec,
         request_messages=kw.get("messages"),
     )
+    chat_completion = normalize_json_tool_call_wrappers(
+        chat_completion,
+        response_format_spec=response_format_spec,
+        tools=tools,
+    )
 
     needs_retry, retry_reason = check_needs_postprocessing(
         response=chat_completion,
@@ -563,6 +570,11 @@ def apply_postprocessing_pipeline(
             tools=tools,
             response_format_spec=response_format_spec,
             request_messages=retry_kw.get("messages"),
+        )
+        chat_completion = normalize_json_tool_call_wrappers(
+            chat_completion,
+            response_format_spec=response_format_spec,
+            tools=tools,
         )
         check_needs_postprocessing(
             response=chat_completion,
@@ -613,6 +625,11 @@ async def apply_postprocessing_pipeline_async(
         response_format_spec=response_format_spec,
         request_messages=kw.get("messages"),
     )
+    chat_completion = normalize_json_tool_call_wrappers(
+        chat_completion,
+        response_format_spec=response_format_spec,
+        tools=tools,
+    )
 
     needs_retry, retry_reason = check_needs_postprocessing(
         response=chat_completion,
@@ -637,6 +654,11 @@ async def apply_postprocessing_pipeline_async(
             tools=tools,
             response_format_spec=response_format_spec,
             request_messages=retry_kw.get("messages"),
+        )
+        chat_completion = normalize_json_tool_call_wrappers(
+            chat_completion,
+            response_format_spec=response_format_spec,
+            tools=tools,
         )
         check_needs_postprocessing(
             response=chat_completion,
