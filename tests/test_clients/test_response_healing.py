@@ -201,7 +201,82 @@ def test_heal_works_for_any_provider():
         assert healed is not None
 
 
-def test_heal_noop_when_tool_choice_auto():
+TRACK_CONTEXT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "track_context",
+        "description": "Track parent chat context.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+}
+
+
+def test_heal_works_when_tool_choice_auto():
+    content = json.dumps(
+        {
+            "thoughts": "Try tool.",
+            "tool_calls": [
+                {
+                    "name": "send_unify_message",
+                    "arguments": {"content": "x", "contact_id": 1},
+                },
+            ],
+        },
+    )
+    response = _completion(content)
+
+    assert should_attempt_tool_call_healing(
+        "deepseek",
+        "auto",
+        response.choices[0].message,
+        tools=[SEND_UNIFY_MESSAGE_TOOL],
+    )
+
+    healed = try_heal_embedded_tool_calls(
+        response,
+        provider="deepseek",
+        original_tool_choice="auto",
+        tools=[SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=None,
+    )
+
+    assert healed is not None
+    assert (
+        _tool_call_from_message(healed.choices[0].message)["function"]["name"]
+        == "send_unify_message"
+    )
+
+
+def test_heal_minimax_xml_invoke_with_auto_tool_choice():
+    content = (
+        "]<]minimax[>[<tool_call>\n"
+        '                            ]<]minimax[>[<invoke name="track_context">]'
+        "<]minimax[>[</invoke>\n"
+        "                            ]<]minimax[>[</tool_call>"
+    )
+    response = _completion(content)
+
+    healed = maybe_heal_tool_calls_in_completion(
+        response,
+        provider="minimax",
+        original_tool_choice="auto",
+        tools=[TRACK_CONTEXT_TOOL],
+        response_format_spec=None,
+    )
+
+    assert healed.choices[0].message.tool_calls is not None
+    call = _tool_call_from_message(healed.choices[0].message)
+    assert call["function"]["name"] == "track_context"
+    assert json.loads(call["function"]["arguments"]) == {}
+    assert healed.choices[0].message.content is None
+    assert healed.choices[0].finish_reason == "tool_calls"
+
+
+def test_heal_noop_when_tool_choice_auto_without_tools():
     content = json.dumps(
         {
             "thoughts": "Try tool.",
@@ -216,13 +291,14 @@ def test_heal_noop_when_tool_choice_auto():
         "deepseek",
         "auto",
         response.choices[0].message,
+        tools=None,
     )
 
     healed = try_heal_embedded_tool_calls(
         response,
         provider="deepseek",
         original_tool_choice="auto",
-        tools=[SEND_UNIFY_MESSAGE_TOOL],
+        tools=None,
         response_format_spec=None,
     )
 

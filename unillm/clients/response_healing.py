@@ -1,4 +1,4 @@
-"""Recover native tool_calls from model text when tool_choice is forced."""
+"""Recover native tool_calls from model text when tools are available."""
 
 from __future__ import annotations
 
@@ -69,11 +69,17 @@ def should_attempt_tool_call_healing(
     provider: str,
     original_tool_choice: Any,
     msg: "ChatCompletionMessage",
+    *,
+    tools: Optional[List[dict]] = None,
 ) -> bool:
     del provider
-    if not _tool_choice_is_forced(original_tool_choice):
+    if msg.tool_calls:
         return False
-    return not msg.tool_calls
+    if _tool_choice_is_forced(original_tool_choice):
+        return True
+    if original_tool_choice in (None, "auto") and _valid_tool_names(tools):
+        return True
+    return False
 
 
 def _serialize_arguments(arguments: Any) -> str:
@@ -847,13 +853,51 @@ def _clean_structured_content(
 ) -> Optional[str]:
     parsed = _parse_structured_content_dict(content)
     if parsed is None:
-        return content if not promoted_keys else None
+        return None if promoted_keys else content
     remaining = {
         key: value for key, value in parsed.items() if key not in promoted_keys
     }
     if not remaining:
         return None
     return json.dumps(remaining, ensure_ascii=False)
+
+
+def _strip_provider_markup_delimiters(text: str) -> str:
+    return re.sub(r"\]<\][^[]+\[>\[?", "", text)
+
+
+_INVOKE_NAME_RE = re.compile(
+    r"<\s*invoke\s+name=(['\"])([^'\"]+)\1",
+    re.IGNORECASE,
+)
+
+
+def _find_xml_invoke_tool_call(
+    content: str,
+    *,
+    tools: Optional[List[dict]],
+    original_tool_choice: Any,
+) -> Optional[tuple[str, dict[str, Any]]]:
+    cleaned = _strip_provider_markup_delimiters(content)
+    if "<invoke" not in cleaned.lower():
+        return None
+
+    forced_name = _forced_tool_name(original_tool_choice)
+    candidates = _candidate_tool_names(tools, only_name=forced_name)
+    if not candidates:
+        return None
+
+    allowed = set(candidates)
+    for match in _INVOKE_NAME_RE.finditer(cleaned):
+        name = match.group(2)
+        if name not in allowed:
+            continue
+        if _tool_is_argumentless(name, tools):
+            return name, {}
+        required = _tool_required_parameters(name, tools)
+        if not required:
+            return name, {}
+    return None
 
 
 def _infer_tool_call_from_content(
@@ -867,6 +911,14 @@ def _infer_tool_call_from_content(
     candidates = _candidate_tool_names(tools, only_name=forced_name)
     if not candidates:
         return None
+
+    xml_call = _find_xml_invoke_tool_call(
+        content,
+        tools=tools,
+        original_tool_choice=original_tool_choice,
+    )
+    if xml_call is not None:
+        return xml_call[0], xml_call[1], {"content"}
 
     search_text = _content_search_text(content)
     python_call = _find_python_tool_call_in_text(
@@ -1149,7 +1201,12 @@ def try_heal_embedded_tool_calls(
     response_format_spec: Optional[ResponseFormatSpec],
 ) -> Optional["ChatCompletion"]:
     msg = response.choices[0].message
-    if not should_attempt_tool_call_healing(provider, original_tool_choice, msg):
+    if not should_attempt_tool_call_healing(
+        provider,
+        original_tool_choice,
+        msg,
+        tools=tools,
+    ):
         return None
 
     content = msg.content
@@ -1159,7 +1216,7 @@ def try_heal_embedded_tool_calls(
     try:
         parsed = json.loads(content.strip())
     except json.JSONDecodeError:
-        return None
+        parsed = None
 
     if not isinstance(parsed, dict):
         return None
@@ -1215,7 +1272,12 @@ def try_infer_tool_call_from_content(
     request_messages: Optional[List[dict]] = None,
 ) -> Optional["ChatCompletion"]:
     msg = response.choices[0].message
-    if not should_attempt_tool_call_healing(provider, original_tool_choice, msg):
+    if not should_attempt_tool_call_healing(
+        provider,
+        original_tool_choice,
+        msg,
+        tools=tools,
+    ):
         return None
 
     content = msg.content
