@@ -12,6 +12,7 @@ Currently handles:
 - DeepSeek/MiniMax/Xiaomi MiMo: embedded tool_calls recovery from JSON content
 - json_tool_call wrapper normalization (structured output + inner tool unwrapping)
 - response_format schema validation with retry (all providers)
+- reasoning_content promotion when content is empty (thinking models)
 """
 
 import json
@@ -30,6 +31,53 @@ from .response_healing import maybe_heal_tool_calls_in_completion
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion, ChatCompletionMessage
+
+logger = logging.getLogger(__name__)
+
+
+def _message_content_is_empty(content: Any) -> bool:
+    if content is None:
+        return True
+    if isinstance(content, str):
+        return not content.strip()
+    return False
+
+
+def _message_reasoning_content(msg: "ChatCompletionMessage") -> Optional[str]:
+    reasoning = getattr(msg, "reasoning_content", None)
+    if isinstance(reasoning, str) and reasoning.strip():
+        return reasoning.strip()
+
+    provider_fields = getattr(msg, "provider_specific_fields", None)
+    if isinstance(provider_fields, dict):
+        nested = provider_fields.get("reasoning_content")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return None
+
+
+def promote_reasoning_content_to_content(
+    chat_completion: "ChatCompletion",
+) -> "ChatCompletion":
+    """Copy ``reasoning_content`` into ``content`` when the visible payload is empty.
+
+    Some thinking models (MiniMax, DeepSeek, etc.) place the user-visible answer
+    only in ``reasoning_content`` with ``content: null``. Downstream consumers
+    that read ``content`` (tool loops, tests, UIs) otherwise see a blank turn.
+    """
+    msg = chat_completion.choices[0].message
+    if msg.tool_calls:
+        return chat_completion
+    if not _message_content_is_empty(msg.content):
+        return chat_completion
+
+    reasoning = _message_reasoning_content(msg)
+    if reasoning is None:
+        return chat_completion
+
+    msg.content = reasoning
+    logger.info("Promoted reasoning_content to content")
+    return chat_completion
 
 
 def _tool_call_name(tool_call: Any) -> Optional[str]:
@@ -61,8 +109,6 @@ def _tool_call_id(tool_call: Any) -> Optional[str]:
     call_id = getattr(tool_call, "id", None)
     return call_id if isinstance(call_id, str) else None
 
-
-logger = logging.getLogger(__name__)
 
 # Retry reason constants
 RETRY_REASON_TOOL_CHOICE_REQUIRED = "tool_choice_required"
@@ -599,7 +645,7 @@ def apply_postprocessing_pipeline(
         )
         chat_completion = execute_retry(rf_retry_kw, "rf-retry")
 
-    return chat_completion
+    return promote_reasoning_content_to_content(chat_completion)
 
 
 async def apply_postprocessing_pipeline_async(
@@ -683,7 +729,7 @@ async def apply_postprocessing_pipeline_async(
         )
         chat_completion = await execute_retry(rf_retry_kw, "rf-retry")
 
-    return chat_completion
+    return promote_reasoning_content_to_content(chat_completion)
 
 
 def build_response_format_retry_kw(
