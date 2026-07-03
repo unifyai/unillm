@@ -1,6 +1,5 @@
 """Tests for cost event capture using context managers."""
 
-import os
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -438,16 +437,6 @@ class TestCostEventEmissionMocked:
         assert response is not None
 
 
-# ---------------------------------------------------------------------------
-#  Integration tests - only run when API keys are available
-# ---------------------------------------------------------------------------
-
-_HAS_API_KEYS = bool(
-    os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"),
-)
-
-
-@pytest.mark.skipif(not _HAS_API_KEYS, reason="No API keys available")
 class TestCostEventEmissionIntegration:
     """Integration tests for cost events with real LLM calls."""
 

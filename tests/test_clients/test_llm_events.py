@@ -858,13 +858,6 @@ class TestGlobalLLMEventHook:
         assert global_captured[1].request["model"] == "back-to-global@provider"
 
 
-# Integration tests - only run when API keys are available
-_HAS_API_KEYS = bool(
-    os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"),
-)
-
-
-@pytest.mark.skipif(not _HAS_API_KEYS, reason="No API keys available")
 class TestLLMEventEmissionIntegration:
     """Integration tests for LLM events with real LLM calls."""
 

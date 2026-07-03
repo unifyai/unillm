@@ -1,5 +1,3 @@
-import os
-
 import pytest
 
 import unillm
@@ -10,7 +8,6 @@ MIMO_V25_ENDPOINT = "mimo-v2.5@xiaomi-mimo"
 MIMO_V25_PROVIDER_MODEL = "xiaomi_mimo/mimo-v2.5"
 MIMO_V25_PRO_ENDPOINT = "mimo-v2.5-pro@xiaomi-mimo"
 MIMO_V25_PRO_PROVIDER_MODEL = "xiaomi_mimo/mimo-v2.5-pro"
-_HAS_XIAOMI_MIMO_API_KEY = bool(os.environ.get("XIAOMI_MIMO_API_KEY"))
 
 
 def test_mimo_v25_alias_registered() -> None:
@@ -69,10 +66,6 @@ def test_mimo_tool_requests_disable_thinking(monkeypatch) -> None:
     assert kw["extra_body"]["thinking"] == {"type": "disabled"}
 
 
-@pytest.mark.skipif(
-    not _HAS_XIAOMI_MIMO_API_KEY,
-    reason="No Xiaomi MiMo API key available",
-)
 def test_sync_mimo_v25_simple_message() -> None:
     client = unillm.Unify(MIMO_V25_ENDPOINT, temperature=0)
     response = client.generate(
@@ -86,10 +79,6 @@ def test_sync_mimo_v25_simple_message() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not _HAS_XIAOMI_MIMO_API_KEY,
-    reason="No Xiaomi MiMo API key available",
-)
 async def test_async_mimo_v25_simple_message() -> None:
     client = unillm.AsyncUnify(MIMO_V25_ENDPOINT, temperature=0)
     response = await client.generate(
