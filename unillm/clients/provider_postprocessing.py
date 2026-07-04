@@ -117,12 +117,34 @@ RETRY_REASON_REPEATED_COMPLETED_TOOL = "repeated_completed_tool"
 
 SOFT_FORCED_TOOL_CHOICE_PROVIDERS = {"deepseek", "minimax", "xiaomi-mimo"}
 
-# Nudge message for retrying when model ignores tool_choice="required" instruction
-TOOL_CHOICE_REQUIRED_RETRY_NUDGE = (
-    "I understand you may not think a tool call is necessary on this step, but "
-    "tool_choice is set to 'required' which means you MUST select the most "
-    "appropriate tool with the most appropriate arguments. Please call a tool now."
+# Base nudge for retrying when model ignores tool_choice="required" instruction.
+# The rejected plain-text attempt is never appended as an assistant turn — that
+# format makes models treat undelivered prose as already sent (e.g. calling wait).
+TOOL_CHOICE_REQUIRED_RETRY_NUDGE_BASE = (
+    "Your previous turn FAILED: you returned plain text instead of calling a tool. "
+    "That text was NOT delivered to the user and had ZERO effect — nothing was "
+    "sent, logged, or committed. Do NOT call `wait` or treat that text as already "
+    "delivered. tool_choice is set to 'required', which means you MUST call the "
+    "most appropriate tool with the most appropriate arguments on this turn."
 )
+
+
+def build_tool_choice_required_retry_nudge(
+    rejected_content: str | None,
+) -> str:
+    """Build the user nudge for a rejected text-only tool-required response."""
+    if rejected_content:
+        return (
+            f"{TOOL_CHOICE_REQUIRED_RETRY_NUDGE_BASE}\n\n"
+            "If you intended to communicate the following, call the appropriate "
+            "send tool NOW with this content (for reference only — it was NOT sent):\n"
+            f"> {rejected_content}"
+        )
+    return (
+        f"{TOOL_CHOICE_REQUIRED_RETRY_NUDGE_BASE}\n\n"
+        "Please call the appropriate tool now."
+    )
+
 
 # Error message for valid tool calls that were not executed because
 # sibling tool calls in the same batch were invalid.
@@ -414,18 +436,13 @@ def build_retry_kw(
             },
         )
     else:
-        # Default: tool_choice_required case
+        # Default: tool_choice_required case — rejected prose is referenced inside
+        # a single user nudge, not replayed as an assistant turn.
         retry_messages = list(kw.get("messages", []))
         retry_messages.append(
             {
-                "role": "assistant",
-                "content": assistant_content,
-            },
-        )
-        retry_messages.append(
-            {
                 "role": "user",
-                "content": TOOL_CHOICE_REQUIRED_RETRY_NUDGE,
+                "content": build_tool_choice_required_retry_nudge(assistant_content),
             },
         )
 
