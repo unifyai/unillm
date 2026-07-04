@@ -27,6 +27,7 @@ from .response_format import (
     validate_against_spec,
 )
 from .json_tool_call_normalization import normalize_json_tool_call_wrappers
+from .completion_mutator import CompletionMutator, apply_completion_mutator
 from .response_healing import maybe_heal_tool_calls_in_completion
 
 if TYPE_CHECKING:
@@ -590,11 +591,20 @@ def apply_postprocessing_pipeline(
     reasoning_effort: Optional[str],
     original_request_messages: Optional[List[dict]] = None,
     execute_retry,
+    completion_mutator: Optional[CompletionMutator] = None,
 ) -> "ChatCompletion":
     """Run healing, tool-choice retries, and response_format validation."""
     raw_tools = kw.get("tools")
     tools = list(raw_tools) if raw_tools is not None else None
     response_format_spec = get_response_format_spec(kw)
+
+    chat_completion = apply_completion_mutator(
+        chat_completion,
+        completion_mutator=completion_mutator,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        request_kw=kw,
+    )
 
     chat_completion = maybe_heal_tool_calls_in_completion(
         chat_completion,
@@ -674,11 +684,20 @@ async def apply_postprocessing_pipeline_async(
     reasoning_effort: Optional[str],
     original_request_messages: Optional[List[dict]] = None,
     execute_retry,
+    completion_mutator: Optional[CompletionMutator] = None,
 ) -> "ChatCompletion":
     """Async variant of apply_postprocessing_pipeline."""
     raw_tools = kw.get("tools")
     tools = list(raw_tools) if raw_tools is not None else None
     response_format_spec = get_response_format_spec(kw)
+
+    chat_completion = apply_completion_mutator(
+        chat_completion,
+        completion_mutator=completion_mutator,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        request_kw=kw,
+    )
 
     chat_completion = maybe_heal_tool_calls_in_completion(
         chat_completion,

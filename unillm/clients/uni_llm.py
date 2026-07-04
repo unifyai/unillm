@@ -814,6 +814,7 @@ class _UniClient(_Client, abc.ABC):
         cache_backend: Optional[str] = None,
         prompt_caching: Optional[PromptCacheParam] = None,
         origin: Optional[str] = None,
+        completion_mutator=None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         service_tier: Optional[str] = None,
@@ -1012,6 +1013,7 @@ class _UniClient(_Client, abc.ABC):
             cache_backend=_default(cache_backend, self._cache_backend),
             prompt_caching=_default(prompt_caching, self._prompt_caching),
             origin=_default(origin, self._origin),
+            completion_mutator=completion_mutator,
             # passthrough arguments
             extra_headers=_default(extra_headers, self._extra_headers),
             **kwargs,
@@ -1226,6 +1228,7 @@ class Unify(_UniClient):
         original_tool_choice: Optional[str],
         original_request_messages: Optional[List[dict]] = None,
         origin: Optional[str] = None,
+        completion_mutator=None,
     ) -> "ChatCompletion":
         """Run all postprocessing checks, retrying once per check if needed."""
         from .provider_postprocessing import apply_postprocessing_pipeline
@@ -1243,6 +1246,7 @@ class Unify(_UniClient):
                 label,
                 origin=origin,
             ),
+            completion_mutator=completion_mutator,
         )
 
     def _generate_non_stream(
@@ -1254,6 +1258,7 @@ class Unify(_UniClient):
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
         origin: Optional[str] = None,
+        completion_mutator=None,
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -1433,6 +1438,7 @@ class Unify(_UniClient):
                 original_tool_choice,
                 original_request_messages,
                 origin=origin,
+                completion_mutator=completion_mutator,
             )
             _enforce_parallel_tool_call_response_limit(
                 chat_completion,
@@ -1496,6 +1502,7 @@ class Unify(_UniClient):
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
         origin: Optional[str] = None,
+        completion_mutator=None,
         # passthrough arguments
         extra_headers: Optional[Headers],
         **kwargs,
@@ -1540,6 +1547,7 @@ class Unify(_UniClient):
             cache_backend=cache_backend,
             prompt_caching=prompt_caching,
             origin=origin,
+            completion_mutator=completion_mutator,
         )
 
     def to_async_client(self):
@@ -1858,6 +1866,7 @@ class AsyncUnify(_UniClient):
         original_tool_choice: Optional[str],
         original_request_messages: Optional[List[dict]] = None,
         origin: Optional[str] = None,
+        completion_mutator=None,
     ) -> "ChatCompletion":
         """Run all postprocessing checks, retrying once per check if needed."""
         from .provider_postprocessing import apply_postprocessing_pipeline_async
@@ -1875,6 +1884,7 @@ class AsyncUnify(_UniClient):
                 label,
                 origin=origin,
             ),
+            completion_mutator=completion_mutator,
         )
 
     async def _generate_non_stream(
@@ -1886,6 +1896,7 @@ class AsyncUnify(_UniClient):
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
         origin: Optional[str] = None,
+        completion_mutator=None,
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -2120,6 +2131,7 @@ class AsyncUnify(_UniClient):
                 original_tool_choice,
                 original_request_messages,
                 origin=origin,
+                completion_mutator=completion_mutator,
             )
             _enforce_parallel_tool_call_response_limit(
                 chat_completion,
@@ -2173,6 +2185,7 @@ class AsyncUnify(_UniClient):
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
         origin: Optional[str] = None,
+        completion_mutator=None,
         # passthrough arguments
         extra_headers: Optional[Headers],
         service_tier: Optional[str] = None,
@@ -2218,6 +2231,7 @@ class AsyncUnify(_UniClient):
             cache_backend=cache_backend,
             prompt_caching=prompt_caching,
             origin=origin,
+            completion_mutator=completion_mutator,
         )
 
     def to_sync_client(self):
