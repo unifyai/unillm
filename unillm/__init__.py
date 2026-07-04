@@ -7,6 +7,11 @@ import logging
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
 from .clients.uni_llm import Unify, AsyncUnify
+from .clients.completion_mutator import (
+    CompletionMutator,
+    CompletionMutatorContext,
+    inject_tool_call,
+)
 from .cache_events import (
     CacheEvent,
     capture_cache_events,
