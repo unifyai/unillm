@@ -28,7 +28,7 @@ SIMPLE_TOOL = {
 def _assert_no_retry_nudge_in_history(messages: list) -> None:
     """Assert that retry nudge messages are not present in the message history."""
     # Check for the tool_choice=required nudge
-    nudge_fragment = "tool_choice is set to 'required'"
+    nudge_fragment = "Your previous turn FAILED"
 
     for msg in messages:
         content = msg.get("content", "")
