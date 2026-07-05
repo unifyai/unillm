@@ -240,14 +240,28 @@ def _prepare_provider_request_kw(
 
 
 def _request_kw_for_event(kw: dict, accounting_model: str) -> dict:
-    """Return event metadata with the provider model as the primary model."""
-    transport_model = kw.get("model")
-    if transport_model == accounting_model:
-        return kw
+    """Return JSON-serializable event metadata with the accounting model primary.
 
+    ``LLMEvent.request`` is persisted by downstream JSON sinks (file logs,
+    EventBus/Orchestra), so it must be JSON-serializable end-to-end. A Pydantic
+    ``response_format`` class is replaced by its JSON schema, which keeps the
+    requested output contract visible in analytics without leaking the class
+    object (``json.dumps`` cannot encode a ``ModelMetaclass``).
+    """
     event_kw = dict(kw)
-    event_kw["model"] = accounting_model
-    event_kw["transport_model"] = transport_model
+    response_format = event_kw.get("response_format")
+    if isinstance(response_format, type) and issubclass(response_format, BaseModel):
+        event_kw["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": response_format.__name__,
+                "schema": response_format.model_json_schema(),
+            },
+        }
+    transport_model = kw.get("model")
+    if transport_model != accounting_model:
+        event_kw["model"] = accounting_model
+        event_kw["transport_model"] = transport_model
     return event_kw
 
 
