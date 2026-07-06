@@ -29,10 +29,14 @@ class _CacheHandler:
         self._fname = fname
         self.test_path = ""
         self._original_cache = None
+        self._original_cache_dir = ""
+        self._original_cache_name = ""
 
     def __enter__(self):
         # Store original cache state
         self._original_cache = LocalCache._cache
+        self._original_cache_dir = LocalCache._cache_dir
+        self._original_cache_name = LocalCache.get_cache_name()
         LocalCache._cache = None
 
         # Use temp directory for isolation
@@ -47,9 +51,11 @@ class _CacheHandler:
     def __exit__(self, exc_type, exc_value, traceback):
         if os.path.exists(self.test_path):
             os.remove(self.test_path)
-        # Restore original cache state
+        # Restore original cache state (set_cache_name resets the in-memory
+        # cache, so it must run before the _cache assignment)
+        LocalCache.set_cache_name(self._original_cache_name)
         LocalCache._cache = self._original_cache
-        LocalCache._cache_dir = os.environ.get("UNILLM_CACHE_DIR", os.getcwd())
+        LocalCache._cache_dir = self._original_cache_dir
 
 
 class TestBaseCache:

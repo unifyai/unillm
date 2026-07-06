@@ -287,6 +287,61 @@ class TestLLMEventEmissionMocked:
         assert event.response is not None
         assert event.response["id"] == "test"
 
+    def test_structured_output_event_request_is_json_serializable(self):
+        """A Pydantic ``response_format`` class must not leak into the event.
+
+        Downstream sinks (EventBus -> Orchestra, file logs) persist the request
+        with ``json.dumps``; a raw model class raised ``TypeError: Object of
+        type ModelMetaclass is not JSON serializable`` and silently dropped the
+        Events/LLM row for every structured-output call.
+        """
+        import json
+
+        from pydantic import BaseModel
+
+        class _Decision(BaseModel):
+            classification: str
+            content: str = ""
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = '{"classification": "defer"}'
+        mock_response.model_dump.return_value = {"id": "test", "choices": []}
+
+        captured = []
+
+        def capture_hook(event: LLMEvent) -> None:
+            captured.append(event)
+
+        with patch(
+            "unillm.clients.uni_llm.litellm.completion",
+            return_value=mock_response,
+        ):
+            with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+                with patch("unillm.clients.uni_llm._write_to_cache"):
+                    with patch(
+                        "unillm.clients.uni_llm.compute_cost_from_response",
+                        return_value=0.001,
+                    ):
+                        with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
+                            client = unillm.Unify("gpt-4@openai", cache=True)
+                            client.set_response_format(_Decision)
+                            with llm_event_hook_scope(capture_hook):
+                                client.generate(
+                                    messages=[{"role": "user", "content": "Hi"}],
+                                )
+
+        assert len(captured) == 1
+        event = captured[0]
+        # The class is replaced by its JSON schema, keeping the contract visible.
+        serialized = json.dumps(event.request)
+        assert "ModelMetaclass" not in serialized
+        assert event.request["response_format"]["json_schema"]["name"] == "_Decision"
+        assert (
+            "classification"
+            in event.request["response_format"]["json_schema"]["schema"]["properties"]
+        )
+
     def test_sync_client_emits_cache_hit_with_no_costs(self):
         mock_cached_response = MagicMock()
         mock_cached_response.choices = [MagicMock()]
@@ -858,13 +913,6 @@ class TestGlobalLLMEventHook:
         assert global_captured[1].request["model"] == "back-to-global@provider"
 
 
-# Integration tests - only run when API keys are available
-_HAS_API_KEYS = bool(
-    os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"),
-)
-
-
-@pytest.mark.skipif(not _HAS_API_KEYS, reason="No API keys available")
 class TestLLMEventEmissionIntegration:
     """Integration tests for LLM events with real LLM calls."""
 

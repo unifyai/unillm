@@ -328,6 +328,11 @@ git commit -m "Update README"
 
 Note: The `black` formatting check always runs on every push.
 
+**LLM cache:** CI tests replay cached LLM responses (read-only). Changes that
+invalidate cache keys require refreshing `.github/cache-seed/cache.ndjson` and
+publishing via `llm-cache-refresh.yml` before a `staging → main` promotion PR
+can pass `pytest`. See [CONTRIBUTING.md — LLM cache and CI](CONTRIBUTING.md#llm-cache-and-ci).
+
 Some CI steps (local Orchestra deployment, GCP authentication) are internal infrastructure for the Unify team and are automatically skipped on external forks.
 
 ### Pre-commit Hooks
