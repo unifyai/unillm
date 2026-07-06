@@ -6,11 +6,13 @@ from . import minimax
 from . import mistral
 from . import openai
 from . import openrouter_overrides
+from . import qwen
 from . import replicate
 from . import togetherai
 from . import vertexai
 from . import xai
 from . import xiaomi_mimo
+from . import zai
 
 from .utils import list_endpoints, list_models, list_providers
 

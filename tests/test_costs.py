@@ -11,7 +11,7 @@ from unillm.costs import (
     compute_cost_from_response,
     compute_full_cost_from_usage,
 )
-from unillm.endpoints import anthropic, deepseek, minimax, openai, xiaomi_mimo
+from unillm.endpoints import anthropic, deepseek, minimax, openai, xiaomi_mimo, zai
 
 
 class TestNormalizeModelName:
@@ -242,6 +242,7 @@ class TestSupportedModelPricingCoverage:
         "deepseek": deepseek.models,
         "minimax": minimax.models,
         "xiaomi-mimo": xiaomi_mimo.models,
+        "zai": zai.models,
     }
 
     @pytest.mark.parametrize(

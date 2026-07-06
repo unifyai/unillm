@@ -9,7 +9,10 @@ Currently handles:
 - Anthropic: tool_choice="required" compliance with thinking mode
 - Anthropic/DeepSeek: invalid tool name detection (tool called not in schema)
 - DeepSeek/MiniMax/Xiaomi MiMo: soft forced tool choice compliance
+- DeepSeek/MiniMax/Xiaomi MiMo: embedded tool_calls recovery from JSON content
+- json_tool_call wrapper normalization (structured output + inner tool unwrapping)
 - response_format schema validation with retry (all providers)
+- reasoning_content promotion when content is empty (thinking models)
 """
 
 import json
@@ -23,11 +26,90 @@ from .response_format import (
     parse_structured_content,
     validate_against_spec,
 )
+from .json_tool_call_normalization import normalize_json_tool_call_wrappers
+from .completion_mutator import CompletionMutator, apply_completion_mutator
+from .response_healing import maybe_heal_tool_calls_in_completion
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion, ChatCompletionMessage
 
 logger = logging.getLogger(__name__)
+
+
+def _message_content_is_empty(content: Any) -> bool:
+    if content is None:
+        return True
+    if isinstance(content, str):
+        return not content.strip()
+    return False
+
+
+def _message_reasoning_content(msg: "ChatCompletionMessage") -> Optional[str]:
+    reasoning = getattr(msg, "reasoning_content", None)
+    if isinstance(reasoning, str) and reasoning.strip():
+        return reasoning.strip()
+
+    provider_fields = getattr(msg, "provider_specific_fields", None)
+    if isinstance(provider_fields, dict):
+        nested = provider_fields.get("reasoning_content")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return None
+
+
+def promote_reasoning_content_to_content(
+    chat_completion: "ChatCompletion",
+) -> "ChatCompletion":
+    """Copy ``reasoning_content`` into ``content`` when the visible payload is empty.
+
+    Some thinking models (MiniMax, DeepSeek, etc.) place the user-visible answer
+    only in ``reasoning_content`` with ``content: null``. Downstream consumers
+    that read ``content`` (tool loops, tests, UIs) otherwise see a blank turn.
+    """
+    msg = chat_completion.choices[0].message
+    if msg.tool_calls:
+        return chat_completion
+    if not _message_content_is_empty(msg.content):
+        return chat_completion
+
+    reasoning = _message_reasoning_content(msg)
+    if reasoning is None:
+        return chat_completion
+
+    msg.content = reasoning
+    logger.info("Promoted reasoning_content to content")
+    return chat_completion
+
+
+def _tool_call_name(tool_call: Any) -> Optional[str]:
+    if isinstance(tool_call, dict):
+        function = tool_call.get("function")
+        if isinstance(function, dict):
+            name = function.get("name")
+            return name if isinstance(name, str) and name else None
+        return None
+    function = getattr(tool_call, "function", None)
+    if function is None:
+        return None
+    return function.name
+
+
+def _tool_call_arguments(tool_call: Any) -> str:
+    if isinstance(tool_call, dict):
+        function = tool_call.get("function")
+        if isinstance(function, dict):
+            return str(function.get("arguments", ""))
+        return ""
+    return str(tool_call.function.arguments)
+
+
+def _tool_call_id(tool_call: Any) -> Optional[str]:
+    if isinstance(tool_call, dict):
+        call_id = tool_call.get("id")
+        return call_id if isinstance(call_id, str) else None
+    call_id = getattr(tool_call, "id", None)
+    return call_id if isinstance(call_id, str) else None
+
 
 # Retry reason constants
 RETRY_REASON_TOOL_CHOICE_REQUIRED = "tool_choice_required"
@@ -36,12 +118,34 @@ RETRY_REASON_REPEATED_COMPLETED_TOOL = "repeated_completed_tool"
 
 SOFT_FORCED_TOOL_CHOICE_PROVIDERS = {"deepseek", "minimax", "xiaomi-mimo"}
 
-# Nudge message for retrying when model ignores tool_choice="required" instruction
-TOOL_CHOICE_REQUIRED_RETRY_NUDGE = (
-    "I understand you may not think a tool call is necessary on this step, but "
-    "tool_choice is set to 'required' which means you MUST select the most "
-    "appropriate tool with the most appropriate arguments. Please call a tool now."
+# Base nudge for retrying when model ignores tool_choice="required" instruction.
+# The rejected plain-text attempt is never appended as an assistant turn — that
+# format makes models treat undelivered prose as already sent (e.g. calling wait).
+TOOL_CHOICE_REQUIRED_RETRY_NUDGE_BASE = (
+    "Your previous turn FAILED: you returned plain text instead of calling a tool. "
+    "That text was NOT delivered to the user and had ZERO effect — nothing was "
+    "sent, logged, or committed. Do NOT call `wait` or treat that text as already "
+    "delivered. tool_choice is set to 'required', which means you MUST call the "
+    "most appropriate tool with the most appropriate arguments on this turn."
 )
+
+
+def build_tool_choice_required_retry_nudge(
+    rejected_content: str | None,
+) -> str:
+    """Build the user nudge for a rejected text-only tool-required response."""
+    if rejected_content:
+        return (
+            f"{TOOL_CHOICE_REQUIRED_RETRY_NUDGE_BASE}\n\n"
+            "If you intended to communicate the following, call the appropriate "
+            "send tool NOW with this content (for reference only — it was NOT sent):\n"
+            f"> {rejected_content}"
+        )
+    return (
+        f"{TOOL_CHOICE_REQUIRED_RETRY_NUDGE_BASE}\n\n"
+        "Please call the appropriate tool now."
+    )
+
 
 # Error message for valid tool calls that were not executed because
 # sibling tool calls in the same batch were invalid.
@@ -79,15 +183,13 @@ def check_needs_postprocessing(
             reasoning_effort=reasoning_effort,
             tools=tools,
         )
-    if provider in SOFT_FORCED_TOOL_CHOICE_PROVIDERS:
-        return _check_soft_forced_tool_choice_postprocessing(
-            response=response,
-            original_tool_choice=original_tool_choice,
-            tools=tools,
-            request_messages=request_messages,
-            original_request_messages=original_request_messages,
-        )
-    return False, None
+    return _check_soft_forced_tool_choice_postprocessing(
+        response=response,
+        original_tool_choice=original_tool_choice,
+        tools=tools,
+        request_messages=request_messages,
+        original_request_messages=original_request_messages,
+    )
 
 
 def _get_valid_tool_names(tools: Optional[List[dict]]) -> List[str]:
@@ -114,7 +216,8 @@ def _forced_tool_name(tool_choice: Any) -> Optional[str]:
 
 
 def _called_tool_names(msg: "ChatCompletionMessage") -> List[str]:
-    return [tc.function.name for tc in (msg.tool_calls or [])]
+    names = [_tool_call_name(tc) for tc in (msg.tool_calls or [])]
+    return [name for name in names if name]
 
 
 def _has_tool_result_history(messages: Optional[List[dict]]) -> bool:
@@ -168,7 +271,7 @@ def _repeats_completed_tool_call(
         return False
 
     return all(
-        (tool_call.function.name, str(tool_call.function.arguments)) in completed
+        (_tool_call_name(tool_call), _tool_call_arguments(tool_call)) in completed
         for tool_call in msg.tool_calls
     )
 
@@ -235,9 +338,10 @@ def _build_invalid_tool_name_retry_messages(
     if valid_tool_names:
         # Case A: at least one valid tool is available
         for tc in tool_calls:
-            if tc.function.name not in valid_tool_names:
+            called_name = _tool_call_name(tc)
+            if called_name not in valid_tool_names:
                 error_obj = _make_tool_error(
-                    f"'{tc.function.name}' is not callable on this turn. "
+                    f"'{called_name}' is not callable on this turn. "
                     "It may be mentioned in the system message but is "
                     "not in the current tool schema. "
                     "Please select from the available tools only.",
@@ -251,7 +355,7 @@ def _build_invalid_tool_name_retry_messages(
             retry_messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": tc.id,
+                    "tool_call_id": _tool_call_id(tc),
                     "content": json.dumps(error_obj),
                 },
             )
@@ -260,10 +364,11 @@ def _build_invalid_tool_name_retry_messages(
         rf_spec = get_response_format_spec(kw)
         schema = rf_spec.json_schema if rf_spec is not None else None
         for tc in tool_calls:
+            called_name = _tool_call_name(tc)
             if schema is not None:
                 # Case C: response_format schema is set
                 error_obj = _make_tool_error(
-                    f"'{tc.function.name}' is not callable. "
+                    f"'{called_name}' is not callable. "
                     "No tools are available on this turn. "
                     "Do not call any tools. "
                     "Respond with valid JSON only, nothing else, "
@@ -273,7 +378,7 @@ def _build_invalid_tool_name_retry_messages(
             else:
                 # Case B: no schema, no tools
                 error_obj = _make_tool_error(
-                    f"'{tc.function.name}' is not callable. "
+                    f"'{_tool_call_name(tc)}' is not callable. "
                     "No tools are available on this turn. "
                     "Do not call any tools. "
                     "Respond with text content only.",
@@ -332,18 +437,13 @@ def build_retry_kw(
             },
         )
     else:
-        # Default: tool_choice_required case
+        # Default: tool_choice_required case — rejected prose is referenced inside
+        # a single user nudge, not replayed as an assistant turn.
         retry_messages = list(kw.get("messages", []))
         retry_messages.append(
             {
-                "role": "assistant",
-                "content": assistant_content,
-            },
-        )
-        retry_messages.append(
-            {
                 "role": "user",
-                "content": TOOL_CHOICE_REQUIRED_RETRY_NUDGE,
+                "content": build_tool_choice_required_retry_nudge(assistant_content),
             },
         )
 
@@ -384,7 +484,7 @@ def _check_anthropic_postprocessing(
     if msg.tool_calls:
         valid_names = set(_get_valid_tool_names(tools))
         for tool_call in msg.tool_calls:
-            called_name = tool_call.function.name
+            called_name = _tool_call_name(tool_call)
             if called_name not in valid_names:
                 # Model called a tool not in the schema
                 return True, RETRY_REASON_INVALID_TOOL_NAME
@@ -411,7 +511,8 @@ def _check_soft_forced_tool_choice_postprocessing(
     if msg.tool_calls:
         valid_names = set(_get_valid_tool_names(tools))
         for tool_call in msg.tool_calls:
-            if tool_call.function.name not in valid_names:
+            called_name = _tool_call_name(tool_call)
+            if called_name not in valid_names:
                 return True, RETRY_REASON_INVALID_TOOL_NAME
 
         if original_tool_choice in (None, "auto") and _repeats_completed_tool_call(
@@ -479,6 +580,192 @@ def check_response_format_compliance(
         return True, validation_error, spec
 
     return False, None, None
+
+
+def apply_postprocessing_pipeline(
+    chat_completion: "ChatCompletion",
+    *,
+    kw: dict,
+    provider: str,
+    original_tool_choice: Optional[Any],
+    reasoning_effort: Optional[str],
+    original_request_messages: Optional[List[dict]] = None,
+    execute_retry,
+    completion_mutator: Optional[CompletionMutator] = None,
+) -> "ChatCompletion":
+    """Run healing, tool-choice retries, and response_format validation."""
+    raw_tools = kw.get("tools")
+    tools = list(raw_tools) if raw_tools is not None else None
+    response_format_spec = get_response_format_spec(kw)
+
+    chat_completion = apply_completion_mutator(
+        chat_completion,
+        completion_mutator=completion_mutator,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        request_kw=kw,
+    )
+
+    chat_completion = maybe_heal_tool_calls_in_completion(
+        chat_completion,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        tools=tools,
+        response_format_spec=response_format_spec,
+        request_messages=kw.get("messages"),
+    )
+    chat_completion = normalize_json_tool_call_wrappers(
+        chat_completion,
+        response_format_spec=response_format_spec,
+        tools=tools,
+    )
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=chat_completion,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        reasoning_effort=reasoning_effort,
+        tools=tools,
+        request_messages=kw.get("messages"),
+        original_request_messages=original_request_messages,
+    )
+    if needs_retry:
+        retry_kw = build_retry_kw(
+            kw=kw,
+            response=chat_completion,
+            retry_reason=retry_reason,
+        )
+        chat_completion = execute_retry(retry_kw, "retry")
+        chat_completion = maybe_heal_tool_calls_in_completion(
+            chat_completion,
+            provider=provider,
+            original_tool_choice=original_tool_choice,
+            tools=tools,
+            response_format_spec=response_format_spec,
+            request_messages=retry_kw.get("messages"),
+        )
+        chat_completion = normalize_json_tool_call_wrappers(
+            chat_completion,
+            response_format_spec=response_format_spec,
+            tools=tools,
+        )
+        check_needs_postprocessing(
+            response=chat_completion,
+            provider=provider,
+            original_tool_choice=original_tool_choice,
+            reasoning_effort=reasoning_effort,
+            tools=tools,
+            request_messages=kw.get("messages"),
+            original_request_messages=original_request_messages,
+        )
+
+    rf_needs_retry, rf_error, rf_spec = check_response_format_compliance(
+        response=chat_completion,
+        kw=kw,
+    )
+    if rf_needs_retry and rf_spec is not None:
+        rf_retry_kw = build_response_format_retry_kw(
+            kw=kw,
+            response=chat_completion,
+            validation_error=rf_error,
+            response_format_spec=rf_spec,
+        )
+        chat_completion = execute_retry(rf_retry_kw, "rf-retry")
+
+    return promote_reasoning_content_to_content(chat_completion)
+
+
+async def apply_postprocessing_pipeline_async(
+    chat_completion: "ChatCompletion",
+    *,
+    kw: dict,
+    provider: str,
+    original_tool_choice: Optional[Any],
+    reasoning_effort: Optional[str],
+    original_request_messages: Optional[List[dict]] = None,
+    execute_retry,
+    completion_mutator: Optional[CompletionMutator] = None,
+) -> "ChatCompletion":
+    """Async variant of apply_postprocessing_pipeline."""
+    raw_tools = kw.get("tools")
+    tools = list(raw_tools) if raw_tools is not None else None
+    response_format_spec = get_response_format_spec(kw)
+
+    chat_completion = apply_completion_mutator(
+        chat_completion,
+        completion_mutator=completion_mutator,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        request_kw=kw,
+    )
+
+    chat_completion = maybe_heal_tool_calls_in_completion(
+        chat_completion,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        tools=tools,
+        response_format_spec=response_format_spec,
+        request_messages=kw.get("messages"),
+    )
+    chat_completion = normalize_json_tool_call_wrappers(
+        chat_completion,
+        response_format_spec=response_format_spec,
+        tools=tools,
+    )
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=chat_completion,
+        provider=provider,
+        original_tool_choice=original_tool_choice,
+        reasoning_effort=reasoning_effort,
+        tools=tools,
+        request_messages=kw.get("messages"),
+        original_request_messages=original_request_messages,
+    )
+    if needs_retry:
+        retry_kw = build_retry_kw(
+            kw=kw,
+            response=chat_completion,
+            retry_reason=retry_reason,
+        )
+        chat_completion = await execute_retry(retry_kw, "retry")
+        chat_completion = maybe_heal_tool_calls_in_completion(
+            chat_completion,
+            provider=provider,
+            original_tool_choice=original_tool_choice,
+            tools=tools,
+            response_format_spec=response_format_spec,
+            request_messages=retry_kw.get("messages"),
+        )
+        chat_completion = normalize_json_tool_call_wrappers(
+            chat_completion,
+            response_format_spec=response_format_spec,
+            tools=tools,
+        )
+        check_needs_postprocessing(
+            response=chat_completion,
+            provider=provider,
+            original_tool_choice=original_tool_choice,
+            reasoning_effort=reasoning_effort,
+            tools=tools,
+            request_messages=kw.get("messages"),
+            original_request_messages=original_request_messages,
+        )
+
+    rf_needs_retry, rf_error, rf_spec = check_response_format_compliance(
+        response=chat_completion,
+        kw=kw,
+    )
+    if rf_needs_retry and rf_spec is not None:
+        rf_retry_kw = build_response_format_retry_kw(
+            kw=kw,
+            response=chat_completion,
+            validation_error=rf_error,
+            response_format_spec=rf_spec,
+        )
+        chat_completion = await execute_retry(rf_retry_kw, "rf-retry")
+
+    return promote_reasoning_content_to_content(chat_completion)
 
 
 def build_response_format_retry_kw(

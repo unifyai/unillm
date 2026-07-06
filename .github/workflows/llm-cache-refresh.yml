@@ -44,12 +44,9 @@ jobs:
       UNILLM_CACHE: "true"
       UNILLM_CACHE_BACKEND: "local_separate"
       UNILLM_LOG_DIR: ${{ github.workspace }}/logs/unillm
-      # Provider keys for the real LLM calls that populate the cache.
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      # OpenRouter routes openai, deepseek, minimax, xiaomi-mimo, and zai transports.
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-      XIAOMI_MIMO_API_KEY: ${{ secrets.XIAOMI_MIMO_API_KEY }}
       UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
     steps:
     - name: Validate inputs

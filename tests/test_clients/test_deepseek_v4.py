@@ -1,5 +1,3 @@
-import os
-
 import pytest
 
 import unillm
@@ -7,7 +5,6 @@ from unillm.endpoints.utils import get_model_alias, get_model_info, list_models
 
 DEEPSEEK_V4_MAX_ENDPOINT = "deepseek-v4-max@deepseek"
 DEEPSEEK_V4_MAX_PROVIDER_MODEL = "deepseek/deepseek-v4-pro"
-_HAS_DEEPSEEK_API_KEY = bool(os.environ.get("DEEPSEEK_API_KEY"))
 
 
 def test_deepseek_v4_max_alias_registered() -> None:
@@ -22,7 +19,6 @@ def test_deepseek_v4_max_model_info_registered() -> None:
     assert info["output_cost_per_token"] > 0
 
 
-@pytest.mark.skipif(not _HAS_DEEPSEEK_API_KEY, reason="No DeepSeek API key available")
 def test_sync_deepseek_v4_max_simple_message() -> None:
     client = unillm.Unify(DEEPSEEK_V4_MAX_ENDPOINT, temperature=0)
     response = client.generate(
@@ -36,7 +32,6 @@ def test_sync_deepseek_v4_max_simple_message() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _HAS_DEEPSEEK_API_KEY, reason="No DeepSeek API key available")
 async def test_async_deepseek_v4_max_simple_message() -> None:
     client = unillm.AsyncUnify(DEEPSEEK_V4_MAX_ENDPOINT, temperature=0)
     response = await client.generate(

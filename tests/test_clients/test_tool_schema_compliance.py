@@ -23,6 +23,7 @@ from unillm.clients.provider_postprocessing import (
     RETRY_REASON_REPEATED_COMPLETED_TOOL,
     RETRY_REASON_TOOL_CHOICE_REQUIRED,
     build_retry_kw,
+    build_tool_choice_required_retry_nudge,
     check_needs_postprocessing,
 )
 
@@ -745,22 +746,88 @@ def test_build_retry_kw_rejects_whitespace_only_assistant_content():
         )
 
 
+def _make_text_only_response(content):
+    """Build a mock response where the model returned text without tool calls."""
+    msg = MagicMock()
+    msg.tool_calls = None
+    msg.content = content
+
+    choice = MagicMock()
+    choice.message = msg
+
+    resp = MagicMock()
+    resp.choices = [choice]
+    return resp
+
+
+def _tool_choice_retry_user_nudge(retry_kw: dict) -> str | None:
+    """Return the tool-choice-required retry nudge appended as a user message."""
+    original_len = len(_VALID_TOOL_KW["messages"])
+    appended = retry_kw["messages"][original_len:]
+    user_messages = [m for m in appended if m.get("role") == "user"]
+    if not user_messages:
+        return None
+    assert len(user_messages) == 1, appended
+    return user_messages[0].get("content")
+
+
+def test_build_tool_choice_required_retry_nudge_without_rejected_content():
+    nudge = build_tool_choice_required_retry_nudge(None)
+    assert "FAILED" in nudge
+    assert "ZERO effect" in nudge
+    assert "Do NOT call `wait`" in nudge
+    assert "tool_choice is set to 'required'" in nudge
+    assert "for reference only" not in nudge
+
+
+def test_build_tool_choice_required_retry_nudge_quotes_rejected_content():
+    nudge = build_tool_choice_required_retry_nudge(
+        "Check your inbox for the email I just sent.",
+    )
+    assert "for reference only — it was NOT sent" in nudge
+    assert "> Check your inbox for the email I just sent." in nudge
+    assert "call the appropriate send tool NOW" in nudge
+
+
+def test_build_retry_kw_tool_choice_required_uses_user_nudge_not_assistant():
+    resp = _make_text_only_response(
+        "Check your inbox for the email I just sent and reply with your guess.",
+    )
+    retry_kw = build_retry_kw(
+        kw=_VALID_TOOL_KW,
+        response=resp,
+        retry_reason=RETRY_REASON_TOOL_CHOICE_REQUIRED,
+    )
+
+    original_len = len(_VALID_TOOL_KW["messages"])
+    appended = retry_kw["messages"][original_len:]
+    assert len(appended) == 1
+    assert appended[0]["role"] == "user"
+    assert _assistant_content_from_retry(retry_kw) is None
+
+    nudge = _tool_choice_retry_user_nudge(retry_kw)
+    assert nudge is not None
+    assert "ZERO effect" in nudge
+    assert (
+        "> Check your inbox for the email I just sent and reply with your guess."
+        in nudge
+    )
+
+
 def test_build_retry_kw_tool_choice_required_rejects_whitespace_content():
-    """Same bug for the tool_choice_required (default) retry path."""
+    """Whitespace-only rejected content must not be quoted in the retry nudge."""
     for ws in _WHITESPACE_CONTENTS:
-        resp = _make_invalid_tool_response(content=ws)
-        # Use default retry_reason (tool_choice_required path)
+        resp = _make_text_only_response(content=ws)
         retry_kw = build_retry_kw(
             kw=_VALID_TOOL_KW,
             response=resp,
-            retry_reason=None,
+            retry_reason=RETRY_REASON_TOOL_CHOICE_REQUIRED,
         )
-        assistant_content = _assistant_content_from_retry(retry_kw)
-        assert assistant_content is None or assistant_content.strip(), (
-            f"Retry assistant message has whitespace-only content {assistant_content!r} "
-            f"(from msg.content={ws!r}). Anthropic rejects this with: "
-            f"'messages: text content blocks must contain non-whitespace text'"
-        )
+        assert _assistant_content_from_retry(retry_kw) is None
+        nudge = _tool_choice_retry_user_nudge(retry_kw)
+        assert nudge is not None
+        assert "for reference only" not in nudge
+        assert "> " not in nudge
 
 
 # ---------------------------------------------------------------------------

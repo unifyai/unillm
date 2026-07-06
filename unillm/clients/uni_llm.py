@@ -215,7 +215,11 @@ def _prepare_provider_request_kw(
     model = str(kw.get("model") or "")
     tools = kw.get("tools")
 
-    if provider == "minimax" and kw.get("api_base") is None:
+    if (
+        provider == "minimax"
+        and kw.get("api_base") is None
+        and not model.startswith(_OPENROUTER_MODEL_PREFIX)
+    ):
         kw["api_base"] = "https://api.minimax.io/v1"
 
     if provider == "xiaomi-mimo" and kw.get("api_base") is None:
@@ -236,14 +240,28 @@ def _prepare_provider_request_kw(
 
 
 def _request_kw_for_event(kw: dict, accounting_model: str) -> dict:
-    """Return event metadata with the provider model as the primary model."""
-    transport_model = kw.get("model")
-    if transport_model == accounting_model:
-        return kw
+    """Return JSON-serializable event metadata with the accounting model primary.
 
+    ``LLMEvent.request`` is persisted by downstream JSON sinks (file logs,
+    EventBus/Orchestra), so it must be JSON-serializable end-to-end. A Pydantic
+    ``response_format`` class is replaced by its JSON schema, which keeps the
+    requested output contract visible in analytics without leaking the class
+    object (``json.dumps`` cannot encode a ``ModelMetaclass``).
+    """
     event_kw = dict(kw)
-    event_kw["model"] = accounting_model
-    event_kw["transport_model"] = transport_model
+    response_format = event_kw.get("response_format")
+    if isinstance(response_format, type) and issubclass(response_format, BaseModel):
+        event_kw["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": response_format.__name__,
+                "schema": response_format.model_json_schema(),
+            },
+        }
+    transport_model = kw.get("model")
+    if transport_model != accounting_model:
+        event_kw["model"] = accounting_model
+        event_kw["transport_model"] = transport_model
     return event_kw
 
 
@@ -810,6 +828,7 @@ class _UniClient(_Client, abc.ABC):
         cache_backend: Optional[str] = None,
         prompt_caching: Optional[PromptCacheParam] = None,
         origin: Optional[str] = None,
+        completion_mutator=None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         service_tier: Optional[str] = None,
@@ -1008,6 +1027,7 @@ class _UniClient(_Client, abc.ABC):
             cache_backend=_default(cache_backend, self._cache_backend),
             prompt_caching=_default(prompt_caching, self._prompt_caching),
             origin=_default(origin, self._origin),
+            completion_mutator=completion_mutator,
             # passthrough arguments
             extra_headers=_default(extra_headers, self._extra_headers),
             **kwargs,
@@ -1222,59 +1242,26 @@ class Unify(_UniClient):
         original_tool_choice: Optional[str],
         original_request_messages: Optional[List[dict]] = None,
         origin: Optional[str] = None,
+        completion_mutator=None,
     ) -> "ChatCompletion":
         """Run all postprocessing checks, retrying once per check if needed."""
-        from .provider_postprocessing import (
-            check_needs_postprocessing,
-            build_retry_kw,
-            check_response_format_compliance,
-            build_response_format_retry_kw,
-        )
+        from .provider_postprocessing import apply_postprocessing_pipeline
 
-        # Step 1: Provider-specific postprocessing (tool retries)
-        raw_tools = kw.get("tools")
-        needs_retry, retry_reason = check_needs_postprocessing(
-            response=chat_completion,
+        return apply_postprocessing_pipeline(
+            chat_completion,
+            kw=kw,
             provider=self._provider,
             original_tool_choice=original_tool_choice,
             reasoning_effort=prompt.components.get("reasoning_effort"),
-            tools=list(raw_tools) if raw_tools is not None else None,
-            request_messages=kw.get("messages"),
             original_request_messages=original_request_messages,
-        )
-        if needs_retry:
-            retry_kw = build_retry_kw(
-                kw=kw,
-                response=chat_completion,
-                retry_reason=retry_reason,
-            )
-            chat_completion = self._execute_postprocessing_retry(
+            execute_retry=lambda retry_kw, label: self._execute_postprocessing_retry(
                 retry_kw,
                 endpoint,
-                "retry",
+                label,
                 origin=origin,
-            )
-
-        # Step 2: response_format schema validation
-        rf_needs_retry, rf_error, rf_spec = check_response_format_compliance(
-            response=chat_completion,
-            kw=kw,
+            ),
+            completion_mutator=completion_mutator,
         )
-        if rf_needs_retry and rf_spec is not None:
-            rf_retry_kw = build_response_format_retry_kw(
-                kw=kw,
-                response=chat_completion,
-                validation_error=rf_error,
-                response_format_spec=rf_spec,
-            )
-            chat_completion = self._execute_postprocessing_retry(
-                rf_retry_kw,
-                endpoint,
-                "rf-retry",
-                origin=origin,
-            )
-
-        return chat_completion
 
     def _generate_non_stream(
         self,
@@ -1285,6 +1272,7 @@ class Unify(_UniClient):
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
         origin: Optional[str] = None,
+        completion_mutator=None,
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -1464,6 +1452,7 @@ class Unify(_UniClient):
                 original_tool_choice,
                 original_request_messages,
                 origin=origin,
+                completion_mutator=completion_mutator,
             )
             _enforce_parallel_tool_call_response_limit(
                 chat_completion,
@@ -1527,6 +1516,7 @@ class Unify(_UniClient):
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
         origin: Optional[str] = None,
+        completion_mutator=None,
         # passthrough arguments
         extra_headers: Optional[Headers],
         **kwargs,
@@ -1571,6 +1561,7 @@ class Unify(_UniClient):
             cache_backend=cache_backend,
             prompt_caching=prompt_caching,
             origin=origin,
+            completion_mutator=completion_mutator,
         )
 
     def to_async_client(self):
@@ -1889,59 +1880,26 @@ class AsyncUnify(_UniClient):
         original_tool_choice: Optional[str],
         original_request_messages: Optional[List[dict]] = None,
         origin: Optional[str] = None,
+        completion_mutator=None,
     ) -> "ChatCompletion":
         """Run all postprocessing checks, retrying once per check if needed."""
-        from .provider_postprocessing import (
-            check_needs_postprocessing,
-            build_retry_kw,
-            check_response_format_compliance,
-            build_response_format_retry_kw,
-        )
+        from .provider_postprocessing import apply_postprocessing_pipeline_async
 
-        # Step 1: Provider-specific postprocessing (tool retries)
-        raw_tools = kw.get("tools")
-        needs_retry, retry_reason = check_needs_postprocessing(
-            response=chat_completion,
+        return await apply_postprocessing_pipeline_async(
+            chat_completion,
+            kw=kw,
             provider=self._provider,
             original_tool_choice=original_tool_choice,
             reasoning_effort=prompt.components.get("reasoning_effort"),
-            tools=list(raw_tools) if raw_tools is not None else None,
-            request_messages=kw.get("messages"),
             original_request_messages=original_request_messages,
-        )
-        if needs_retry:
-            retry_kw = build_retry_kw(
-                kw=kw,
-                response=chat_completion,
-                retry_reason=retry_reason,
-            )
-            chat_completion = await self._execute_postprocessing_retry(
+            execute_retry=lambda retry_kw, label: self._execute_postprocessing_retry(
                 retry_kw,
                 endpoint,
-                "retry",
+                label,
                 origin=origin,
-            )
-
-        # Step 2: response_format schema validation
-        rf_needs_retry, rf_error, rf_spec = check_response_format_compliance(
-            response=chat_completion,
-            kw=kw,
+            ),
+            completion_mutator=completion_mutator,
         )
-        if rf_needs_retry and rf_spec is not None:
-            rf_retry_kw = build_response_format_retry_kw(
-                kw=kw,
-                response=chat_completion,
-                validation_error=rf_error,
-                response_format_spec=rf_spec,
-            )
-            chat_completion = await self._execute_postprocessing_retry(
-                rf_retry_kw,
-                endpoint,
-                "rf-retry",
-                origin=origin,
-            )
-
-        return chat_completion
 
     async def _generate_non_stream(
         self,
@@ -1952,6 +1910,7 @@ class AsyncUnify(_UniClient):
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
         origin: Optional[str] = None,
+        completion_mutator=None,
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -2186,6 +2145,7 @@ class AsyncUnify(_UniClient):
                 original_tool_choice,
                 original_request_messages,
                 origin=origin,
+                completion_mutator=completion_mutator,
             )
             _enforce_parallel_tool_call_response_limit(
                 chat_completion,
@@ -2239,6 +2199,7 @@ class AsyncUnify(_UniClient):
         cache_backend: str,
         prompt_caching: Optional[PromptCacheParam],
         origin: Optional[str] = None,
+        completion_mutator=None,
         # passthrough arguments
         extra_headers: Optional[Headers],
         service_tier: Optional[str] = None,
@@ -2284,6 +2245,7 @@ class AsyncUnify(_UniClient):
             cache_backend=cache_backend,
             prompt_caching=prompt_caching,
             origin=origin,
+            completion_mutator=completion_mutator,
         )
 
     def to_sync_client(self):
