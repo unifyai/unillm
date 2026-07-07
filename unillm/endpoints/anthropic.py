@@ -50,6 +50,15 @@ SAMPLING_PARAMS_REJECTED_MODELS = {
     models["claude-fable-5"],
 }
 
+# Models whose safety classifiers can decline a request. A refusal arrives as
+# a successful response with stop_reason "refusal" (surfaced by litellm as
+# finish_reason "content_filter"), not an HTTP error. Anthropic's guidance is
+# that a refused request can usually be served by another Claude model, so
+# each classifier-gated model maps to the fallback used for a one-shot retry.
+REFUSAL_FALLBACK_MODELS = {
+    "anthropic/claude-fable-5": "anthropic/claude-opus-4-8",
+}
+
 register_model_alias_map(provider, models)
 register_litellm_model_info(
     {
