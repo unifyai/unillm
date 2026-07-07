@@ -21,6 +21,7 @@ _ANTHROPIC_PUBLIC_ALIASES = {
     "claude-4.6-opus": "anthropic/claude-opus-4-6",
     "claude-4.6-sonnet": "anthropic/claude-sonnet-4-6",
     "claude-4.8-opus": "anthropic/claude-opus-4-8",
+    "claude-fable-5": "anthropic/claude-fable-5",
 }
 
 _DEEPSEEK_PUBLIC_ALIASES = {

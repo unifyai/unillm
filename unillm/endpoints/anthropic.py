@@ -16,6 +16,7 @@ models = {
     "claude-4.6-opus": "anthropic/claude-opus-4-6",
     "claude-4.6-sonnet": "anthropic/claude-sonnet-4-6",
     "claude-4.8-opus": "anthropic/claude-opus-4-8",
+    "claude-fable-5": "anthropic/claude-fable-5",
 }
 
 CONTEXT_1M_BETA = "context-1m-2025-08-07"
@@ -35,6 +36,18 @@ CONTEXT_1M_MODELS = {
 ADAPTIVE_THINKING_MODELS = {
     "anthropic/claude-opus-4-8",
     models["claude-4.8-opus"],
+    "anthropic/claude-fable-5",
+    models["claude-fable-5"],
+}
+
+# Models (Opus 4.7 generation onwards) that return a 400 error when
+# temperature/top_p/top_k are set to any non-default value. Requests to these
+# models must omit sampling parameters entirely.
+SAMPLING_PARAMS_REJECTED_MODELS = {
+    "anthropic/claude-opus-4-8",
+    models["claude-4.8-opus"],
+    "anthropic/claude-fable-5",
+    models["claude-fable-5"],
 }
 
 register_model_alias_map(provider, models)
@@ -69,6 +82,16 @@ register_litellm_model_info(
             "max_input_tokens": 1_000_000,
             "input_cost_per_token": 5.00 / 1_000_000,
             "output_cost_per_token": 25.00 / 1_000_000,
+        },
+        # Claude Fable 5: 1M context by default (no beta header), adaptive
+        # thinking is the only thinking mode.
+        "anthropic/claude-fable-5": {
+            "litellm_provider": provider,
+            "mode": "chat",
+            "max_input_tokens": 1_000_000,
+            "max_output_tokens": 128_000,
+            "input_cost_per_token": 10.00 / 1_000_000,
+            "output_cost_per_token": 50.00 / 1_000_000,
         },
     },
 )
