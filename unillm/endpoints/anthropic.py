@@ -17,6 +17,7 @@ models = {
     "claude-4.6-sonnet": "anthropic/claude-sonnet-4-6",
     "claude-4.8-opus": "anthropic/claude-opus-4-8",
     "claude-fable-5": "anthropic/claude-fable-5",
+    "claude-sonnet-5": "anthropic/claude-sonnet-5",
 }
 
 CONTEXT_1M_BETA = "context-1m-2025-08-07"
@@ -38,6 +39,8 @@ ADAPTIVE_THINKING_MODELS = {
     models["claude-4.8-opus"],
     "anthropic/claude-fable-5",
     models["claude-fable-5"],
+    "anthropic/claude-sonnet-5",
+    models["claude-sonnet-5"],
 }
 
 # Models (Opus 4.7 generation onwards) that return a 400 error when
@@ -48,6 +51,8 @@ SAMPLING_PARAMS_REJECTED_MODELS = {
     models["claude-4.8-opus"],
     "anthropic/claude-fable-5",
     models["claude-fable-5"],
+    "anthropic/claude-sonnet-5",
+    models["claude-sonnet-5"],
 }
 
 # Models whose safety classifiers can decline a request. A refusal arrives as
@@ -101,6 +106,17 @@ register_litellm_model_info(
             "max_output_tokens": 128_000,
             "input_cost_per_token": 10.00 / 1_000_000,
             "output_cost_per_token": 50.00 / 1_000_000,
+        },
+        # Claude Sonnet 5: 1M context by default, adaptive thinking on by
+        # default. Registered at the standard $3/$15 rate that applies from
+        # September 1, 2026 (an intro $2/$10 rate runs until August 31).
+        "anthropic/claude-sonnet-5": {
+            "litellm_provider": provider,
+            "mode": "chat",
+            "max_input_tokens": 1_000_000,
+            "max_output_tokens": 128_000,
+            "input_cost_per_token": 3.00 / 1_000_000,
+            "output_cost_per_token": 15.00 / 1_000_000,
         },
     },
 )
