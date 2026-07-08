@@ -276,6 +276,60 @@ def test_heal_minimax_xml_invoke_with_auto_tool_choice():
     assert healed.choices[0].finish_reason == "tool_calls"
 
 
+EXECUTE_CODE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "execute_code",
+        "description": "Execute code.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "thought": {"type": "string"},
+                "code": {"type": "string"},
+                "language": {"type": "string"},
+                "state_mode": {"type": "string"},
+            },
+            "required": ["thought", "code", "language"],
+        },
+    },
+}
+
+
+def test_heal_minimax_xml_invoke_with_nested_execute_code_arguments():
+    content = (
+        "]<]minimax[>[<tool_call>\n"
+        '                            ]<]minimax[>[<invoke name="execute_code">]'
+        "<]minimax[>[<thought>Extracting text from the inventory PDF.]"
+        "<]minimax[>[</thought>]<]minimax[>[<code>\n"
+        "from pypdf import PdfReader\n"
+        'reader = PdfReader("/tmp/inventory.pdf")\n'
+        "print(reader.pages[0].extract_text())\n"
+        "]<]minimax[>[</code>]<]minimax[>[<language>python]"
+        "<]minimax[>[</language>]<]minimax[>[<state_mode>stateless]"
+        "<]minimax[>[</state_mode>]<]minimax[>[</invoke>\n"
+        "                            ]<]minimax[>[</tool_call>"
+    )
+    response = _completion(content)
+
+    healed = maybe_heal_tool_calls_in_completion(
+        response,
+        provider="minimax",
+        original_tool_choice="auto",
+        tools=[EXECUTE_CODE_TOOL],
+        response_format_spec=None,
+    )
+
+    assert healed.choices[0].message.tool_calls is not None
+    call = _tool_call_from_message(healed.choices[0].message)
+    assert call["function"]["name"] == "execute_code"
+    args = json.loads(call["function"]["arguments"])
+    assert args["thought"] == "Extracting text from the inventory PDF."
+    assert "pypdf" in args["code"]
+    assert args["language"] == "python"
+    assert args["state_mode"] == "stateless"
+    assert healed.choices[0].finish_reason == "tool_calls"
+
+
 def test_heal_noop_when_tool_choice_auto_without_tools():
     content = json.dumps(
         {
