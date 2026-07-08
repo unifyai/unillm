@@ -617,6 +617,16 @@ def _uses_anthropic_adaptive_thinking(kw: Dict[str, Any]) -> bool:
     return kw.get("model") in ADAPTIVE_THINKING_MODELS
 
 
+def _strip_rejected_sampling_params(kw: Dict[str, Any]) -> None:
+    """Drop sampling params on models that hard-reject them (Opus 4.7+)."""
+    from ..endpoints.anthropic import SAMPLING_PARAMS_REJECTED_MODELS
+
+    if kw.get("model") not in SAMPLING_PARAMS_REJECTED_MODELS:
+        return
+    for param in ("temperature", "top_p", "top_k"):
+        kw.pop(param, None)
+
+
 def _apply_anthropic_adaptive_thinking(kw: Dict[str, Any]) -> None:
     effort = kw.pop("reasoning_effort", None)
     if effort is None or not _uses_anthropic_adaptive_thinking(kw):
@@ -822,6 +832,7 @@ def apply_provider_preprocessing(
 
     _apply_context_1m_beta(kw)
     _apply_anthropic_adaptive_thinking(kw)
+    _strip_rejected_sampling_params(kw)
 
     if prompt_caching:
         _apply_anthropic_caching(kw, prompt_caching)

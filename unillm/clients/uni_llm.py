@@ -1161,6 +1161,11 @@ class Unify(_UniClient):
     ) -> "ChatCompletion":
         """Execute a single postprocessing retry: LLM call + logging + cost deduction."""
         label = f"{endpoint}-{label_suffix}"
+        # Refusal fallbacks re-issue the request on a different model than the
+        # one this client is bound to.
+        transport_model = (
+            retry_kw.pop("_unillm_transport_model", None) or self._transport_model_alias
+        )
         pending = write_request_pending(
             retry_kw,
             label=label,
@@ -1175,7 +1180,7 @@ class Unify(_UniClient):
         _, transport_kw = _prepare_request_models(
             kw=retry_kw,
             provider=self._provider,
-            transport_model=self._transport_model_alias,
+            transport_model=transport_model,
             stream=False,
         )
         try:
@@ -1791,6 +1796,11 @@ class AsyncUnify(_UniClient):
     ) -> "ChatCompletion":
         """Execute a single postprocessing retry: LLM call + logging + cost deduction."""
         label = f"{endpoint}-{label_suffix}"
+        # Refusal fallbacks re-issue the request on a different model than the
+        # one this client is bound to.
+        transport_model = (
+            retry_kw.pop("_unillm_transport_model", None) or self._transport_model_alias
+        )
         pending = write_request_pending(
             retry_kw,
             label=label,
@@ -1805,7 +1815,7 @@ class AsyncUnify(_UniClient):
         _, transport_kw = _prepare_request_models(
             kw=retry_kw,
             provider=self._provider,
-            transport_model=self._transport_model_alias,
+            transport_model=transport_model,
             stream=False,
         )
         try:

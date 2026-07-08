@@ -111,6 +111,17 @@ def _tool_call_id(tool_call: Any) -> Optional[str]:
     return call_id if isinstance(call_id, str) else None
 
 
+class ModelRefusalError(Exception):
+    """The model's safety classifiers declined the request.
+
+    Raised only when the refusal-fallback model also declined (or no fallback
+    is configured for the refusing model). Anthropic returns refusals as
+    successful responses with ``stop_reason: "refusal"`` (surfaced by litellm
+    as ``finish_reason: "content_filter"``), so without this check a refusal
+    would silently propagate as an empty assistant turn.
+    """
+
+
 # Retry reason constants
 RETRY_REASON_TOOL_CHOICE_REQUIRED = "tool_choice_required"
 RETRY_REASON_INVALID_TOOL_NAME = "invalid_tool_name"
@@ -153,6 +164,53 @@ _VALID_TOOL_NOT_EXECUTED_MSG = (
     "Not executed because other tool calls in this batch "
     "called tools not in the schema."
 )
+
+
+def _finish_reason(response: "ChatCompletion") -> Optional[str]:
+    return response.choices[0].finish_reason if response.choices else None
+
+
+def check_safety_refusal(
+    *,
+    response: "ChatCompletion",
+    kw: dict,
+) -> Optional[str]:
+    """Return the fallback model when the response is a safety refusal.
+
+    Only models in ``REFUSAL_FALLBACK_MODELS`` carry safety classifiers;
+    ``content_filter`` finish reasons from other models are left untouched.
+    """
+    from ..endpoints.anthropic import REFUSAL_FALLBACK_MODELS
+
+    if _finish_reason(response) != "content_filter":
+        return None
+    return REFUSAL_FALLBACK_MODELS.get(str(kw.get("model") or ""))
+
+
+def build_refusal_fallback_kw(*, kw: dict, fallback_model: str) -> dict:
+    """Build retry kwargs that re-issue the unchanged request on the fallback.
+
+    ``_unillm_transport_model`` steers the retry transport off the client's
+    bound model; it is consumed by the retry executor and never sent to the
+    provider.
+    """
+    retry_kw = dict(kw)
+    retry_kw["model"] = fallback_model
+    retry_kw["_unillm_transport_model"] = fallback_model
+    return retry_kw
+
+
+def _raise_if_still_refused(
+    response: "ChatCompletion",
+    *,
+    original_model: str,
+    fallback_model: str,
+) -> None:
+    if _finish_reason(response) == "content_filter":
+        raise ModelRefusalError(
+            f"{original_model} refused the request (safety classifier) and the "
+            f"fallback model {fallback_model} also declined.",
+        )
 
 
 def check_needs_postprocessing(
@@ -593,10 +651,28 @@ def apply_postprocessing_pipeline(
     execute_retry,
     completion_mutator: Optional[CompletionMutator] = None,
 ) -> "ChatCompletion":
-    """Run healing, tool-choice retries, and response_format validation."""
+    """Run refusal fallback, healing, tool-choice retries, and response_format validation."""
     raw_tools = kw.get("tools")
     tools = list(raw_tools) if raw_tools is not None else None
     response_format_spec = get_response_format_spec(kw)
+
+    refusal_fallback_model = check_safety_refusal(response=chat_completion, kw=kw)
+    if refusal_fallback_model is not None:
+        original_model = str(kw.get("model") or "")
+        logger.warning(
+            "%s refused the request (safety classifier); retrying on %s",
+            original_model,
+            refusal_fallback_model,
+        )
+        chat_completion = execute_retry(
+            build_refusal_fallback_kw(kw=kw, fallback_model=refusal_fallback_model),
+            "refusal-fallback",
+        )
+        _raise_if_still_refused(
+            chat_completion,
+            original_model=original_model,
+            fallback_model=refusal_fallback_model,
+        )
 
     chat_completion = apply_completion_mutator(
         chat_completion,
@@ -690,6 +766,24 @@ async def apply_postprocessing_pipeline_async(
     raw_tools = kw.get("tools")
     tools = list(raw_tools) if raw_tools is not None else None
     response_format_spec = get_response_format_spec(kw)
+
+    refusal_fallback_model = check_safety_refusal(response=chat_completion, kw=kw)
+    if refusal_fallback_model is not None:
+        original_model = str(kw.get("model") or "")
+        logger.warning(
+            "%s refused the request (safety classifier); retrying on %s",
+            original_model,
+            refusal_fallback_model,
+        )
+        chat_completion = await execute_retry(
+            build_refusal_fallback_kw(kw=kw, fallback_model=refusal_fallback_model),
+            "refusal-fallback",
+        )
+        _raise_if_still_refused(
+            chat_completion,
+            original_model=original_model,
+            fallback_model=refusal_fallback_model,
+        )
 
     chat_completion = apply_completion_mutator(
         chat_completion,
