@@ -866,10 +866,25 @@ def _strip_provider_markup_delimiters(text: str) -> str:
     return re.sub(r"\]<\][^[]+\[>\[?", "", text)
 
 
-_INVOKE_NAME_RE = re.compile(
-    r"<\s*invoke\s+name=(['\"])([^'\"]+)\1",
-    re.IGNORECASE,
+_INVOKE_BLOCK_RE = re.compile(
+    r"<\s*invoke\s+name=(['\"])([^'\"]+)\1\s*>(.*?)</\s*invoke\s*>",
+    re.IGNORECASE | re.DOTALL,
 )
+
+_XML_CHILD_TAG_RE = re.compile(
+    r"<\s*(\w+)\s*>(.*?)</\s*\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _extract_xml_invoke_child_arguments(body: str) -> dict[str, str]:
+    arguments: dict[str, str] = {}
+    for match in _XML_CHILD_TAG_RE.finditer(body):
+        key = match.group(1)
+        value = match.group(2).strip()
+        if value:
+            arguments[key] = value
+    return arguments
 
 
 def _find_xml_invoke_tool_call(
@@ -888,15 +903,20 @@ def _find_xml_invoke_tool_call(
         return None
 
     allowed = set(candidates)
-    for match in _INVOKE_NAME_RE.finditer(cleaned):
+    for match in _INVOKE_BLOCK_RE.finditer(cleaned):
         name = match.group(2)
         if name not in allowed:
             continue
         if _tool_is_argumentless(name, tools):
             return name, {}
-        required = _tool_required_parameters(name, tools)
-        if not required:
-            return name, {}
+        body = match.group(3)
+        raw_arguments = _extract_xml_invoke_child_arguments(body)
+        if not raw_arguments:
+            continue
+        coerced = _coerce_tool_arguments(name, raw_arguments, tools)
+        if coerced is None:
+            continue
+        return name, coerced
     return None
 
 
