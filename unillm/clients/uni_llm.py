@@ -36,25 +36,110 @@ from ..limit_hooks import (
 _LOGGER = logging.getLogger("unillm")
 
 _OPENROUTER_MODEL_PREFIX = "openrouter/"
-_DEEPSEEK_V4_PRO_HARD_OPENROUTER_PROVIDERS = (
-    "together",
-    "fireworks",
-    "digitalocean",
-    "siliconflow",
-    "wandb",
-    "parasail",
-)
-_XIAOMI_MIMO_HARD_OPENROUTER_PROVIDERS = (
-    "digitalocean",
-    "deepinfra",
-)
-_ZAI_GLM_HARD_OPENROUTER_PROVIDERS = (
-    "together",
-    "fireworks",
-    "streamlake",
-    "decart",
-    "venice",
-)
+
+# OpenRouter catalog id -> ordered hard-enforcement hosts (tool_choice +
+# json_schema under adversarial prompts). allow_fallbacks is always false.
+_OPENROUTER_HARD_PROVIDER_ORDER: dict[str, tuple[str, ...]] = {
+    "minimax/minimax-m3": ("together",),
+    "deepseek/deepseek-v4-pro": (
+        "together",
+        "fireworks",
+        "digitalocean",
+        "siliconflow",
+        "wandb",
+        "parasail",
+    ),
+    "deepseek/deepseek-chat-v3.1": (
+        "deepinfra",
+        "siliconflow",
+        "wandb",
+        "google-vertex",
+    ),
+    "deepseek/deepseek-r1-0528": ("siliconflow",),
+    "qwen/qwen3-235b-a22b-2507": (
+        "nebius",
+        "together",
+        "streamlake",
+        "google-vertex",
+        "gmicloud",
+    ),
+    "meta-llama/llama-3.1-8b-instruct": ("wandb",),
+    "meta-llama/llama-3.3-70b-instruct": (
+        "nebius",
+        "akashml",
+        "wandb",
+        "together",
+    ),
+    "meta-llama/llama-4-maverick": ("parasail",),
+    "openai/gpt-oss-120b": ("baseten", "together"),
+    "mistralai/mistral-large": ("mistral",),
+    "mistralai/mistral-medium-3": ("mistral",),
+    "mistralai/mistral-medium-3.1": ("mistral",),
+    "xiaomi/mimo-v2.5": ("digitalocean", "deepinfra"),
+    "xiaomi/mimo-v2.5-pro": ("digitalocean", "deepinfra"),
+    "z-ai/glm-5.2": (
+        "together",
+        "fireworks",
+        "streamlake",
+        "decart",
+        "venice",
+    ),
+}
+
+# Back-compat aliases for tests that import the per-family tuples.
+_DEEPSEEK_V4_PRO_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
+    "deepseek/deepseek-v4-pro"
+]
+_DEEPSEEK_CHAT_V31_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
+    "deepseek/deepseek-chat-v3.1"
+]
+_DEEPSEEK_R1_0528_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
+    "deepseek/deepseek-r1-0528"
+]
+_QWEN_235B_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
+    "qwen/qwen3-235b-a22b-2507"
+]
+_LLAMA_31_8B_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
+    "meta-llama/llama-3.1-8b-instruct"
+]
+_LLAMA_33_70B_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
+    "meta-llama/llama-3.3-70b-instruct"
+]
+_LLAMA_4_MAVERICK_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
+    "meta-llama/llama-4-maverick"
+]
+_GPT_OSS_120B_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
+    "openai/gpt-oss-120b"
+]
+_MISTRAL_LARGE_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
+    "mistralai/mistral-large"
+]
+_MISTRAL_MEDIUM_3_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
+    "mistralai/mistral-medium-3"
+]
+_MISTRAL_MEDIUM_31_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
+    "mistralai/mistral-medium-3.1"
+]
+_XIAOMI_MIMO_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
+    "xiaomi/mimo-v2.5"
+]
+_ZAI_GLM_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER["z-ai/glm-5.2"]
+
+
+def _apply_openrouter_hard_provider_pin(kw: dict, model: str) -> None:
+    """Pin OpenRouter traffic to empirically hard tool/schema hosts when known."""
+    if not model.startswith(_OPENROUTER_MODEL_PREFIX):
+        return
+    catalog_id = model[len(_OPENROUTER_MODEL_PREFIX) :]
+    order = _OPENROUTER_HARD_PROVIDER_ORDER.get(catalog_id)
+    if not order:
+        return
+    extra_body = dict(kw.get("extra_body") or {})
+    extra_body["provider"] = {
+        "order": list(order),
+        "allow_fallbacks": False,
+    }
+    kw["extra_body"] = extra_body
 
 
 def _enforce_parallel_tool_call_response_limit(
@@ -241,32 +326,7 @@ def _prepare_provider_request_kw(
     ):
         kw["api_base"] = "https://api.minimax.io/v1"
 
-    if provider == "minimax" and model.startswith(_OPENROUTER_MODEL_PREFIX):
-        # Pin OpenRouter traffic to Together: it hard-enforces structured
-        # outputs and tool_choice=required/named for MiniMax-M3, unlike the
-        # MiniMax-native upstream that soft-ignores those constraints.
-        extra_body = dict(kw.get("extra_body") or {})
-        extra_body["provider"] = {
-            "only": ["together"],
-            "allow_fallbacks": False,
-        }
-        kw["extra_body"] = extra_body
-
-    if (
-        provider == "deepseek"
-        and model.startswith(_OPENROUTER_MODEL_PREFIX)
-        and "deepseek-v4-pro" in model
-    ):
-        # OpenRouter has no constrained-decoding mode; pin to hosts that
-        # hard-enforce tool_choice=required/named and json_schema under
-        # adversarial prompts while DeepSeek V4's default thinking mode is
-        # enabled (several other hosts 400 or soft-fail that combination).
-        extra_body = dict(kw.get("extra_body") or {})
-        extra_body["provider"] = {
-            "only": list(_DEEPSEEK_V4_PRO_HARD_OPENROUTER_PROVIDERS),
-            "allow_fallbacks": False,
-        }
-        kw["extra_body"] = extra_body
+    _apply_openrouter_hard_provider_pin(kw, model)
 
     if provider == "xiaomi-mimo" and kw.get("api_base") is None:
         if not model.startswith(_OPENROUTER_MODEL_PREFIX):
@@ -274,36 +334,11 @@ def _prepare_provider_request_kw(
             if api_base is not None:
                 kw["api_base"] = api_base
 
-    if provider == "xiaomi-mimo" and model.startswith(_OPENROUTER_MODEL_PREFIX):
-        # Pin OpenRouter traffic to hosts that hard-enforce tool_choice and
-        # json_schema under adversarial prompts (Xiaomi-native is soft/blocked;
-        # Novita/AtlasCloud soft-fail).
-        # Prefer DigitalOcean first; DeepInfra is the hard backup. allow_fallbacks
-        # false keeps routing inside this ordered list (no soft Novita/Atlas/etc).
-        extra_body = dict(kw.get("extra_body") or {})
-        extra_body["provider"] = {
-            "order": list(_XIAOMI_MIMO_HARD_OPENROUTER_PROVIDERS),
-            "allow_fallbacks": False,
-        }
-        kw["extra_body"] = extra_body
-
     if provider == "xiaomi-mimo" and tools:
         _allow_openai_params(kw, ("tools", "tool_choice"))
         kw.setdefault("tool_choice", "auto")
         extra_body = dict(kw.get("extra_body") or {})
         extra_body["thinking"] = {"type": "disabled"}
-        kw["extra_body"] = extra_body
-
-    if provider == "zai" and model.startswith(_OPENROUTER_MODEL_PREFIX):
-        # Pin OpenRouter traffic to hosts that hard-enforce tool_choice and
-        # json_schema under adversarial prompts for GLM-5.2. Z.AI-native
-        # rejects tool_choice=required ("must be auto"); many other hosts
-        # soft-ignore forced tools/schema.
-        extra_body = dict(kw.get("extra_body") or {})
-        extra_body["provider"] = {
-            "order": list(_ZAI_GLM_HARD_OPENROUTER_PROVIDERS),
-            "allow_fallbacks": False,
-        }
         kw["extra_body"] = extra_body
 
     if provider == "deepseek":
