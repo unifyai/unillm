@@ -136,7 +136,9 @@ def test_minimax_enforces_response_format_adversarially() -> None:
             },
         ],
         response_format=_ColorPair,
-        max_completion_tokens=256,
+        # MiniMax may emit brief reasoning before the schema JSON; keep headroom
+        # so live runs do not truncate mid-object under finish_reason=length.
+        max_completion_tokens=512,
     )
 
     content = response.choices[0].message.content or ""

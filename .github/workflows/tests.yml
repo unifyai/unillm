@@ -318,6 +318,9 @@ jobs:
       env:
         UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
         OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        # Together BYOK is registered on the OpenRouter workspace; this env is
+        # available for local/direct Together use and for BYOK registration scripts.
+        TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         # Normal CI is read-only: it replays the shared LLM cache and never calls
         # paid provider APIs (a cache miss fails loudly, signalling the cache needs
