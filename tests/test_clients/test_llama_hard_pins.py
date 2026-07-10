@@ -121,7 +121,7 @@ def test_llama_openrouter_pins_hard_providers(
 
     assert transport_model == f"openrouter/{catalog_id}"
     assert kw["extra_body"]["provider"] == {
-        "order": list(hard_order),
+        "only": list(hard_order),
         "allow_fallbacks": False,
     }
 

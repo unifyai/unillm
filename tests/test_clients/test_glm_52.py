@@ -100,7 +100,7 @@ def test_glm_52_openrouter_transport_pins_hard_providers() -> None:
     assert transport_model.startswith("openrouter/")
     assert "api_base" not in kw
     assert kw["extra_body"]["provider"] == {
-        "order": list(_ZAI_GLM_HARD_OPENROUTER_PROVIDERS),
+        "only": list(_ZAI_GLM_HARD_OPENROUTER_PROVIDERS),
         "allow_fallbacks": False,
     }
 
