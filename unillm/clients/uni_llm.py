@@ -40,10 +40,7 @@ _OPENROUTER_MODEL_PREFIX = "openrouter/"
 # OpenRouter catalog id -> ordered hard-enforcement hosts (tool_choice +
 # json_schema under adversarial prompts). allow_fallbacks is always false.
 _OPENROUTER_HARD_PROVIDER_ORDER: dict[str, tuple[str, ...]] = {
-    # MiniMax-M3 is intentionally unpinned: OpenRouter returns 404 for
-    # tool_choice=required on every listed host (including Together), while
-    # unrestricted routing can serve required tool calls (e.g. Morph). The
-    # ConversationManager always sends tool_choice=required when tools exist.
+    "minimax/minimax-m3": ("together",),
     "deepseek/deepseek-v4-pro": (
         "together",
         "fireworks",

@@ -206,8 +206,8 @@ class TestSoftToolChoiceCompliance:
 
         apply_provider_preprocessing(kw, "minimax")
 
-        # MiniMax keeps tool_choice=required; OpenRouter unrestricted routing
-        # can serve forced tool calls (Together-only pinning 404s on required).
+        # MiniMax-M3 is pinned to Together on OpenRouter, which hard-enforces
+        # tool_choice; do not rewrite to soft prompt compliance.
         assert kw["tool_choice"] == "required"
         assert kw["messages"] == [{"role": "user", "content": "Do it."}]
 
