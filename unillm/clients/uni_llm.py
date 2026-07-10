@@ -222,6 +222,17 @@ def _prepare_provider_request_kw(
     ):
         kw["api_base"] = "https://api.minimax.io/v1"
 
+    if provider == "minimax" and model.startswith(_OPENROUTER_MODEL_PREFIX):
+        # Pin OpenRouter traffic to Together: it hard-enforces structured
+        # outputs and tool_choice=required/named for MiniMax-M3, unlike the
+        # MiniMax-native upstream that soft-ignores those constraints.
+        extra_body = dict(kw.get("extra_body") or {})
+        extra_body["provider"] = {
+            "only": ["together"],
+            "allow_fallbacks": False,
+        }
+        kw["extra_body"] = extra_body
+
     if provider == "xiaomi-mimo" and kw.get("api_base") is None:
         api_base = _xiaomi_mimo_token_plan_api_base()
         if api_base is not None:

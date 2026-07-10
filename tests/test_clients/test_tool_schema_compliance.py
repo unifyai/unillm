@@ -428,7 +428,7 @@ def test_check_needs_postprocessing_detects_tool_calls_with_empty_tools():
     assert retry_reason == RETRY_REASON_INVALID_TOOL_NAME
 
 
-@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+@pytest.mark.parametrize("provider", ["deepseek", "xiaomi-mimo"])
 def test_soft_forced_tool_choice_retries_text_only_response(provider):
     mock_message = MagicMock()
     mock_message.tool_calls = None
@@ -452,7 +452,7 @@ def test_soft_forced_tool_choice_retries_text_only_response(provider):
     assert retry_reason == RETRY_REASON_TOOL_CHOICE_REQUIRED
 
 
-@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+@pytest.mark.parametrize("provider", ["deepseek", "xiaomi-mimo"])
 def test_soft_forced_required_retries_final_answer_when_tools_remain(provider):
     mock_message = MagicMock()
     mock_message.tool_calls = None
@@ -491,7 +491,7 @@ def test_soft_forced_required_retries_final_answer_when_tools_remain(provider):
     assert retry_reason == RETRY_REASON_TOOL_CHOICE_REQUIRED
 
 
-@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+@pytest.mark.parametrize("provider", ["deepseek", "xiaomi-mimo"])
 def test_soft_forced_required_allows_final_answer_after_tools_removed(provider):
     mock_message = MagicMock()
     mock_message.tool_calls = None
@@ -594,7 +594,7 @@ def test_xiaomi_auto_retries_repeated_completed_tool_call_without_tools():
     assert "already completed" in retry_kw["messages"][-1]["content"]
 
 
-@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+@pytest.mark.parametrize("provider", ["deepseek", "xiaomi-mimo"])
 def test_soft_forced_tool_choice_retries_wrong_tool_response(provider):
     mock_tool_call = MagicMock()
     mock_tool_call.function.name = "search"

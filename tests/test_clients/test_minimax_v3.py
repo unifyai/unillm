@@ -47,6 +47,10 @@ def test_minimax_openrouter_transport_skips_direct_api_base() -> None:
 
     assert transport_model.startswith("openrouter/")
     assert "api_base" not in kw
+    assert kw["extra_body"]["provider"] == {
+        "only": ["together"],
+        "allow_fallbacks": False,
+    }
 
 
 def test_sync_minimax_v3_simple_message() -> None:

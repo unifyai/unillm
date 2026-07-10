@@ -197,7 +197,7 @@ class TestApplyAnthropicCachingSystemMessage:
 
 
 class TestSoftToolChoiceCompliance:
-    def test_minimax_required_tool_choice_gets_instruction(self):
+    def test_minimax_required_tool_choice_stays_hard_enforced(self):
         kw = {
             "model": "minimax/MiniMax-M3",
             "messages": [{"role": "user", "content": "Do it."}],
@@ -207,11 +207,10 @@ class TestSoftToolChoiceCompliance:
 
         apply_provider_preprocessing(kw, "minimax")
 
-        assert kw["tool_choice"] == "auto"
-        assert kw["messages"][0] == {
-            "role": "system",
-            "content": TOOL_CHOICE_REQUIRED_INSTRUCTION,
-        }
+        # MiniMax-M3 is pinned to Together on OpenRouter, which hard-enforces
+        # tool_choice; do not rewrite to soft prompt compliance.
+        assert kw["tool_choice"] == "required"
+        assert kw["messages"] == [{"role": "user", "content": "Do it."}]
 
     def test_xiaomi_explicit_tool_choice_gets_named_instruction(self):
         kw = {

@@ -48,7 +48,7 @@ TOOL_CHOICE_REQUIRED_INSTRUCTION = (
     "do not respond with text only. Select the most appropriate tool and call it."
 )
 
-SOFT_FORCED_TOOL_CHOICE_PROVIDERS = {"deepseek", "minimax", "xiaomi-mimo"}
+SOFT_FORCED_TOOL_CHOICE_PROVIDERS = {"deepseek", "xiaomi-mimo"}
 
 
 def _move_system_messages_to_front(
