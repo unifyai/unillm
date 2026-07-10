@@ -88,7 +88,7 @@ def test_qwen_235b_openrouter_pins_hard_providers() -> None:
     assert transport_model.startswith("openrouter/")
     assert "qwen3-235b-a22b-2507" in transport_model
     assert kw["extra_body"]["provider"] == {
-        "order": list(_QWEN_235B_HARD_OPENROUTER_PROVIDERS),
+        "only": list(_QWEN_235B_HARD_OPENROUTER_PROVIDERS),
         "allow_fallbacks": False,
     }
 

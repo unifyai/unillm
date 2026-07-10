@@ -128,7 +128,7 @@ def test_mimo_openrouter_transport_pins_hard_providers_and_skips_direct_api_base
     assert transport_model.startswith("openrouter/")
     assert "api_base" not in kw
     assert kw["extra_body"]["provider"] == {
-        "order": list(_XIAOMI_MIMO_HARD_OPENROUTER_PROVIDERS),
+        "only": list(_XIAOMI_MIMO_HARD_OPENROUTER_PROVIDERS),
         "allow_fallbacks": False,
     }
 
@@ -153,7 +153,7 @@ def test_mimo_tool_requests_disable_thinking(monkeypatch) -> None:
     assert kw["tool_choice"] == "auto"
     assert kw["extra_body"]["thinking"] == {"type": "disabled"}
     assert kw["extra_body"]["provider"] == {
-        "order": list(_XIAOMI_MIMO_HARD_OPENROUTER_PROVIDERS),
+        "only": list(_XIAOMI_MIMO_HARD_OPENROUTER_PROVIDERS),
         "allow_fallbacks": False,
     }
 

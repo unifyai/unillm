@@ -88,7 +88,7 @@ def test_deepseek_v31_openrouter_pins_hard_providers() -> None:
     assert transport_model.startswith("openrouter/")
     assert "deepseek-chat-v3.1" in transport_model
     assert kw["extra_body"]["provider"] == {
-        "order": list(_DEEPSEEK_CHAT_V31_HARD_OPENROUTER_PROVIDERS),
+        "only": list(_DEEPSEEK_CHAT_V31_HARD_OPENROUTER_PROVIDERS),
         "allow_fallbacks": False,
     }
 
