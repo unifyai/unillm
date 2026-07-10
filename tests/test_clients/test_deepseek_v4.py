@@ -108,9 +108,13 @@ def test_sync_deepseek_v4_max_simple_message() -> None:
     client = unillm.Unify(DEEPSEEK_V4_MAX_ENDPOINT, temperature=0)
     response = client.generate(
         messages=[
-            {"role": "user", "content": "What is the capital of France?"},
+            {
+                "role": "user",
+                "content": "What is the capital of France? Reply with one word only.",
+            },
         ],
-        max_completion_tokens=20,
+        # V4 spends completion budget on reasoning before the final answer.
+        max_completion_tokens=256,
     )
 
     assert "Paris" in response
@@ -121,9 +125,13 @@ async def test_async_deepseek_v4_max_simple_message() -> None:
     client = unillm.AsyncUnify(DEEPSEEK_V4_MAX_ENDPOINT, temperature=0)
     response = await client.generate(
         messages=[
-            {"role": "user", "content": "What is the capital of France?"},
+            {
+                "role": "user",
+                "content": "What is the capital of France? Reply with one word only.",
+            },
         ],
-        max_completion_tokens=20,
+        # V4 spends completion budget on reasoning before the final answer.
+        max_completion_tokens=256,
     )
 
     assert "Paris" in response
