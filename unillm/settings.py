@@ -25,6 +25,15 @@ class Settings(BaseSettings):
 
     # OpenRouter
     OPENROUTER_API_KEY: SecretStr = SecretStr("")
+    # OpenRouter Management API key (sk-or-…). Required only to create/update
+    # account-level BYOK provider credentials via POST /api/v1/byok. Regular
+    # completion keys cannot register BYOK.
+    OPENROUTER_MANAGEMENT_API_KEY: SecretStr = SecretStr("")
+
+    # Together AI — used as OpenRouter BYOK for Together-pinned open-weight
+    # models (e.g. MiniMax-M3). Register on the OpenRouter workspace with
+    # scripts/register_openrouter_together_byok.py or the Integrations UI.
+    TOGETHER_API_KEY: SecretStr = SecretStr("")
 
     # Anthropic
     ANTHROPIC_API_KEY: SecretStr = SecretStr("")
