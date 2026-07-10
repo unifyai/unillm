@@ -211,7 +211,7 @@ class TestSoftToolChoiceCompliance:
         assert kw["tool_choice"] == "required"
         assert kw["messages"] == [{"role": "user", "content": "Do it."}]
 
-    def test_xiaomi_explicit_tool_choice_gets_named_instruction(self):
+    def test_xiaomi_explicit_tool_choice_stays_hard_enforced(self):
         kw = {
             "model": "xiaomi_mimo/mimo-v2.5-pro",
             "messages": [{"role": "user", "content": "Do it."}],
@@ -221,9 +221,24 @@ class TestSoftToolChoiceCompliance:
 
         apply_provider_preprocessing(kw, "xiaomi-mimo")
 
-        assert kw["tool_choice"] == "auto"
-        assert kw["messages"][0]["role"] == "system"
-        assert "MUST call the `tool_a` tool" in kw["messages"][0]["content"]
+        assert kw["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "tool_a"},
+        }
+        assert kw["messages"] == [{"role": "user", "content": "Do it."}]
+
+    def test_xiaomi_required_tool_choice_stays_hard_enforced(self):
+        kw = {
+            "model": "xiaomi_mimo/mimo-v2.5",
+            "messages": [{"role": "user", "content": "Do it."}],
+            "tools": [{"type": "function", "function": {"name": "tool_a"}}],
+            "tool_choice": "required",
+        }
+
+        apply_provider_preprocessing(kw, "xiaomi-mimo")
+
+        assert kw["tool_choice"] == "required"
+        assert kw["messages"] == [{"role": "user", "content": "Do it."}]
 
     def test_xiaomi_completed_tool_calls_become_context(self):
         kw = {

@@ -46,8 +46,6 @@ TOOL_CHOICE_REQUIRED_INSTRUCTION = (
     "do not respond with text only. Select the most appropriate tool and call it."
 )
 
-SOFT_FORCED_TOOL_CHOICE_PROVIDERS = {"xiaomi-mimo"}
-
 
 def _move_system_messages_to_front(
     messages: List[Dict[str, Any]],
@@ -647,44 +645,6 @@ def _apply_deepseek_thinking_compliance(kw: Dict[str, Any]) -> None:
             msg["reasoning_content"] = ""
 
 
-def _forced_tool_name(tool_choice: Any) -> Optional[str]:
-    if not isinstance(tool_choice, dict):
-        return None
-    function_choice = tool_choice.get("function")
-    if not isinstance(function_choice, dict):
-        return None
-    name = function_choice.get("name")
-    return name if isinstance(name, str) and name else None
-
-
-def _is_forced_tool_choice(tool_choice: Any) -> bool:
-    return tool_choice == "required" or _forced_tool_name(tool_choice) is not None
-
-
-def _tool_choice_instruction(tool_choice: Any) -> str:
-    name = _forced_tool_name(tool_choice)
-    if name is None:
-        return TOOL_CHOICE_REQUIRED_INSTRUCTION
-    return (
-        f"IMPORTANT: You MUST call the `{name}` tool on this turn. "
-        "Do not respond with text only and do not choose a different tool."
-    )
-
-
-def _apply_soft_forced_tool_choice_compliance(kw: Dict[str, Any]) -> None:
-    tool_choice = kw.get("tool_choice")
-    if not _is_forced_tool_choice(tool_choice):
-        return
-
-    kw["tool_choice"] = "auto"
-    messages = kw.get("messages", [])
-    messages.insert(
-        0,
-        {"role": "system", "content": _tool_choice_instruction(tool_choice)},
-    )
-    kw["messages"] = messages
-
-
 def _completed_image_tool_names(messages: List[Dict[str, Any]]) -> set[str]:
     call_id_to_name = {}
     for msg in messages:
@@ -746,17 +706,15 @@ def apply_provider_preprocessing(
         _strip_internal_annotations(kw)
         return kw
 
-    if provider in SOFT_FORCED_TOOL_CHOICE_PROVIDERS:
-        if provider == "xiaomi-mimo":
-            _suppress_tools_after_completed_image_result(kw, messages)
-            messages = _transform_completed_tool_calls_to_context(
-                messages,
-                context_header=COMPLETED_TOOL_CONTEXT_HEADER,
-                context_footer=COMPLETED_TOOL_CONTEXT_FOOTER,
-                image_context_footer=COMPLETED_TOOL_IMAGE_CONTEXT_FOOTER,
-            )
-            kw["messages"] = messages
-        _apply_soft_forced_tool_choice_compliance(kw)
+    if provider == "xiaomi-mimo":
+        _suppress_tools_after_completed_image_result(kw, messages)
+        messages = _transform_completed_tool_calls_to_context(
+            messages,
+            context_header=COMPLETED_TOOL_CONTEXT_HEADER,
+            context_footer=COMPLETED_TOOL_CONTEXT_FOOTER,
+            image_context_footer=COMPLETED_TOOL_IMAGE_CONTEXT_FOOTER,
+        )
+        kw["messages"] = messages
         _strip_internal_annotations(kw)
         return kw
 

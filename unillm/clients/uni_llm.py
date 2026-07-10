@@ -44,6 +44,10 @@ _DEEPSEEK_V4_PRO_HARD_OPENROUTER_PROVIDERS = (
     "wandb",
     "parasail",
 )
+_XIAOMI_MIMO_HARD_OPENROUTER_PROVIDERS = (
+    "digitalocean",
+    "deepinfra",
+)
 
 
 def _enforce_parallel_tool_call_response_limit(
@@ -258,9 +262,24 @@ def _prepare_provider_request_kw(
         kw["extra_body"] = extra_body
 
     if provider == "xiaomi-mimo" and kw.get("api_base") is None:
-        api_base = _xiaomi_mimo_token_plan_api_base()
-        if api_base is not None:
-            kw["api_base"] = api_base
+        if not model.startswith(_OPENROUTER_MODEL_PREFIX):
+            api_base = _xiaomi_mimo_token_plan_api_base()
+            if api_base is not None:
+                kw["api_base"] = api_base
+
+    if provider == "xiaomi-mimo" and model.startswith(_OPENROUTER_MODEL_PREFIX):
+        # Pin OpenRouter traffic to hosts that hard-enforce tool_choice and
+        # json_schema under adversarial prompts (Xiaomi-native is soft/blocked;
+        # Novita/AtlasCloud soft-fail).
+        # Prefer DigitalOcean first; DeepInfra is the hard backup. allow_fallbacks
+        # false keeps routing inside this ordered list (no soft Novita/Atlas/etc).
+        extra_body = dict(kw.get("extra_body") or {})
+        extra_body["provider"] = {
+            "order": list(_XIAOMI_MIMO_HARD_OPENROUTER_PROVIDERS),
+            "allow_fallbacks": False,
+        }
+        kw["extra_body"] = extra_body
+
     if provider == "xiaomi-mimo" and tools:
         _allow_openai_params(kw, ("tools", "tool_choice"))
         kw.setdefault("tool_choice", "auto")
