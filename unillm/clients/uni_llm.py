@@ -36,6 +36,14 @@ from ..limit_hooks import (
 _LOGGER = logging.getLogger("unillm")
 
 _OPENROUTER_MODEL_PREFIX = "openrouter/"
+_DEEPSEEK_V4_PRO_HARD_OPENROUTER_PROVIDERS = (
+    "together",
+    "fireworks",
+    "digitalocean",
+    "siliconflow",
+    "wandb",
+    "parasail",
+)
 
 
 def _enforce_parallel_tool_call_response_limit(
@@ -229,6 +237,22 @@ def _prepare_provider_request_kw(
         extra_body = dict(kw.get("extra_body") or {})
         extra_body["provider"] = {
             "only": ["together"],
+            "allow_fallbacks": False,
+        }
+        kw["extra_body"] = extra_body
+
+    if (
+        provider == "deepseek"
+        and model.startswith(_OPENROUTER_MODEL_PREFIX)
+        and "deepseek-v4-pro" in model
+    ):
+        # OpenRouter has no constrained-decoding mode; pin to hosts that
+        # hard-enforce tool_choice=required/named and json_schema under
+        # adversarial prompts while DeepSeek V4's default thinking mode is
+        # enabled (several other hosts 400 or soft-fail that combination).
+        extra_body = dict(kw.get("extra_body") or {})
+        extra_body["provider"] = {
+            "only": list(_DEEPSEEK_V4_PRO_HARD_OPENROUTER_PROVIDERS),
             "allow_fallbacks": False,
         }
         kw["extra_body"] = extra_body

@@ -74,37 +74,65 @@ def test_validate_against_spec_pydantic():
     assert validate_against_spec({"name": "Ada"}, spec) is not None
 
 
-def test_apply_response_format_transport_deepseek():
+def test_apply_response_format_transport_native_is_noop():
     spec = canonicalize_response_format(Answer)
     kw = {
         "response_format": Answer,
         "messages": [{"role": "user", "content": "hello"}],
     }
     apply_response_format_transport(spec, "deepseek", kw)
-    assert kw["response_format"] == {"type": "json_object"}
-    assert kw["messages"][0]["role"] == "system"
-    assert "valid JSON only" in kw["messages"][0]["content"]
-    assert '"name"' in kw["messages"][0]["content"]
-    assert kw[RESPONSE_FORMAT_SPEC_KEY] is spec
+    assert kw["response_format"] is Answer
+    assert kw["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def test_apply_response_format_transport_hybrid_prompt():
+    from unillm.clients import response_format as rf
+
+    original = rf.provider_response_format_mode
+    rf.provider_response_format_mode = lambda provider: "hybrid_prompt"
+    try:
+        spec = canonicalize_response_format(Answer)
+        kw = {
+            "response_format": Answer,
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+        apply_response_format_transport(spec, "deepseek", kw)
+        assert kw["response_format"] == {"type": "json_object"}
+        assert kw["messages"][0]["role"] == "system"
+        assert "valid JSON only" in kw["messages"][0]["content"]
+        assert '"name"' in kw["messages"][0]["content"]
+        assert kw[RESPONSE_FORMAT_SPEC_KEY] is spec
+    finally:
+        rf.provider_response_format_mode = original
 
 
 def test_apply_response_format_transport_is_idempotent():
-    spec = canonicalize_response_format(Answer)
-    kw = {
-        "response_format": Answer,
-        "messages": [
-            {"role": "system", "content": build_schema_instruction(spec.json_schema)},
-            {"role": "user", "content": "hello"},
-        ],
-    }
-    apply_response_format_transport(spec, "deepseek", kw)
-    schema_messages = [
-        message
-        for message in kw["messages"]
-        if message.get("role") == "system"
-        and "valid JSON only" in message.get("content", "")
-    ]
-    assert len(schema_messages) == 1
+    from unillm.clients import response_format as rf
+
+    original = rf.provider_response_format_mode
+    rf.provider_response_format_mode = lambda provider: "hybrid_prompt"
+    try:
+        spec = canonicalize_response_format(Answer)
+        kw = {
+            "response_format": Answer,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": build_schema_instruction(spec.json_schema),
+                },
+                {"role": "user", "content": "hello"},
+            ],
+        }
+        apply_response_format_transport(spec, "deepseek", kw)
+        schema_messages = [
+            message
+            for message in kw["messages"]
+            if message.get("role") == "system"
+            and "valid JSON only" in message.get("content", "")
+        ]
+        assert len(schema_messages) == 1
+    finally:
+        rf.provider_response_format_mode = original
 
 
 def test_ensure_response_format_spec_stashes_spec():

@@ -117,8 +117,6 @@ def get_response_format_spec(kw: dict) -> Optional[ResponseFormatSpec]:
 def provider_response_format_mode(
     provider: Optional[str],
 ) -> ResponseFormatMode:
-    if provider == "deepseek":
-        return "hybrid_prompt"
     return "native"
 
 
