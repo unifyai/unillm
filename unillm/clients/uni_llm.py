@@ -48,6 +48,13 @@ _XIAOMI_MIMO_HARD_OPENROUTER_PROVIDERS = (
     "digitalocean",
     "deepinfra",
 )
+_ZAI_GLM_HARD_OPENROUTER_PROVIDERS = (
+    "together",
+    "fireworks",
+    "streamlake",
+    "decart",
+    "venice",
+)
 
 
 def _enforce_parallel_tool_call_response_limit(
@@ -285,6 +292,18 @@ def _prepare_provider_request_kw(
         kw.setdefault("tool_choice", "auto")
         extra_body = dict(kw.get("extra_body") or {})
         extra_body["thinking"] = {"type": "disabled"}
+        kw["extra_body"] = extra_body
+
+    if provider == "zai" and model.startswith(_OPENROUTER_MODEL_PREFIX):
+        # Pin OpenRouter traffic to hosts that hard-enforce tool_choice and
+        # json_schema under adversarial prompts for GLM-5.2. Z.AI-native
+        # rejects tool_choice=required ("must be auto"); many other hosts
+        # soft-ignore forced tools/schema.
+        extra_body = dict(kw.get("extra_body") or {})
+        extra_body["provider"] = {
+            "order": list(_ZAI_GLM_HARD_OPENROUTER_PROVIDERS),
+            "allow_fallbacks": False,
+        }
         kw["extra_body"] = extra_body
 
     if provider == "deepseek":
