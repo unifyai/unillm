@@ -7,7 +7,6 @@ _TEST_MODELS = [
     "minimax-v3@minimax",
     "mimo-v2.5@xiaomi-mimo",
     "glm-5.2@zai",
-    "qwen3.7-plus@qwen",
 ]
 
 

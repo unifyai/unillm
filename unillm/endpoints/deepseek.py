@@ -7,9 +7,6 @@ from .utils import (
 
 models = {
     "deepseek-v4-max": openrouter_model("deepseek/deepseek-v4-pro"),
-    "deepseek-v4": openrouter_model("deepseek/deepseek-chat"),
-    "deepseek-v3": openrouter_model("deepseek/deepseek-chat"),
-    "deepseek-r1": openrouter_model("deepseek/deepseek-r1"),
 }
 
 register_model_alias_map("deepseek", models)
