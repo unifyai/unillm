@@ -10,7 +10,6 @@ from unillm.clients.provider_preprocessing import (
     COMPLETED_TOOL_CONTEXT_HEADER,
     THINKING_COMPLIANCE_CONTEXT_HEADER,
     THINKING_COMPLIANCE_CONTEXT_FOOTER,
-    TOOL_CHOICE_REQUIRED_INSTRUCTION,
     _apply_anthropic_caching,
     _apply_thinking_compliance,
     _transform_tool_calls_to_context,
@@ -696,7 +695,7 @@ class TestDeepSeekThinkingCompliance:
 
         assert kw["messages"][1]["reasoning_content"] == ""
 
-    def test_response_format_becomes_prompt_instruction(self):
+    def test_response_format_stays_native(self):
         kw = {
             "model": "deepseek/deepseek-v4-pro",
             "response_format": self._Answer,
@@ -705,13 +704,10 @@ class TestDeepSeekThinkingCompliance:
 
         apply_provider_preprocessing(kw, "deepseek")
 
-        assert kw["response_format"] == {"type": "json_object"}
-        assert "_unillm_response_format_spec" in kw
-        assert kw["messages"][0]["role"] == "system"
-        assert "valid JSON only" in kw["messages"][0]["content"]
-        assert '"answer"' in kw["messages"][0]["content"]
+        assert kw["response_format"] is self._Answer
+        assert kw["messages"] == [{"role": "user", "content": "hello"}]
 
-    def test_response_format_json_schema_dict_uses_inner_schema(self):
+    def test_response_format_json_schema_dict_stays_native(self):
         envelope = {
             "type": "json_schema",
             "json_schema": {
@@ -728,10 +724,10 @@ class TestDeepSeekThinkingCompliance:
 
         apply_provider_preprocessing(kw, "deepseek")
 
-        assert '"answer"' in kw["messages"][0]["content"]
-        assert '"type": "json_schema"' not in kw["messages"][0]["content"]
+        assert kw["response_format"] is envelope
+        assert kw["messages"] == [{"role": "user", "content": "hello"}]
 
-    def test_required_tool_choice_is_downgraded_to_auto(self):
+    def test_required_tool_choice_stays_hard_enforced(self):
         kw = {
             "model": "deepseek/deepseek-v4-pro",
             "messages": [{"role": "user", "content": "Call a tool"}],
@@ -741,11 +737,10 @@ class TestDeepSeekThinkingCompliance:
 
         apply_provider_preprocessing(kw, "deepseek")
 
-        assert kw["tool_choice"] == "auto"
-        assert kw["messages"][0]["role"] == "system"
-        assert TOOL_CHOICE_REQUIRED_INSTRUCTION in kw["messages"][0]["content"]
+        assert kw["tool_choice"] == "required"
+        assert kw["messages"] == [{"role": "user", "content": "Call a tool"}]
 
-    def test_explicit_tool_choice_is_downgraded_to_auto(self):
+    def test_explicit_tool_choice_stays_hard_enforced(self):
         kw = {
             "model": "deepseek/deepseek-v4-pro",
             "messages": [{"role": "user", "content": "Call lookup"}],
@@ -755,8 +750,11 @@ class TestDeepSeekThinkingCompliance:
 
         apply_provider_preprocessing(kw, "deepseek")
 
-        assert kw["tool_choice"] == "auto"
-        assert "lookup" in kw["messages"][0]["content"]
+        assert kw["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "lookup"},
+        }
+        assert kw["messages"] == [{"role": "user", "content": "Call lookup"}]
 
 
 # A short stand-in for a real base64 screenshot (~200 chars).

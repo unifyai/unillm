@@ -5,9 +5,7 @@ import json
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .response_format import (
-    apply_response_format_transport,
     ensure_response_format_spec,
-    get_response_format_spec,
 )
 from ..types import PromptCacheParam
 
@@ -48,7 +46,7 @@ TOOL_CHOICE_REQUIRED_INSTRUCTION = (
     "do not respond with text only. Select the most appropriate tool and call it."
 )
 
-SOFT_FORCED_TOOL_CHOICE_PROVIDERS = {"deepseek", "xiaomi-mimo"}
+SOFT_FORCED_TOOL_CHOICE_PROVIDERS = {"xiaomi-mimo"}
 
 
 def _move_system_messages_to_front(
@@ -744,11 +742,7 @@ def apply_provider_preprocessing(
     kw["messages"] = messages
 
     if provider == "deepseek":
-        spec = get_response_format_spec(kw)
-        if spec is not None:
-            apply_response_format_transport(spec, provider, kw)
         _apply_deepseek_thinking_compliance(kw)
-        _apply_soft_forced_tool_choice_compliance(kw)
         _strip_internal_annotations(kw)
         return kw
 
