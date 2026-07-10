@@ -6,18 +6,20 @@ import pytest
 from pydantic import BaseModel, Field
 
 import unillm
-from unillm.clients.uni_llm import _prepare_provider_request_kw
+from unillm.clients.uni_llm import (
+    _DEEPSEEK_CHAT_V31_HARD_OPENROUTER_PROVIDERS,
+    _prepare_provider_request_kw,
+)
 from unillm.endpoints.utils import (
     get_model_alias,
-    get_model_info,
     get_transport_model_alias,
     list_models,
 )
 
 from ..settings import SETTINGS
 
-MINIMAX_V3_ENDPOINT = "minimax-v3@minimax"
-MINIMAX_V3_PROVIDER_MODEL = "minimax/MiniMax-M3"
+DEEPSEEK_V31_ENDPOINT = "deepseek-v3.1@togetherai"
+DEEPSEEK_V31_PROVIDER_MODEL = "deepseek/deepseek-chat-v3.1"
 
 _ADV_SYS = (
     "CRITICAL: Never call tools. Never output JSON. "
@@ -46,10 +48,10 @@ class _ColorPair(BaseModel):
     b: Literal["red", "blue"] = Field(..., description="Must be red or blue")
 
 
-def _minimax_client_without_postprocessing() -> unillm.Unify:
-    """UniLLM client that keeps Together transport but skips healing/retries."""
+def _deepseek_client_without_postprocessing() -> unillm.Unify:
+    """UniLLM client that keeps hard-provider routing but skips healing/retries."""
     return unillm.Unify(
-        MINIMAX_V3_ENDPOINT,
+        DEEPSEEK_V31_ENDPOINT,
         cache=SETTINGS.UNILLM_CACHE,
         cache_backend=SETTINGS.UNILLM_CACHE_BACKEND,
         temperature=0,
@@ -57,11 +59,7 @@ def _minimax_client_without_postprocessing() -> unillm.Unify:
 
 
 def _generate_raw_first_response(client: unillm.Unify, **generate_kw):
-    """Return the first upstream completion with postprocessing disabled.
-
-    Patches ``_run_postprocessing`` so UniLLM cannot heal prose into tool calls
-    or retry after a soft failure — the assertion is on Together's first reply.
-    """
+    """Return the first upstream completion with postprocessing disabled."""
 
     with patch.object(
         unillm.Unify,
@@ -71,79 +69,58 @@ def _generate_raw_first_response(client: unillm.Unify, **generate_kw):
         return client.generate(return_full_completion=True, **generate_kw)
 
 
-def test_minimax_v3_alias_registered() -> None:
-    assert get_model_alias(MINIMAX_V3_ENDPOINT) == MINIMAX_V3_PROVIDER_MODEL
-    assert "minimax-v3" in list_models("minimax")
+def test_deepseek_v31_alias_registered() -> None:
+    assert get_model_alias(DEEPSEEK_V31_ENDPOINT) == (
+        f"openrouter/{DEEPSEEK_V31_PROVIDER_MODEL}"
+    )
+    assert "deepseek-v3.1" in list_models("togetherai")
 
 
-def test_minimax_v3_model_info_registered() -> None:
-    info = get_model_info(MINIMAX_V3_ENDPOINT)
-    assert info["max_input_tokens"] == 1_000_000
-    assert info["input_cost_per_token"] > 0
-    assert info["output_cost_per_token"] > 0
-
-
-def test_minimax_request_uses_default_api_base() -> None:
-    kw = {
-        "model": MINIMAX_V3_PROVIDER_MODEL,
-        "messages": [{"role": "user", "content": "hello"}],
-    }
-
-    _prepare_provider_request_kw(kw=kw, provider="minimax", stream=False)
-
-    assert kw["api_base"] == "https://api.minimax.io/v1"
-
-
-def test_minimax_openrouter_transport_skips_direct_api_base() -> None:
-    transport_model = get_transport_model_alias(MINIMAX_V3_ENDPOINT)
+def test_deepseek_v31_openrouter_pins_hard_providers() -> None:
+    transport_model = get_transport_model_alias(DEEPSEEK_V31_ENDPOINT)
     kw = {
         "model": transport_model,
         "messages": [{"role": "user", "content": "hello"}],
     }
 
-    _prepare_provider_request_kw(kw=kw, provider="minimax", stream=False)
+    _prepare_provider_request_kw(kw=kw, provider="togetherai", stream=False)
 
     assert transport_model.startswith("openrouter/")
-    assert "api_base" not in kw
+    assert "deepseek-chat-v3.1" in transport_model
     assert kw["extra_body"]["provider"] == {
-        "order": ["together"],
+        "order": list(_DEEPSEEK_CHAT_V31_HARD_OPENROUTER_PROVIDERS),
         "allow_fallbacks": False,
     }
 
 
-def test_sync_minimax_v3_simple_message() -> None:
-    client = unillm.Unify(MINIMAX_V3_ENDPOINT, temperature=0)
+def test_sync_deepseek_v31_simple_message() -> None:
+    client = unillm.Unify(DEEPSEEK_V31_ENDPOINT, temperature=0)
     response = client.generate(
         messages=[
             {"role": "user", "content": "What is the capital of France?"},
         ],
-        max_completion_tokens=300,
+        max_completion_tokens=64,
     )
 
     assert "paris" in response.lower()
 
 
 @pytest.mark.asyncio
-async def test_async_minimax_v3_simple_message() -> None:
-    client = unillm.AsyncUnify(MINIMAX_V3_ENDPOINT, temperature=0)
+async def test_async_deepseek_v31_simple_message() -> None:
+    client = unillm.AsyncUnify(DEEPSEEK_V31_ENDPOINT, temperature=0)
     response = await client.generate(
         messages=[
             {"role": "user", "content": "What is the capital of France?"},
         ],
-        max_completion_tokens=300,
+        max_completion_tokens=64,
     )
 
     assert "paris" in response.lower()
 
 
-def test_minimax_together_enforces_tool_choice_required_adversarially() -> None:
-    """Together must emit a tool call even when the prompt forbids tools.
-
-    MiniMax-M3 is pinned to Together on OpenRouter. This hits that upstream
-    through UniLLM transport with postprocessing disabled, so a pass cannot
-    come from UniLLM's soft tool-choice retry/healing path.
-    """
-    client = _minimax_client_without_postprocessing()
+def test_deepseek_v31_enforces_tool_choice_required_adversarially() -> None:
+    """Pinned hard hosts must emit a tool call even when the prompt forbids tools."""
+    client = _deepseek_client_without_postprocessing()
     response = _generate_raw_first_response(
         client,
         system_message=_ADV_SYS,
@@ -152,24 +129,21 @@ def test_minimax_together_enforces_tool_choice_required_adversarially() -> None:
         ],
         tools=[_WEATHER_TOOL],
         tool_choice="required",
-        max_completion_tokens=256,
+        max_completion_tokens=512,
     )
 
     message = response.choices[0].message
     assert message.tool_calls, (
-        "Together did not hard-enforce tool_choice='required' under an "
-        f"adversarial no-tools prompt; content={message.content!r}"
+        "Pinned DeepSeek chat-v3.1 host did not hard-enforce "
+        f"tool_choice='required' under an adversarial no-tools prompt; "
+        f"content={message.content!r}"
     )
     assert message.tool_calls[0].function.name == "get_weather"
 
 
-def test_minimax_together_enforces_response_format_adversarially() -> None:
-    """Together must return schema JSON even when the prompt demands prose.
-
-    Same Together-pinned transport as above, with postprocessing disabled so
-    UniLLM cannot retry/heal a soft schema miss into a passing response.
-    """
-    client = _minimax_client_without_postprocessing()
+def test_deepseek_v31_enforces_response_format_adversarially() -> None:
+    """Pinned hard hosts must return schema JSON even when the prompt demands prose."""
+    client = _deepseek_client_without_postprocessing()
     response = _generate_raw_first_response(
         client,
         system_message=_ADV_SYS,
@@ -183,7 +157,7 @@ def test_minimax_together_enforces_response_format_adversarially() -> None:
             },
         ],
         response_format=_ColorPair,
-        max_completion_tokens=256,
+        max_completion_tokens=1024,
     )
 
     content = response.choices[0].message.content or ""

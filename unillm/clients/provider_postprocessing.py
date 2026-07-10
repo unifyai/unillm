@@ -127,8 +127,6 @@ RETRY_REASON_TOOL_CHOICE_REQUIRED = "tool_choice_required"
 RETRY_REASON_INVALID_TOOL_NAME = "invalid_tool_name"
 RETRY_REASON_REPEATED_COMPLETED_TOOL = "repeated_completed_tool"
 
-SOFT_FORCED_TOOL_CHOICE_PROVIDERS = {"deepseek", "minimax", "xiaomi-mimo"}
-
 # Base nudge for retrying when model ignores tool_choice="required" instruction.
 # The rejected plain-text attempt is never appended as an assistant turn — that
 # format makes models treat undelivered prose as already sent (e.g. calling wait).

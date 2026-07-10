@@ -27,9 +27,6 @@ _ANTHROPIC_PUBLIC_ALIASES = {
 
 _DEEPSEEK_PUBLIC_ALIASES = {
     "deepseek-v4-max": "deepseek/deepseek-v4-pro",
-    "deepseek-v4": "deepseek/deepseek-chat",
-    "deepseek-v3": "deepseek/deepseek-chat",
-    "deepseek-r1": "deepseek/deepseek-reasoner",
 }
 
 
@@ -92,8 +89,6 @@ def _public_model_alias(provider: str, model: str, alias: str) -> str:
         return _DEEPSEEK_PUBLIC_ALIASES.get(model, alias)
     if provider == "minimax" and model == "minimax-v3":
         return "minimax/MiniMax-M3"
-    if provider == "qwen" and model == "qwen3.7-plus":
-        return "qwen/qwen3.7-plus"
     if provider == "xiaomi-mimo":
         return f"xiaomi_mimo/{model}"
     if provider == "zai":

@@ -30,30 +30,10 @@ register_openrouter_model_info(
             cache_read=0.01 / 1_000_000,
             cache_write=0.08333333333333334 / 1_000_000,
         ),
-        "meta-llama/llama-3-8b-instruct": _pricing(
-            8_192,
-            0.14 / 1_000_000,
-            0.14 / 1_000_000,
-        ),
         "meta-llama/llama-3.1-8b-instruct": _pricing(
             131_072,
             0.02 / 1_000_000,
             0.03 / 1_000_000,
-        ),
-        "meta-llama/llama-3.1-70b-instruct": _pricing(
-            131_072,
-            0.40 / 1_000_000,
-            0.40 / 1_000_000,
-        ),
-        "meta-llama/llama-3.2-1b-instruct": _pricing(
-            131_072,
-            0.027 / 1_000_000,
-            0.201 / 1_000_000,
-        ),
-        "meta-llama/llama-3.2-3b-instruct": _pricing(
-            131_072,
-            0.0509 / 1_000_000,
-            0.335 / 1_000_000,
         ),
         "meta-llama/llama-3.3-70b-instruct": _pricing(
             131_072,
@@ -64,11 +44,6 @@ register_openrouter_model_info(
             1_048_576,
             0.15 / 1_000_000,
             0.60 / 1_000_000,
-        ),
-        "meta-llama/llama-4-scout": _pricing(
-            10_000_000,
-            0.10 / 1_000_000,
-            0.30 / 1_000_000,
         ),
         "mistralai/mistral-medium-3": _pricing(
             131_072,
@@ -81,22 +56,6 @@ register_openrouter_model_info(
             0.40 / 1_000_000,
             2.00 / 1_000_000,
             cache_read=0.04 / 1_000_000,
-        ),
-        "mistralai/mistral-small-24b-instruct-2501": _pricing(
-            32_768,
-            0.05 / 1_000_000,
-            0.08 / 1_000_000,
-        ),
-        "mistralai/mistral-small-2603": _pricing(
-            262_144,
-            0.15 / 1_000_000,
-            0.60 / 1_000_000,
-            cache_read=0.015 / 1_000_000,
-        ),
-        "nousresearch/hermes-3-llama-3.1-405b": _pricing(
-            131_072,
-            1.00 / 1_000_000,
-            1.00 / 1_000_000,
         ),
         "openai/gpt-4-turbo": _pricing(
             128_000,
@@ -166,16 +125,6 @@ register_openrouter_model_info(
             1.10 / 1_000_000,
             4.40 / 1_000_000,
             cache_read=0.275 / 1_000_000,
-        ),
-        "qwen/qwen-2.5-7b-instruct": _pricing(
-            131_072,
-            0.04 / 1_000_000,
-            0.10 / 1_000_000,
-        ),
-        "qwen/qwen-2.5-72b-instruct": _pricing(
-            131_072,
-            0.36 / 1_000_000,
-            0.40 / 1_000_000,
         ),
     },
 )
