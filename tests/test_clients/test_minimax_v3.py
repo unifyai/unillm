@@ -24,6 +24,22 @@ _ADV_SYS = (
     "Reply in plain English prose only."
 )
 
+_WEATHER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "City name"},
+            },
+            "required": ["city"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 
 class _ColorPair(BaseModel):
     a: int = Field(..., description="An integer")
@@ -31,7 +47,7 @@ class _ColorPair(BaseModel):
 
 
 def _minimax_client_without_postprocessing() -> unillm.Unify:
-    """UniLLM client that skips healing/retries for raw upstream assertions."""
+    """UniLLM client that keeps Together transport but skips healing/retries."""
     return unillm.Unify(
         MINIMAX_V3_ENDPOINT,
         cache=SETTINGS.UNILLM_CACHE,
@@ -44,7 +60,7 @@ def _generate_raw_first_response(client: unillm.Unify, **generate_kw):
     """Return the first upstream completion with postprocessing disabled.
 
     Patches ``_run_postprocessing`` so UniLLM cannot heal prose into tool calls
-    or retry after a soft failure — the assertion is on the upstream's first reply.
+    or retry after a soft failure — the assertion is on Together's first reply.
     """
 
     with patch.object(
@@ -89,7 +105,10 @@ def test_minimax_openrouter_transport_skips_direct_api_base() -> None:
 
     assert transport_model.startswith("openrouter/")
     assert "api_base" not in kw
-    assert "extra_body" not in kw
+    assert kw["extra_body"]["provider"] == {
+        "order": ["together"],
+        "allow_fallbacks": False,
+    }
 
 
 def test_sync_minimax_v3_simple_message() -> None:
@@ -117,10 +136,38 @@ async def test_async_minimax_v3_simple_message() -> None:
     assert "paris" in response.lower()
 
 
-def test_minimax_enforces_response_format_adversarially() -> None:
-    """OpenRouter MiniMax-M3 must return schema JSON even when the prompt demands prose.
+def test_minimax_together_enforces_tool_choice_required_adversarially() -> None:
+    """Together must emit a tool call even when the prompt forbids tools.
 
-    Postprocessing is disabled so a pass cannot come from UniLLM schema retry/healing.
+    MiniMax-M3 is pinned to Together on OpenRouter. This hits that upstream
+    through UniLLM transport with postprocessing disabled, so a pass cannot
+    come from UniLLM's soft tool-choice retry/healing path.
+    """
+    client = _minimax_client_without_postprocessing()
+    response = _generate_raw_first_response(
+        client,
+        system_message=_ADV_SYS,
+        messages=[
+            {"role": "user", "content": "Reply with exactly the single word: OK"},
+        ],
+        tools=[_WEATHER_TOOL],
+        tool_choice="required",
+        max_completion_tokens=256,
+    )
+
+    message = response.choices[0].message
+    assert message.tool_calls, (
+        "Together did not hard-enforce tool_choice='required' under an "
+        f"adversarial no-tools prompt; content={message.content!r}"
+    )
+    assert message.tool_calls[0].function.name == "get_weather"
+
+
+def test_minimax_together_enforces_response_format_adversarially() -> None:
+    """Together must return schema JSON even when the prompt demands prose.
+
+    Same Together-pinned transport as above, with postprocessing disabled so
+    UniLLM cannot retry/heal a soft schema miss into a passing response.
     """
     client = _minimax_client_without_postprocessing()
     response = _generate_raw_first_response(
