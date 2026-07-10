@@ -16,16 +16,12 @@ models = {
     "claude-4.5-sonnet": openrouter_model("anthropic/claude-sonnet-4.5"),
     "claude-4.5-haiku": openrouter_model("anthropic/claude-haiku-4.5"),
     "claude-4.5-opus": openrouter_model("anthropic/claude-opus-4.5"),
-    "llama-3.1-405b-chat": openrouter_model("nousresearch/hermes-3-llama-3.1-405b"),
     "llama-3.3-70b-chat": openrouter_model("meta-llama/llama-3.3-70b-instruct"),
     "llama-4-maverick-instruct": openrouter_model("meta-llama/llama-4-maverick"),
-    "llama-4-scout-instruct": openrouter_model("meta-llama/llama-4-scout"),
     "mistral-medium": openrouter_model("mistralai/mistral-medium-3"),
-    "mistral-small": openrouter_model("mistralai/mistral-small-24b-instruct-2501"),
     "qwen-3-235b-a22b-instruct": openrouter_model("qwen/qwen3-235b-a22b-2507"),
     "deepseek-v3.1": openrouter_model("deepseek/deepseek-chat-v3.1"),
     "deepseek-r1": openrouter_model("deepseek/deepseek-r1-0528"),
-    "gpt-oss-20b": openrouter_model("openai/gpt-oss-20b"),
     "gpt-oss-120b": openrouter_model("openai/gpt-oss-120b"),
 }
 
