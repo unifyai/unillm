@@ -20,7 +20,6 @@ import unillm
 from ..settings import SETTINGS
 from unillm.clients.provider_postprocessing import (
     RETRY_REASON_INVALID_TOOL_NAME,
-    RETRY_REASON_REPEATED_COMPLETED_TOOL,
     RETRY_REASON_TOOL_CHOICE_REQUIRED,
     build_retry_kw,
     build_tool_choice_required_retry_nudge,
@@ -528,70 +527,6 @@ def test_soft_forced_required_allows_final_answer_after_tools_removed(provider):
 
     assert not needs_retry
     assert retry_reason is None
-
-
-def test_xiaomi_auto_retries_repeated_completed_tool_call_without_tools():
-    mock_tool_call = MagicMock()
-    mock_tool_call.function.name = "tool_a"
-    mock_tool_call.function.arguments = "{}"
-
-    mock_message = MagicMock()
-    mock_message.tool_calls = [mock_tool_call]
-    mock_message.content = ""
-
-    mock_choice = MagicMock()
-    mock_choice.message = mock_message
-
-    mock_response = MagicMock()
-    mock_response.choices = [mock_choice]
-
-    request_kw = {
-        "messages": [
-            {
-                "role": "user",
-                "content": "Call tool_a and then answer with its result.",
-            },
-        ],
-        "tools": [TOOL_A],
-    }
-    original_messages = [
-        *request_kw["messages"],
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "tool_a", "arguments": "{}"},
-                },
-            ],
-        },
-        {"role": "tool", "tool_call_id": "call_1", "content": '"done"'},
-    ]
-
-    needs_retry, retry_reason = check_needs_postprocessing(
-        response=mock_response,
-        provider="xiaomi-mimo",
-        original_tool_choice=None,
-        reasoning_effort=None,
-        tools=[TOOL_A],
-        request_messages=request_kw["messages"],
-        original_request_messages=original_messages,
-    )
-
-    assert needs_retry
-    assert retry_reason == RETRY_REASON_REPEATED_COMPLETED_TOOL
-
-    retry_kw = build_retry_kw(
-        kw=request_kw,
-        response=mock_response,
-        retry_reason=retry_reason,
-    )
-
-    assert "tools" not in retry_kw
-    assert "tool_choice" not in retry_kw
-    assert "already completed" in retry_kw["messages"][-1]["content"]
 
 
 @pytest.mark.parametrize("provider", ["openai"])

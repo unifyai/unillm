@@ -81,6 +81,20 @@ def _completion(content: str | None, *, tool_calls=None, finish_reason="stop"):
     )
 
 
+def _completion_with_tool(tool_name: str, arguments: str = "{}") -> ChatCompletion:
+    return _completion(
+        None,
+        tool_calls=[
+            {
+                "id": "call_test",
+                "type": "function",
+                "function": {"name": tool_name, "arguments": arguments},
+            },
+        ],
+        finish_reason="tool_calls",
+    )
+
+
 def test_heal_staging_embedded_tool_calls():
     thoughts = (
         "The user is asking about OneDrive, but I don't have workspace access yet."
@@ -859,6 +873,7 @@ def test_heal_tool_call_name_avoids_tool_choice_retry(provider):
 
 
 def test_infer_wait_from_python_call_substring():
+    """Argumentless ``wait()`` must not be promoted from prose."""
     thoughts = (
         "The lookup is still running. Here is the tool call: wait(). "
         "I'll stay idle until it completes."
@@ -874,10 +889,42 @@ def test_infer_wait_from_python_call_substring():
         response_format_spec=canonicalize_response_format(TextResponse),
     )
 
-    assert inferred is not None
-    call = _tool_call_from_message(inferred.choices[0].message)
-    assert call["function"]["name"] == "wait"
-    assert json.loads(call["function"]["arguments"]) == {}
+    assert inferred is None
+
+
+def test_infer_rejects_argumentless_name_mention_in_auto_mode():
+    """Final answers that mention completed tools must not become tool calls."""
+    content = (
+        "Both tools were triggered immediately in parallel and completed.\n\n"
+        "- fast_task: FAST_RESULT\n"
+        "- slow_task: SLOW_RESULT"
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "fast_task",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "slow_task",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    ]
+    response = _completion(content)
+    healed = maybe_heal_tool_calls_in_completion(
+        response,
+        provider="openai",
+        original_tool_choice="auto",
+        tools=tools,
+        response_format_spec=None,
+    )
+    assert healed.choices[0].message.tool_calls is None
+    assert healed.choices[0].finish_reason == "stop"
 
 
 def test_infer_tool_with_arguments_from_python_call_substring():
@@ -960,7 +1007,7 @@ def test_infer_python_call_prefers_leftmost_valid_call():
 
 
 def test_infer_wait_from_thoughts_only_json():
-    """DeepSeek often says it will wait in ``thoughts`` without calling the tool."""
+    """Prose that only mentions waiting must not promote argumentless wait."""
 
     thoughts = (
         "The ask_about_contacts action is still executing. I've already acknowledged "
@@ -979,11 +1026,7 @@ def test_infer_wait_from_thoughts_only_json():
         response_format_spec=spec,
     )
 
-    assert inferred is not None
-    call = _tool_call_from_message(inferred.choices[0].message)
-    assert call["function"]["name"] == "wait"
-    assert json.loads(call["function"]["arguments"]) == {}
-    assert json.loads(inferred.choices[0].message.content) == {"thoughts": thoughts}
+    assert inferred is None
 
 
 def test_infer_wait_from_exact_action_field():
@@ -1052,11 +1095,7 @@ def test_infer_does_not_promote_tools_with_required_arguments():
         response_format_spec=canonicalize_response_format(TextResponse),
     )
 
-    assert inferred is not None
-    assert (
-        _tool_call_from_message(inferred.choices[0].message)["function"]["name"]
-        == "wait"
-    )
+    assert inferred is None
 
 
 def test_infer_ignores_required_argument_tool_even_when_name_appears():
@@ -1119,11 +1158,7 @@ def test_infer_prefers_longest_argumentless_tool_name():
         response_format_spec=canonicalize_response_format(TextResponse),
     )
 
-    assert inferred is not None
-    assert (
-        _tool_call_from_message(inferred.choices[0].message)["function"]["name"]
-        == "wait_for_result"
-    )
+    assert inferred is None
 
 
 def test_infer_respects_forced_tool_choice_name():
@@ -1139,15 +1174,11 @@ def test_infer_respects_forced_tool_choice_name():
         response_format_spec=canonicalize_response_format(TextResponse),
     )
 
-    assert inferred is not None
-    assert (
-        _tool_call_from_message(inferred.choices[0].message)["function"]["name"]
-        == "wait"
-    )
+    assert inferred is None
 
 
 @pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
-def test_infer_argumentless_tool_avoids_tool_choice_retry(provider):
+def test_infer_argumentless_prose_triggers_tool_choice_retry(provider):
     content = json.dumps(
         {
             "thoughts": (
@@ -1165,7 +1196,8 @@ def test_infer_argumentless_tool_avoids_tool_choice_retry(provider):
 
     def execute_retry(retry_kw, label):
         retry_calls.append(label)
-        raise AssertionError("tool-choice retry should not run when inference succeeds")
+        # Return a compliant native tool call so the pipeline can finish.
+        return _completion_with_tool("wait")
 
     result = apply_postprocessing_pipeline(
         response,
@@ -1176,13 +1208,11 @@ def test_infer_argumentless_tool_avoids_tool_choice_retry(provider):
         execute_retry=execute_retry,
     )
 
-    assert retry_calls == []
-    assert (
-        _tool_call_from_message(result.choices[0].message)["function"]["name"] == "wait"
-    )
+    assert retry_calls == ["retry"]
+    assert result.choices[0].message.tool_calls is not None
 
 
-def test_maybe_heal_falls_back_to_argumentless_inference():
+def test_maybe_heal_does_not_infer_argumentless_from_prose():
     content = json.dumps(
         {
             "thoughts": "The lookup is still running. I should wait for the result.",
@@ -1198,9 +1228,7 @@ def test_maybe_heal_falls_back_to_argumentless_inference():
         response_format_spec=canonicalize_response_format(TextResponse),
     )
 
-    assert (
-        _tool_call_from_message(healed.choices[0].message)["function"]["name"] == "wait"
-    )
+    assert healed.choices[0].message.tool_calls is None
 
 
 ACT_TOOL = {
@@ -1364,23 +1392,6 @@ def test_heal_rejects_tool_call_missing_required_argument():
     assert healed is None
 
 
-ACT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "act",
-        "description": "Search and act on information.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "requesting_contact_id": {"type": "integer"},
-            },
-            "required": ["query", "requesting_contact_id"],
-        },
-    },
-}
-
-
 @pytest.mark.parametrize("provider", ["openai", "anthropic", "deepseek", "minimax"])
 def test_infer_ask_about_contacts_from_prose_intent(provider):
     thoughts = (
@@ -1390,22 +1401,16 @@ def test_infer_ask_about_contacts_from_prose_intent(provider):
     )
     content = json.dumps({"thoughts": thoughts})
     response = _completion(content)
-    spec = canonicalize_response_format(TextResponse)
 
     inferred = try_infer_tool_call_from_content(
         response,
         provider=provider,
         original_tool_choice="required",
         tools=[ASK_ABOUT_CONTACTS_TOOL, WAIT_TOOL],
-        response_format_spec=spec,
+        response_format_spec=canonicalize_response_format(TextResponse),
     )
 
-    assert inferred is not None
-    call = _tool_call_from_message(inferred.choices[0].message)
-    assert call["function"]["name"] == "ask_about_contacts"
-    arguments = json.loads(call["function"]["arguments"])
-    assert "text" in arguments
-    assert "Sarah" in arguments["text"]
+    assert inferred is None
 
 
 @pytest.mark.parametrize("provider", ["openai", "anthropic", "deepseek", "minimax"])
@@ -1425,13 +1430,7 @@ def test_infer_act_from_prose_intent_with_contact_id(provider):
         response_format_spec=canonicalize_response_format(TextResponse),
     )
 
-    assert inferred is not None
-    call = _tool_call_from_message(inferred.choices[0].message)
-    assert call["function"]["name"] == "act"
-    assert json.loads(call["function"]["arguments"]) == {
-        "query": "search for office hours",
-        "requesting_contact_id": 1,
-    }
+    assert inferred is None
 
 
 @pytest.mark.parametrize("provider", ["openai", "anthropic", "deepseek", "minimax"])
@@ -1472,11 +1471,7 @@ def test_infer_contact_lookup_without_tool_name(provider):
         response_format_spec=canonicalize_response_format(TextResponse),
     )
 
-    assert inferred is not None
-    assert (
-        _tool_call_from_message(inferred.choices[0].message)["function"]["name"]
-        == "ask_about_contacts"
-    )
+    assert inferred is None
 
 
 @pytest.mark.parametrize("provider", ["openai", "anthropic", "deepseek", "minimax"])
@@ -1503,14 +1498,11 @@ def test_infer_act_summarize_with_boss_contact_from_messages(provider):
         request_messages=request_messages,
     )
 
-    assert inferred is not None
-    call = _tool_call_from_message(inferred.choices[0].message)
-    assert call["function"]["name"] == "act"
-    assert json.loads(call["function"]["arguments"])["requesting_contact_id"] == 1
+    assert inferred is None
 
 
-@pytest.mark.parametrize("provider", ["openai", "anthropic", "deepseek", "minimax"])
-def test_prose_inference_avoids_tool_choice_retry(provider):
+@pytest.mark.parametrize("provider", ["openai", "deepseek", "minimax"])
+def test_prose_inference_does_not_avoid_tool_choice_retry(provider):
     thoughts = (
         "The boss is asking about Sarah's communication preference. Let me use "
         "ask_about_contacts to find Sarah's contact record."
@@ -1525,7 +1517,10 @@ def test_prose_inference_avoids_tool_choice_retry(provider):
 
     def execute_retry(retry_kw, label):
         retry_calls.append(label)
-        raise AssertionError("tool-choice retry should not run when inference succeeds")
+        return _completion_with_tool(
+            "ask_about_contacts",
+            json.dumps({"text": "Sarah preference"}),
+        )
 
     result = apply_postprocessing_pipeline(
         response,
@@ -1536,8 +1531,5 @@ def test_prose_inference_avoids_tool_choice_retry(provider):
         execute_retry=execute_retry,
     )
 
-    assert retry_calls == []
-    assert (
-        _tool_call_from_message(result.choices[0].message)["function"]["name"]
-        == "ask_about_contacts"
-    )
+    assert retry_calls == ["retry"]
+    assert result.choices[0].message.tool_calls is not None
