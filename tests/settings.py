@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     UNILLM_CACHE: CacheParam = True
     UNILLM_CACHE_BACKEND: str = "local_separate"
     UNILLM_SERVICE_TIER: str = "priority"
-    UNILLM_DEFAULT_MODEL: str = "gpt-5.5@openai"
+    UNILLM_DEFAULT_MODEL: str = "gpt-5.6-sol@openai"
 
     @field_validator("UNILLM_CACHE", mode="before")
     @classmethod

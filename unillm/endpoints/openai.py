@@ -30,6 +30,9 @@ models = {
     "gpt-5.4-mini": openrouter_model("openai/gpt-5.4-mini"),
     "gpt-5.4-nano": openrouter_model("openai/gpt-5.4-nano"),
     "gpt-5.5": openrouter_model("openai/gpt-5.5"),
+    "gpt-5.6-sol": openrouter_model("openai/gpt-5.6-sol"),
+    "gpt-5.6-terra": openrouter_model("openai/gpt-5.6-terra"),
+    "gpt-5.6-luna": openrouter_model("openai/gpt-5.6-luna"),
 }
 
 register_model_alias_map("openai", models)
