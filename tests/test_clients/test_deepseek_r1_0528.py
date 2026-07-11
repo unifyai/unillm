@@ -88,7 +88,7 @@ def test_deepseek_r1_0528_openrouter_pins_hard_providers() -> None:
     assert transport_model.startswith("openrouter/")
     assert "deepseek-r1-0528" in transport_model
     assert kw["extra_body"]["provider"] == {
-        "order": list(_DEEPSEEK_R1_0528_HARD_OPENROUTER_PROVIDERS),
+        "only": list(_DEEPSEEK_R1_0528_HARD_OPENROUTER_PROVIDERS),
         "allow_fallbacks": False,
     }
 
