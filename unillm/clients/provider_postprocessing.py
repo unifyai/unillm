@@ -94,15 +94,6 @@ def _tool_call_name(tool_call: Any) -> Optional[str]:
     return function.name
 
 
-def _tool_call_arguments(tool_call: Any) -> str:
-    if isinstance(tool_call, dict):
-        function = tool_call.get("function")
-        if isinstance(function, dict):
-            return str(function.get("arguments", ""))
-        return ""
-    return str(tool_call.function.arguments)
-
-
 def _tool_call_id(tool_call: Any) -> Optional[str]:
     if isinstance(tool_call, dict):
         call_id = tool_call.get("id")
@@ -125,7 +116,6 @@ class ModelRefusalError(Exception):
 # Retry reason constants
 RETRY_REASON_TOOL_CHOICE_REQUIRED = "tool_choice_required"
 RETRY_REASON_INVALID_TOOL_NAME = "invalid_tool_name"
-RETRY_REASON_REPEATED_COMPLETED_TOOL = "repeated_completed_tool"
 
 # Base nudge for retrying when model ignores tool_choice="required" instruction.
 # The rejected plain-text attempt is never appended as an assistant turn — that
@@ -285,53 +275,6 @@ def _has_tool_result_history(messages: Optional[List[dict]]) -> bool:
     )
 
 
-def _completed_tool_signatures(messages: Optional[List[dict]]) -> set[tuple[str, str]]:
-    if not messages:
-        return set()
-
-    call_id_to_signature: dict[str, tuple[str, str]] = {}
-    completed_call_ids: set[str] = set()
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        if message.get("role") == "assistant":
-            for tool_call in message.get("tool_calls") or []:
-                if not isinstance(tool_call, dict):
-                    continue
-                function = tool_call.get("function")
-                if not isinstance(function, dict):
-                    continue
-                call_id = tool_call.get("id")
-                name = function.get("name")
-                arguments = function.get("arguments", "")
-                if isinstance(call_id, str) and isinstance(name, str):
-                    call_id_to_signature[call_id] = (name, str(arguments))
-        elif message.get("role") == "tool":
-            tool_call_id = message.get("tool_call_id")
-            if isinstance(tool_call_id, str):
-                completed_call_ids.add(tool_call_id)
-
-    return {
-        signature
-        for call_id, signature in call_id_to_signature.items()
-        if call_id in completed_call_ids
-    }
-
-
-def _repeats_completed_tool_call(
-    msg: "ChatCompletionMessage",
-    messages: Optional[List[dict]],
-) -> bool:
-    completed = _completed_tool_signatures(messages)
-    if not completed or not msg.tool_calls:
-        return False
-
-    return all(
-        (_tool_call_name(tool_call), _tool_call_arguments(tool_call)) in completed
-        for tool_call in msg.tool_calls
-    )
-
-
 def _make_tool_error(
     content: str,
     *,
@@ -480,18 +423,6 @@ def build_retry_kw(
             msg=msg,
             assistant_content=assistant_content,
         )
-    elif retry_reason == RETRY_REASON_REPEATED_COMPLETED_TOOL:
-        retry_messages = list(kw.get("messages", []))
-        retry_messages.append(
-            {
-                "role": "user",
-                "content": (
-                    "The tool call you just requested has already completed and "
-                    "its result is present in the conversation history. Do not "
-                    "call it again. Answer using the completed tool result."
-                ),
-            },
-        )
     else:
         # Default: tool_choice_required case — rejected prose is referenced inside
         # a single user nudge, not replayed as an assistant turn.
@@ -506,9 +437,6 @@ def build_retry_kw(
     # Create retry request
     retry_kw = dict(kw)
     retry_kw["messages"] = retry_messages
-    if retry_reason == RETRY_REASON_REPEATED_COMPLETED_TOOL:
-        retry_kw.pop("tools", None)
-        retry_kw.pop("tool_choice", None)
     return retry_kw
 
 
@@ -562,6 +490,7 @@ def _check_soft_forced_tool_choice_postprocessing(
     request_messages: Optional[List[dict]] = None,
     original_request_messages: Optional[List[dict]] = None,
 ) -> Tuple[bool, Optional[str]]:
+    del original_request_messages
     msg = response.choices[0].message
 
     if msg.tool_calls:
@@ -570,12 +499,6 @@ def _check_soft_forced_tool_choice_postprocessing(
             called_name = _tool_call_name(tool_call)
             if called_name not in valid_names:
                 return True, RETRY_REASON_INVALID_TOOL_NAME
-
-        if original_tool_choice in (None, "auto") and _repeats_completed_tool_call(
-            msg,
-            original_request_messages,
-        ):
-            return True, RETRY_REASON_REPEATED_COMPLETED_TOOL
 
     if original_tool_choice == "required" and not msg.tool_calls:
         if (
