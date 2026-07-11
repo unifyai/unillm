@@ -135,8 +135,11 @@ def _apply_openrouter_hard_provider_pin(kw: dict, model: str) -> None:
     if not order:
         return
     extra_body = dict(kw.get("extra_body") or {})
+    # Use ``only`` (not ``order``): OpenRouter's order+allow_fallbacks=false path
+    # 404s for some tool_choice=required combos even when the same host works
+    # under ``only`` (notably MiniMax-M3 on Together).
     extra_body["provider"] = {
-        "order": list(order),
+        "only": list(order),
         "allow_fallbacks": False,
     }
     kw["extra_body"] = extra_body

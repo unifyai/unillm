@@ -76,7 +76,7 @@ def test_gpt_oss_120b_openrouter_pins_hard_providers() -> None:
 
     assert transport_model == f"openrouter/{GPT_OSS_120B_PROVIDER_MODEL}"
     assert kw["extra_body"]["provider"] == {
-        "order": list(_GPT_OSS_120B_HARD_OPENROUTER_PROVIDERS),
+        "only": list(_GPT_OSS_120B_HARD_OPENROUTER_PROVIDERS),
         "allow_fallbacks": False,
     }
 

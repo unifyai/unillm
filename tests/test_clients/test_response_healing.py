@@ -423,6 +423,68 @@ def test_heal_top_level_name_arguments_shape():
     assert json.loads(msg.content) == {"thoughts": "Send a greeting."}
 
 
+def test_heal_top_level_tool_call_array():
+    """MiniMax often emits a bare JSON array of {name, parameters} as content."""
+    final_response_tool = {
+        "type": "function",
+        "function": {
+            "name": "final_response",
+            "description": "Submit the final structured answer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "answer": {
+                        "type": "object",
+                        "properties": {
+                            "greeting": {"type": "string"},
+                            "lucky_number": {"type": "integer"},
+                        },
+                        "required": ["greeting", "lucky_number"],
+                    },
+                },
+                "required": ["answer"],
+            },
+        },
+    }
+    content = json.dumps(
+        [
+            {
+                "name": "final_response",
+                "parameters": {
+                    "answer": {
+                        "greeting": "Hello! I'm here to help.",
+                        "lucky_number": 7,
+                    },
+                },
+            },
+        ],
+    )
+    response = _completion(content)
+
+    healed = try_heal_embedded_tool_calls(
+        response,
+        provider="minimax",
+        original_tool_choice="required",
+        tools=[final_response_tool],
+        response_format_spec=None,
+    )
+
+    assert healed is not None
+    msg = healed.choices[0].message
+    assert msg.tool_calls is not None
+    assert len(msg.tool_calls) == 1
+    call = _tool_call_from_message(msg)
+    assert call["function"]["name"] == "final_response"
+    assert json.loads(call["function"]["arguments"]) == {
+        "answer": {
+            "greeting": "Hello! I'm here to help.",
+            "lucky_number": 7,
+        },
+    }
+    assert msg.content is None
+    assert healed.choices[0].finish_reason == "tool_calls"
+
+
 @pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
 def test_healing_avoids_tool_choice_retry(provider):
     content = json.dumps(
