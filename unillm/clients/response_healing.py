@@ -1238,13 +1238,27 @@ def try_heal_embedded_tool_calls(
     except json.JSONDecodeError:
         parsed = None
 
-    if not isinstance(parsed, dict):
+    # Providers sometimes emit a bare JSON array of tool-call objects as
+    # message content (e.g. MiniMax: [{"name": "...", "parameters": {...}}])
+    # instead of a dict with a ``tool_calls`` key or a native tool_calls field.
+    if isinstance(parsed, list):
+        embedded_calls = _collect_embedded_calls(parsed, tools=tools)
+        cleaned_content = None
+    elif isinstance(parsed, dict):
+        embedded_calls, promoted_keys = _extract_embedded_calls(
+            parsed,
+            tools=tools,
+        )
+        if not embedded_calls:
+            return None
+        cleaned_content = _clean_content_payload(
+            parsed,
+            promoted_keys,
+            response_format_spec,
+        )
+    else:
         return None
 
-    embedded_calls, promoted_keys = _extract_embedded_calls(
-        parsed,
-        tools=tools,
-    )
     if not embedded_calls:
         return None
 
@@ -1256,11 +1270,6 @@ def try_heal_embedded_tool_calls(
         if name not in allowed_names:
             return None
 
-    cleaned_content = _clean_content_payload(
-        parsed,
-        promoted_keys,
-        response_format_spec,
-    )
     if not _content_passes_response_format(cleaned_content, response_format_spec):
         return None
 
