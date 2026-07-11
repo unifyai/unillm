@@ -187,6 +187,11 @@ def get_model_info(endpoint: str) -> Dict[str, Any]:
     Resolves the endpoint alias, fetches LiteLLM's model info as a base,
     then overlays any entries registered via :func:`register_model_info`.
 
+    OpenAI-public aliases (e.g. ``gpt-5.6-sol``) may be unknown to the pinned
+    LiteLLM release while still registered under the OpenRouter transport id
+    (``openrouter/openai/gpt-5.6-sol``). Try the transport alias when the
+    public name has no LiteLLM metadata yet.
+
     Args:
         endpoint: Model identifier with ``@provider`` suffix.
 
@@ -197,10 +202,16 @@ def get_model_info(endpoint: str) -> Dict[str, Any]:
         ValueError: If the model is not found in either source.
     """
     model = get_model_alias(endpoint)
-    try:
-        info = dict(litellm.get_model_info(model))
-    except Exception:
-        info = {}
+    transport = get_transport_model_alias(endpoint)
+    info: Dict[str, Any] = {}
+    for candidate in dict.fromkeys((model, transport)):
+        try:
+            candidate_info = dict(litellm.get_model_info(candidate))
+        except Exception:
+            continue
+        if candidate_info:
+            info = candidate_info
+            break
     overrides = _MODEL_INFO_MAP.get(endpoint, {})
     info.update(overrides)
     if not info:

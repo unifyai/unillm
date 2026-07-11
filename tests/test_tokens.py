@@ -34,6 +34,28 @@ class TestGetMaxInputTokens:
         ):
             get_max_input_tokens("non-existent-model-xyz-12345")
 
+    def test_transport_alias_fallback_when_public_litellm_name_missing(
+        self,
+        monkeypatch,
+    ):
+        """OpenRouter-registered OpenAI models must resolve before LiteLLM ships them."""
+        import litellm
+
+        from unillm.endpoints.utils import get_transport_model_alias
+
+        endpoint = "gpt-5.6-sol@openai"
+        transport = get_transport_model_alias(endpoint)
+        real_get_model_info = litellm.get_model_info
+
+        def fake_get_model_info(model, *args, **kwargs):
+            if model == "gpt-5.6-sol":
+                raise Exception("public openai name not in pinned litellm")
+            return real_get_model_info(model, *args, **kwargs)
+
+        monkeypatch.setattr(litellm, "get_model_info", fake_get_model_info)
+        assert transport.startswith("openrouter/")
+        assert get_max_input_tokens(endpoint) == 1_050_000
+
 
 class TestCountTokens:
     """Tests for the count_tokens function."""
