@@ -5,6 +5,7 @@ import copy
 import inspect
 import logging
 import os
+import re
 
 from typing import (
     Any,
@@ -36,6 +37,10 @@ from ..limit_hooks import (
 _LOGGER = logging.getLogger("unillm")
 
 _OPENROUTER_MODEL_PREFIX = "openrouter/"
+_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX = "openai/responses/"
+_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX = "openrouter/responses/"
+_OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS = ("parallel_tool_calls", "tool_choice")
+_OPENAI_GPT_MINOR_VERSION_RE = re.compile(r"^gpt-5\.(?P<minor>\d+)(?:[-.].*)?$")
 
 # OpenRouter catalog id -> ordered hard-enforcement hosts (tool_choice +
 # json_schema under adversarial prompts). allow_fallbacks is always false.
@@ -231,6 +236,95 @@ def _canonical_model_for_accounting(model: str | None) -> str:
     return model
 
 
+def _openai_public_model_name(model: str) -> str:
+    """Strip OpenRouter / Responses transport prefixes down to the public GPT name."""
+    name = model
+    if name.startswith(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX):
+        name = name[len(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX) :]
+    elif name.startswith(_OPENROUTER_MODEL_PREFIX):
+        name = name[len(_OPENROUTER_MODEL_PREFIX) :]
+    if name.startswith(_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX):
+        name = name[len(_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX) :]
+    if name.startswith("openai/"):
+        name = name[len("openai/") :]
+    if name.startswith("responses/"):
+        name = name[len("responses/") :]
+    return name
+
+
+def _is_openai_gpt_responses_tool_model(model: str) -> bool:
+    """Return whether an OpenAI GPT model needs Responses for tools with reasoning.
+
+    GPT-5.2+ on OpenRouter Chat Completions drops or ignores tool calls when
+    reasoning is enabled; the Responses path restores them. GPT-5.4+ also
+    required Responses on the native OpenAI backend.
+    """
+    match = _OPENAI_GPT_MINOR_VERSION_RE.match(_openai_public_model_name(model))
+    return bool(match and int(match.group("minor")) >= 2)
+
+
+def _copy_tool_for_responses_bridge(tool: Any) -> Any:
+    """Copy a chat tool while placing strictness where LiteLLM's bridge reads it."""
+    if not isinstance(tool, dict):
+        return tool
+
+    tool_copy = dict(tool)
+    function = tool_copy.get("function")
+    if tool_copy.get("type") == "function" and isinstance(function, dict):
+        function_copy = dict(function)
+        if "strict" in tool_copy and "strict" not in function_copy:
+            function_copy["strict"] = tool_copy["strict"]
+        tool_copy["function"] = function_copy
+        tool_copy.pop("strict", None)
+    return tool_copy
+
+
+def _copy_tools_for_responses_bridge(tools: Iterable[Any] | None) -> list[Any] | None:
+    """Return response-bridge-compatible tool definitions without mutating callers."""
+    if tools is None:
+        return None
+    return [_copy_tool_for_responses_bridge(tool) for tool in tools]
+
+
+def _allow_responses_bridge_params(kw: dict) -> None:
+    """Preserve chat tool controls that LiteLLM otherwise drops before bridging."""
+    _allow_openai_params(kw, _OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS)
+
+
+def _route_openai_tool_reasoning_via_responses(
+    kw: dict,
+    *,
+    provider: str,
+    stream: bool,
+) -> None:
+    """Route GPT-5.4+ tool+reasoning calls through the Responses API.
+
+    OpenAI catalog models are transported via OpenRouter; prefer OpenRouter's
+    native ``/responses`` endpoint. Fall back to LiteLLM's direct OpenAI
+    ``openai/responses/`` bridge when the transport is not OpenRouter-prefixed.
+    """
+    model = str(kw.get("model") or "")
+    tools = kw.get("tools")
+    if (
+        provider != "openai"
+        or stream
+        or not tools
+        or kw.get("reasoning_effort") is None
+        or not _is_openai_gpt_responses_tool_model(model)
+    ):
+        return
+
+    public = _openai_public_model_name(model)
+    if model.startswith(_OPENROUTER_MODEL_PREFIX) or model.startswith(
+        _OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX,
+    ):
+        kw["model"] = f"{_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX}openai/{public}"
+    else:
+        kw["model"] = f"{_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX}{public}"
+    kw["tools"] = _copy_tools_for_responses_bridge(tools)
+    _allow_responses_bridge_params(kw)
+
+
 def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
     """Preserve OpenAI-compatible params that LiteLLM provider metadata omits."""
     current = kw.get("allowed_openai_params")
@@ -328,6 +422,9 @@ def _prepare_provider_request_kw(
         and not model.startswith(_OPENROUTER_MODEL_PREFIX)
     ):
         kw["api_base"] = "https://api.minimax.io/v1"
+
+    _route_openai_tool_reasoning_via_responses(kw, provider=provider, stream=stream)
+    model = str(kw.get("model") or model)
 
     _apply_openrouter_hard_provider_pin(kw, model)
 
