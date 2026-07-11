@@ -1,7 +1,7 @@
 import pytest
 
 _TEST_MODELS = [
-    "gpt-5.5@openai",
+    "gpt-5.6-sol@openai",
     "claude-4.8-opus@anthropic",
     "deepseek-v4-max@deepseek",
     "minimax-v3@minimax",

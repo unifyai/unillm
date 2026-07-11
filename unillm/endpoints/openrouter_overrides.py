@@ -114,6 +114,27 @@ register_openrouter_model_info(
             30.00 / 1_000_000,
             cache_read=0.50 / 1_000_000,
         ),
+        "openai/gpt-5.6-sol": _pricing(
+            1_050_000,
+            5.00 / 1_000_000,
+            30.00 / 1_000_000,
+            cache_read=0.50 / 1_000_000,
+            cache_write=6.25 / 1_000_000,
+        ),
+        "openai/gpt-5.6-terra": _pricing(
+            1_050_000,
+            2.50 / 1_000_000,
+            15.00 / 1_000_000,
+            cache_read=0.25 / 1_000_000,
+            cache_write=3.125 / 1_000_000,
+        ),
+        "openai/gpt-5.6-luna": _pricing(
+            1_050_000,
+            1.00 / 1_000_000,
+            6.00 / 1_000_000,
+            cache_read=0.10 / 1_000_000,
+            cache_write=1.25 / 1_000_000,
+        ),
         "openai/o3": _pricing(
             200_000,
             2.00 / 1_000_000,
