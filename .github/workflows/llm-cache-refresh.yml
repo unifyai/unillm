@@ -27,9 +27,11 @@ on:
 permissions:
   contents: read
 
+# Debouncer semantics: let the running refresh finish; only the pending slot
+# is replaced when a newer dispatch lands.
 concurrency:
   group: llm-cache-refresh-${{ github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   refresh:
