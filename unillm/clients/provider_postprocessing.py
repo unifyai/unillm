@@ -29,6 +29,7 @@ from .response_format import (
 from .json_tool_call_normalization import normalize_json_tool_call_wrappers
 from .completion_mutator import CompletionMutator, apply_completion_mutator
 from .response_healing import maybe_heal_tool_calls_in_completion
+from .responses_bridge_healing import maybe_collapse_responses_bridge_choices
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion, ChatCompletionMessage
@@ -595,6 +596,13 @@ def apply_postprocessing_pipeline(
             fallback_model=refusal_fallback_model,
         )
 
+    # Before prose/tool mutators: LiteLLM may split one Responses turn across
+    # choices[0]=text and choices[1]=tools when n<=1.
+    chat_completion = maybe_collapse_responses_bridge_choices(
+        chat_completion,
+        request_kw=kw,
+    )
+
     chat_completion = apply_completion_mutator(
         chat_completion,
         completion_mutator=completion_mutator,
@@ -633,6 +641,10 @@ def apply_postprocessing_pipeline(
             retry_reason=retry_reason,
         )
         chat_completion = execute_retry(retry_kw, "retry")
+        chat_completion = maybe_collapse_responses_bridge_choices(
+            chat_completion,
+            request_kw=kw,
+        )
         chat_completion = maybe_heal_tool_calls_in_completion(
             chat_completion,
             provider=provider,
@@ -706,6 +718,11 @@ async def apply_postprocessing_pipeline_async(
             fallback_model=refusal_fallback_model,
         )
 
+    chat_completion = maybe_collapse_responses_bridge_choices(
+        chat_completion,
+        request_kw=kw,
+    )
+
     chat_completion = apply_completion_mutator(
         chat_completion,
         completion_mutator=completion_mutator,
@@ -744,6 +761,10 @@ async def apply_postprocessing_pipeline_async(
             retry_reason=retry_reason,
         )
         chat_completion = await execute_retry(retry_kw, "retry")
+        chat_completion = maybe_collapse_responses_bridge_choices(
+            chat_completion,
+            request_kw=kw,
+        )
         chat_completion = maybe_heal_tool_calls_in_completion(
             chat_completion,
             provider=provider,
