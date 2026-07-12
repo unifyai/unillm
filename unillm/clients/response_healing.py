@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import logging
 import re
@@ -444,6 +445,33 @@ def _infer_tool_call_from_content(
     if not candidates:
         return None
 
+    explicit = _infer_explicit_tool_call_from_content(
+        content,
+        tools=tools,
+        original_tool_choice=original_tool_choice,
+    )
+    if explicit is not None:
+        return explicit
+
+    return None
+
+
+def _infer_explicit_tool_call_from_content(
+    content: str,
+    *,
+    tools: Optional[List[dict]],
+    original_tool_choice: Any,
+) -> Optional[tuple[str, dict[str, Any], set[str]]]:
+    """Promote only explicit tool-call markup from assistant content.
+
+    Used for both forced and auto tool_choice. Soft/prose inference is handled
+    separately and must not run under ``tool_choice="auto"``.
+    """
+    forced_name = _forced_tool_name(original_tool_choice)
+    candidates = _candidate_tool_names(tools, only_name=forced_name)
+    if not candidates:
+        return None
+
     xml_call = _find_xml_invoke_tool_call(
         content,
         tools=tools,
@@ -470,7 +498,6 @@ def _infer_tool_call_from_content(
         )
         if structured is not None:
             return structured
-
     return None
 
 
@@ -597,10 +624,13 @@ def _collect_embedded_calls(
 
 def _promoted_tool_call_dicts(
     embedded_calls: list[tuple[str, str]],
+    *,
+    response_id: str | None,
 ) -> list[dict[str, Any]]:
+    response_token = hashlib.sha1((response_id or "").encode()).hexdigest()[:10]
     return [
         ChatCompletionMessageToolCall(
-            id=f"call_healed_{index}",
+            id=f"call_healed_{response_token}_{index}",
             type="function",
             function=Function(name=name, arguments=arguments),
         ).model_dump(warnings=False)
@@ -760,7 +790,10 @@ def try_heal_embedded_tool_calls(
     if not _content_passes_response_format(cleaned_content, response_format_spec):
         return None
 
-    promoted_tool_calls = _promoted_tool_call_dicts(embedded_calls)
+    promoted_tool_calls = _promoted_tool_call_dicts(
+        embedded_calls,
+        response_id=response.id,
+    )
 
     msg.content = cleaned_content
     msg.tool_calls = promoted_tool_calls
@@ -800,12 +833,23 @@ def try_infer_tool_call_from_content(
     if not isinstance(content, str) or not content.strip():
         return None
 
-    inferred = _infer_tool_call_from_content(
-        content,
-        tools=tools,
-        original_tool_choice=original_tool_choice,
-        request_messages=request_messages,
-    )
+    # On auto/None, only promote explicit markup (XML invoke, python-style
+    # calls, structured tool fields). Prose/implicit/argumentless inference
+    # is reserved for forced tool_choice so plain assistant text cannot
+    # fabricate repeated tool calls.
+    if _tool_choice_is_forced(original_tool_choice):
+        inferred = _infer_tool_call_from_content(
+            content,
+            tools=tools,
+            original_tool_choice=original_tool_choice,
+            request_messages=request_messages,
+        )
+    else:
+        inferred = _infer_explicit_tool_call_from_content(
+            content,
+            tools=tools,
+            original_tool_choice=original_tool_choice,
+        )
     if inferred is None:
         return None
 
@@ -816,6 +860,7 @@ def try_infer_tool_call_from_content(
 
     promoted_tool_calls = _promoted_tool_call_dicts(
         [(tool_name, _serialize_arguments(arguments))],
+        response_id=response.id,
     )
 
     msg.content = cleaned_content

@@ -65,7 +65,13 @@ def _tool_call_from_message(message, index: int = 0) -> dict:
     return tool_call.model_dump(warnings=False)
 
 
-def _completion(content: str | None, *, tool_calls=None, finish_reason="stop"):
+def _completion(
+    content: str | None,
+    *,
+    tool_calls=None,
+    finish_reason="stop",
+    response_id="test-id",
+):
     message = ChatCompletionMessage(
         role="assistant",
         content=content,
@@ -73,7 +79,7 @@ def _completion(content: str | None, *, tool_calls=None, finish_reason="stop"):
     )
     choice = Choice(index=0, message=message, finish_reason=finish_reason)
     return ChatCompletion(
-        id="test-id",
+        id=response_id,
         choices=[choice],
         created=1234567890,
         model="deepseek-chat",
@@ -134,6 +140,42 @@ def test_heal_staging_embedded_tool_calls():
     }
     assert json.loads(msg.content) == {"thoughts": thoughts}
     assert healed.choices[0].finish_reason == "tool_calls"
+
+
+def test_healed_tool_call_ids_are_unique_per_response():
+    content = json.dumps(
+        {
+            "tool_calls": [
+                {
+                    "name": "send_unify_message",
+                    "arguments": {"content": "hi", "contact_id": 1},
+                },
+            ],
+        },
+    )
+    first = _completion(content, response_id="resp-1")
+    second = _completion(content, response_id="resp-2")
+
+    healed_first = try_heal_embedded_tool_calls(
+        first,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=None,
+    )
+    healed_second = try_heal_embedded_tool_calls(
+        second,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=None,
+    )
+
+    assert healed_first is not None
+    assert healed_second is not None
+    first_id = _tool_call_from_message(healed_first.choices[0].message)["id"]
+    second_id = _tool_call_from_message(healed_second.choices[0].message)["id"]
+    assert first_id != second_id
 
 
 def test_heal_rejects_unknown_tool_name():
@@ -371,6 +413,22 @@ def test_heal_noop_when_tool_choice_auto_without_tools():
     )
 
     assert healed is None
+
+
+def test_infer_noop_when_tool_choice_auto_from_plain_text():
+    thoughts = "The lookup is still running. I should wait for it to complete."
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider="deepseek",
+        original_tool_choice="auto",
+        tools=[WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred is None
 
 
 def test_heal_validates_response_format_after_strip():
@@ -950,6 +1008,33 @@ def test_infer_tool_with_arguments_from_python_call_substring():
         "content": "Let me check.",
         "contact_id": 1,
     }
+
+
+def test_inferred_tool_call_ids_are_unique_per_response():
+    thoughts = 'send_unify_message(content="Let me check.", contact_id=1)'
+    first = _completion(json.dumps({"thoughts": thoughts}), response_id="infer-1")
+    second = _completion(json.dumps({"thoughts": thoughts}), response_id="infer-2")
+
+    inferred_first = try_infer_tool_call_from_content(
+        first,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[SEND_UNIFY_MESSAGE_TOOL, WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+    inferred_second = try_infer_tool_call_from_content(
+        second,
+        provider="deepseek",
+        original_tool_choice="required",
+        tools=[SEND_UNIFY_MESSAGE_TOOL, WAIT_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+    )
+
+    assert inferred_first is not None
+    assert inferred_second is not None
+    first_id = _tool_call_from_message(inferred_first.choices[0].message)["id"]
+    second_id = _tool_call_from_message(inferred_second.choices[0].message)["id"]
+    assert first_id != second_id
 
 
 def test_infer_python_call_requires_all_required_arguments():
