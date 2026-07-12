@@ -125,7 +125,12 @@ Automatic handling of provider quirks (message format normalization, parameter t
 
 ### Response Caching
 
-Built-in caching to avoid redundant LLM calls:
+Built-in caching to avoid redundant LLM calls. Cache entries are stored as
+NDJSON (`.cache.ndjson`). At runtime UniLLM keeps a **hash→offset sidecar
+index** (`.cache.ndjson.idx`) so processes do not load multi-GB key strings
+into RAM. The first open of a cache file builds or validates the sidecar;
+after consolidating or hand-editing `.cache.ndjson`, delete any `*.ndjson.idx`
+so the next process rebuilds cleanly.
 
 ```python
 client = unillm.Unify("gpt-4o@openai", cache=True)
@@ -269,6 +274,7 @@ unillm/
 │   └── shared_session.py    # Shared aiohttp session management
 ├── caching/                 # Response caching system
 │   ├── base_cache.py        # Abstract cache backend
+│   ├── ndjson_index.py      # Hash→offset index over NDJSON cache files
 │   ├── local_cache.py       # File-based NDJSON cache
 │   └── local_separate_cache.py  # Split read/write cache (for CI)
 ├── endpoints/               # Provider-specific model mappings

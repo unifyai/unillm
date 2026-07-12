@@ -7,6 +7,12 @@ alwaysApply: true
 
 UniLLM tests replay LLM responses from `.cache.ndjson`. Normal CI is **read-only** (`UNILLM_CACHE=true`, `UNILLM_CACHE_BACKEND=local_separate` with write disabled): a cache miss fails loudly instead of calling paid APIs.
 
+Backends index `.cache.ndjson` via a `.cache.ndjson.idx` sidecar (sha256 of
+each key → byte offset) so concurrent local sessions do not each hold the
+full multi-GB key set in RAM. After consolidating or manually editing the
+NDJSON file, delete `*.ndjson.idx` (consolidate scripts do this
+automatically) so the next process rebuilds a matching index.
+
 ## When the cache must be refreshed
 
 Refresh (or re-seed) the cache when a change alters cache keys or LLM payloads, for example:

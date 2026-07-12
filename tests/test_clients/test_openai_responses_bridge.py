@@ -196,7 +196,7 @@ async def test_openai_responses_bridge_cache_and_logging_round_trip(
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
     monkeypatch.setattr(LocalCache, "_cache_dir", str(cache_dir))
-    monkeypatch.setattr(LocalCache, "_cache", None)
+    monkeypatch.setattr(LocalCache, "_store", None)
     monkeypatch.setattr(unillm_logger, "_LOG_DIR", None)
     monkeypatch.setattr(unillm_logger, "_LOG_DIR_CHECKED", False)
     monkeypatch.setenv("UNILLM_LOG_DIR", str(tmp_path / "logs"))
