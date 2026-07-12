@@ -59,14 +59,30 @@ def _get_model_info(model: str) -> dict:
     Raises:
         ValueError: If the model is not found in LiteLLM's pricing data.
     """
-    from .endpoints.utils import ensure_endpoints_imported
+    from .endpoints.utils import (
+        ensure_endpoints_imported,
+        get_model_alias,
+        get_transport_model_alias,
+    )
 
     ensure_endpoints_imported()
-    normalized = _normalize_model_name(model)
-    try:
-        return litellm.get_model_info(normalized)
-    except Exception as e:
-        raise ValueError(f"Could not find pricing info for model '{model}': {e}")
+    candidates: list[str] = []
+    if "@" in model:
+        try:
+            candidates.append(get_model_alias(model))
+            candidates.append(get_transport_model_alias(model))
+        except ValueError:
+            candidates.append(_normalize_model_name(model))
+    else:
+        candidates.append(model)
+
+    last_error: Exception | None = None
+    for candidate in dict.fromkeys(candidates):
+        try:
+            return litellm.get_model_info(candidate)
+        except Exception as e:
+            last_error = e
+    raise ValueError(f"Could not find pricing info for model '{model}': {last_error}")
 
 
 _TIER_RE = re.compile(r"^(.+)_above_(\d+)k?_tokens$")
