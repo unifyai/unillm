@@ -2,8 +2,8 @@
 Caching utilities for the unillm framework.
 
 This module provides a flexible caching system with multiple backends:
-- LocalCache: Simple local file-based caching
-- LocalSeparateCache: Separate read/write caches for better performance
+- LocalCache: Indexed local file-based caching
+- LocalSeparateCache: Separate read/write caches for CI (indexed read file)
 """
 
 from .base_cache import BaseCache

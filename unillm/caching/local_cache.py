@@ -1,33 +1,30 @@
 """
 Local file-based cache implementation.
 
-This cache stores data in a local JSON file and provides fast in-memory access.
+Uses a hash→offset index over the NDJSON file so full cache keys are not
+held in memory after startup.
 """
 
-import json
 import os
-import threading
-import warnings
 from typing import Any, Dict, List, Optional
 
 from .base_cache import BaseCache
-from .ndsjson_cache_utils import _load_ndjson_cache, _write_to_ndjson_cache
+from .ndjson_index import NdjsonIndexedStore
 
 
 class LocalCache(BaseCache):
     """Local file-based cache implementation."""
 
-    _cache: Optional[Dict[str, Any]] = None
+    _store: Optional[NdjsonIndexedStore] = None
     _cache_dir: str = os.environ.get("UNILLM_CACHE_DIR", os.getcwd())
-    _cache_lock: threading.Lock = threading.Lock()
     _cache_filename: str = ".cache.ndjson"
     _enabled: bool = False
 
     @classmethod
     def set_cache_name(cls, name: str) -> None:
-        """Set the cache filename and reset the in-memory cache."""
+        """Set the cache filename and reset the indexed store."""
         cls._cache_filename = name
-        cls._cache = None  # Force reload on next access
+        cls._store = None
 
     @classmethod
     def get_cache_name(cls) -> str:
@@ -55,35 +52,22 @@ class LocalCache(BaseCache):
         res_types: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Store a key-value pair in the cache."""
-        cls._cache[key] = {"value": value, "res_types": res_types}
-        with open(cls.get_cache_filepath(), "a") as f:
-            _write_to_ndjson_cache(f, key, value, res_types)
+        cls._store.append(key, value, res_types)
 
     @classmethod
     def initialize_cache(cls, name: str = None) -> None:
-        """Initialize or load the cache from disk."""
-        cache_filepath = cls.get_cache_filepath(name)
-
-        if cls._cache is None:
-            try:
-                if not os.path.exists(cache_filepath):
-                    with open(cache_filepath, "w") as f:
-                        f.write("")
-
-                with open(cache_filepath, "r") as f:
-                    cls._cache = _load_ndjson_cache(f)
-            except IOError:
-                # File does not exist or can't be read, reinitialize
-                warnings.warn(
-                    f"Cache file {cache_filepath} can't be read, reinitializing",
-                )
-                cls._cache = {}
-                with open(cache_filepath, "w") as f:
-                    f.write("")
+        """Initialize or load the indexed cache from disk."""
+        if cls._store is None:
+            cache_filepath = cls.get_cache_filepath(name)
+            store = NdjsonIndexedStore(cache_filepath)
+            store.open_or_create()
+            cls._store = store
 
     @classmethod
     def list_keys(cls) -> List[str]:
-        return list(cls._cache.keys())
+        if cls._store is None:
+            return []
+        return cls._store.list_keys()
 
     @classmethod
     def retrieve_entry(cls, key: str) -> tuple[Optional[Any], Optional[Dict[str, Any]]]:
@@ -93,32 +77,20 @@ class LocalCache(BaseCache):
         Returns:
             Tuple of (value, type_registry) or (None, None) if not found
         """
-        if cls._cache is None:
+        if cls._store is None:
             return None, None
-
-        value = cls._cache.get(key)
-        if value is None:
+        result = cls._store.get(key)
+        if result is None:
             return None, None
-
-        deserialized_value = json.loads(value["value"])
-        return deserialized_value, value["res_types"]
+        return result
 
     @classmethod
     def has_key(cls, key: str) -> bool:
         """Check if a key exists in the cache."""
-        return cls._cache is not None and key in cls._cache
+        return cls._store is not None and cls._store.has_key(key)
 
     @classmethod
     def remove_entry(cls, key: str) -> None:
-        """Remove an entry and its res_types from the cache."""
-        if cls._cache is not None:
-            item = cls._cache.pop(key, None)
-            if item is not None:
-                with open(cls.get_cache_filepath(), "w") as f:
-                    for key, value in cls._cache.items():
-                        _write_to_ndjson_cache(
-                            f,
-                            key,
-                            value["value"],
-                            value["res_types"],
-                        )
+        """Remove an entry and rebuild the on-disk cache + index."""
+        if cls._store is not None:
+            cls._store.remove(key)

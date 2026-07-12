@@ -20,6 +20,7 @@ from unillm.caching import (
     set_cache_backend,
     get_cache_backend,
 )
+from unillm.caching.ndjson_index import NdjsonIndexedStore, _key_hash
 
 
 class _CacheHandler:
@@ -28,16 +29,16 @@ class _CacheHandler:
     def __init__(self, fname=".test_cache.ndjson"):
         self._fname = fname
         self.test_path = ""
-        self._original_cache = None
+        self._original_store = None
         self._original_cache_dir = ""
         self._original_cache_name = ""
 
     def __enter__(self):
         # Store original cache state
-        self._original_cache = LocalCache._cache
+        self._original_store = LocalCache._store
         self._original_cache_dir = LocalCache._cache_dir
         self._original_cache_name = LocalCache.get_cache_name()
-        LocalCache._cache = None
+        LocalCache._store = None
 
         # Use temp directory for isolation
         self.test_path = os.path.join(tempfile.gettempdir(), self._fname)
@@ -46,15 +47,21 @@ class _CacheHandler:
 
         if os.path.exists(self.test_path):
             os.remove(self.test_path)
+        idx_path = f"{self.test_path}.idx"
+        if os.path.exists(idx_path):
+            os.remove(idx_path)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         if os.path.exists(self.test_path):
             os.remove(self.test_path)
-        # Restore original cache state (set_cache_name resets the in-memory
-        # cache, so it must run before the _cache assignment)
+        idx_path = f"{self.test_path}.idx"
+        if os.path.exists(idx_path):
+            os.remove(idx_path)
+        # Restore original cache state (set_cache_name resets the store,
+        # so it must run before the _store assignment)
         LocalCache.set_cache_name(self._original_cache_name)
-        LocalCache._cache = self._original_cache
+        LocalCache._store = self._original_store
         LocalCache._cache_dir = self._original_cache_dir
 
 
@@ -146,7 +153,7 @@ class TestLocalCache:
             LocalCache.store_entry(key="persistent", value='"data"', res_types=None)
 
             # Force cache reload
-            LocalCache._cache = None
+            LocalCache._store = None
             LocalCache.initialize_cache()
 
             assert LocalCache.has_key("persistent")
@@ -345,3 +352,156 @@ class TestMalformedCacheEntries:
                 kw={"arg": "value"},
             )
             assert result is None
+
+
+class TestNdjsonIndexedStore:
+    """Tests for hash→offset indexed NDJSON storage."""
+
+    def test_sidecar_created_and_reused(self):
+        with _CacheHandler() as handler:
+            LocalCache.initialize_cache()
+            LocalCache.store_entry(key="k1", value='"v1"', res_types=None)
+            idx_path = f"{handler.test_path}.idx"
+            assert os.path.exists(idx_path)
+
+            LocalCache._store = None
+            LocalCache.initialize_cache()
+            assert LocalCache.has_key("k1")
+            assert len(LocalCache._store) == 1
+
+    def test_sidecar_rebuilds_when_file_changes(self):
+        with _CacheHandler() as handler:
+            LocalCache.initialize_cache()
+            LocalCache.store_entry(key="k1", value='"v1"', res_types=None)
+
+            with open(handler.test_path, "a", encoding="utf-8") as f:
+                f.write(
+                    '{"key": "k2", "value": "\\"v2\\"", "res_types": null}\n',
+                )
+
+            LocalCache._store = None
+            LocalCache.initialize_cache()
+            assert LocalCache.has_key("k1")
+            assert LocalCache.has_key("k2")
+
+    def test_duplicate_key_last_wins(self):
+        with _CacheHandler() as handler:
+            with open(handler.test_path, "w", encoding="utf-8") as f:
+                f.write(
+                    '{"key": "dup", "value": "\\"first\\"", "res_types": null}\n',
+                )
+                f.write(
+                    '{"key": "dup", "value": "\\"second\\"", "res_types": null}\n',
+                )
+
+            LocalCache.initialize_cache()
+            assert LocalCache.has_key("dup")
+            value, _ = LocalCache.retrieve_entry("dup")
+            assert value == "second"
+            assert len(LocalCache._store) == 1
+
+    def test_append_updates_index(self):
+        with _CacheHandler():
+            LocalCache.initialize_cache()
+            LocalCache.store_entry(key="a", value='"1"', res_types=None)
+            LocalCache.store_entry(key="b", value='"2"', res_types=None)
+            assert LocalCache.has_key("a")
+            assert LocalCache.has_key("b")
+            assert len(LocalCache._store) == 2
+
+    def test_remove_rebuilds_file_and_index(self):
+        with _CacheHandler() as handler:
+            LocalCache.initialize_cache()
+            LocalCache.store_entry(key="keep", value='"1"', res_types=None)
+            LocalCache.store_entry(key="drop", value='"2"', res_types=None)
+            LocalCache.remove_entry("drop")
+            assert LocalCache.has_key("keep")
+            assert not LocalCache.has_key("drop")
+            with open(handler.test_path, encoding="utf-8") as f:
+                body = f.read()
+            assert "drop" not in body
+            assert "keep" in body
+
+    def test_large_keys_not_retained_in_store_dict(self):
+        """Index holds digests/offsets only — not the multi-MB key strings."""
+        with _CacheHandler() as handler:
+            big = "x" * (2 * 1024 * 1024)
+            with open(handler.test_path, "w", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(
+                        {
+                            "key": big,
+                            "value": json.dumps({"ok": True}),
+                            "res_types": None,
+                        },
+                    )
+                    + "\n",
+                )
+
+            store = NdjsonIndexedStore(handler.test_path)
+            store.open_or_create()
+            LocalCache._store = store
+
+            assert store.has_key(big)
+            assert big not in store._offsets
+            assert _key_hash(big) in store._offsets
+            assert store._keys_cache is None
+            value, _ = store.get(big)
+            assert value == {"ok": True}
+
+    def test_read_only_miss_closest_key_path(self):
+        with _CacheHandler():
+            LocalCache.initialize_cache()
+            LocalCache.store_entry(
+                key='completion_{"model": "gpt-4", "messages": []}',
+                value='"hit"',
+                res_types=None,
+            )
+            with pytest.raises(Exception) as exc_info:
+                _get_cache(
+                    fn_name="completion",
+                    kw={
+                        "model": "gpt-4",
+                        "messages": [{"role": "user", "content": "x"}],
+                    },
+                    raise_on_empty=True,
+                )
+            assert exc_info.value.__cause__ is not None
+            assert "closest match" in str(exc_info.value.__cause__)
+
+
+class TestLocalSeparateIndexedRead:
+    """LocalSeparateCache uses an indexed read store."""
+
+    def test_read_hit_and_promotion(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            original_dir = LocalSeparateCache._cache_dir
+            original_read = LocalSeparateCache._cache_name_read
+            original_write = LocalSeparateCache._cache_name_write
+            original_store = LocalSeparateCache._read_store
+            original_write_cache = LocalSeparateCache._cache_write
+            LocalSeparateCache._cache_dir = tmp
+            LocalSeparateCache.set_cache_name("sep_test")
+            LocalSeparateCache._read_store = None
+            LocalSeparateCache._cache_write = None
+
+            read_path = LocalSeparateCache.get_cache_filepath(
+                LocalSeparateCache._cache_name_read,
+            )
+            with open(read_path, "w", encoding="utf-8") as f:
+                f.write(
+                    '{"key": "promo", "value": "\\"from_read\\"", "res_types": null}\n',
+                )
+
+            LocalSeparateCache.initialize_cache()
+            assert LocalSeparateCache.has_key("promo")
+            value, _ = LocalSeparateCache.retrieve_entry("promo")
+            assert value == "from_read"
+            assert "promo" in LocalSeparateCache._cache_write
+        finally:
+            LocalSeparateCache._cache_dir = original_dir
+            LocalSeparateCache._cache_name_read = original_read
+            LocalSeparateCache._cache_name_write = original_write
+            LocalSeparateCache._read_store = original_store
+            LocalSeparateCache._cache_write = original_write_cache
