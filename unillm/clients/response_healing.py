@@ -790,7 +790,10 @@ def try_heal_embedded_tool_calls(
     if not _content_passes_response_format(cleaned_content, response_format_spec):
         return None
 
-    promoted_tool_calls = _promoted_tool_call_dicts(embedded_calls, response_id=response.id)
+    promoted_tool_calls = _promoted_tool_call_dicts(
+        embedded_calls,
+        response_id=response.id,
+    )
 
     msg.content = cleaned_content
     msg.tool_calls = promoted_tool_calls
