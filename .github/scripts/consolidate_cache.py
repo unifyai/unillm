@@ -66,6 +66,17 @@ def concatenate_files(
     with output_file.open("w", encoding="utf-8") as out_f:
         out_f.writelines(merged_lines)
 
+    # Indexed backends rebuild from fingerprint; drop any stale sidecar so
+    # the next process does not serve offsets against the replaced file.
+    for sidecar in (
+        Path(f"{output_file}.idx"),
+        Path(f"{CACHE_WRITE_FILE_NAME}.idx"),
+        Path(f"{CACHE_READ_FILE_NAME}.idx"),
+    ):
+        if sidecar.exists():
+            sidecar.unlink()
+            print(f"Removed stale index sidecar: {sidecar}")
+
     return len(merged_lines)
 
 

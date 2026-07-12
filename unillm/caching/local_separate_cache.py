@@ -1,16 +1,24 @@
+"""
+Local cache with separate read and write storage.
+
+The shared read file (`.cache.ndjson`) is indexed lazily. The write file
+(`.cache_write.ndjson`) stays a small in-memory dict plus append-only
+file, matching CI shard behavior.
+"""
+
 import json
 import os
-import warnings
 from typing import Any, Dict, List, Optional
 
 from .base_cache import BaseCache
-from .ndsjson_cache_utils import _load_ndjson_cache, _write_to_ndjson_cache
+from .ndjson_index import NdjsonIndexedStore
+from .ndsjson_cache_utils import _write_to_ndjson_cache
 
 
 class LocalSeparateCache(BaseCache):
     """Local cache with separate read and write storage for better performance."""
 
-    _cache_read: Optional[Dict[str, Any]] = None
+    _read_store: Optional[NdjsonIndexedStore] = None
     _cache_write: Optional[Dict[str, Any]] = None
     _cache_dir: str = os.environ.get("UNILLM_CACHE_DIR", os.getcwd())
     _cache_name_read: str = ".cache.ndjson"
@@ -22,8 +30,8 @@ class LocalSeparateCache(BaseCache):
         """Set the cache names and reset both caches."""
         cls._cache_name_read = f"{name}_read"
         cls._cache_name_write = f"{name}_write"
-        cls._cache_read = None  # Force reload of read cache
-        cls._cache_write = None  # Force reload of write cache
+        cls._read_store = None
+        cls._cache_write = None
 
     @classmethod
     def get_cache_name(cls) -> str:
@@ -63,26 +71,20 @@ class LocalSeparateCache(BaseCache):
     @classmethod
     def initialize_cache(cls, name: str = None) -> None:
         """Initialize both read and write caches."""
-        # Always initialize the write cache
         if cls._cache_write is None:
             cls._cache_write = {}
 
-        # Initialize the read cache
-        if cls._cache_read is None:
-            cls._cache_read = {}
-            try:
-                with open(cls.get_cache_filepath(cls._cache_name_read), "r") as f:
-                    cls._cache_read = _load_ndjson_cache(f)
-            except IOError:
-                # File can't be read, keep empty cache
-                warnings.warn(
-                    f"Cache file {cls.get_cache_filepath(cls._cache_name_read)} does not exist or can't be read.",
-                )
-                cls._cache_read = {}
+        if cls._read_store is None:
+            read_path = cls.get_cache_filepath(cls._cache_name_read)
+            store = NdjsonIndexedStore(read_path)
+            store.open_or_create()
+            cls._read_store = store
 
     @classmethod
     def list_keys(cls) -> List[str]:
-        return list(cls._cache_read.keys()) + list(cls._cache_write.keys())
+        write_keys = list(cls._cache_write.keys()) if cls._cache_write else []
+        read_keys = cls._read_store.list_keys() if cls._read_store else []
+        return read_keys + write_keys
 
     @classmethod
     def retrieve_entry(cls, key: str) -> tuple[Optional[Any], Optional[Dict[str, Any]]]:
@@ -92,34 +94,31 @@ class LocalSeparateCache(BaseCache):
         Returns:
             Tuple of (value, res_types) or (None, None) if not found
         """
-        # First check the write cache
         if cls._cache_write and key in cls._cache_write:
             value = cls._cache_write[key]
             deserialized_value = json.loads(value["value"])
             return deserialized_value, value["res_types"]
 
-        # If not found in write cache, check the read cache
-        if cls._cache_read and key in cls._cache_read:
-            value = cls._cache_read[key]
-            res_types = value["res_types"]
-
-            deserialized_value = json.loads(value["value"])
-            # Promote to write cache for faster future access
-            cls.store_entry(
-                key=key,
-                value=cls.serialize_object(deserialized_value),
-                res_types=res_types,
-            )
-            return deserialized_value, res_types
+        if cls._read_store is not None:
+            result = cls._read_store.get(key)
+            if result is not None:
+                deserialized_value, res_types = result
+                # Promote to write cache for faster future access
+                cls.store_entry(
+                    key=key,
+                    value=cls.serialize_object(deserialized_value),
+                    res_types=res_types,
+                )
+                return deserialized_value, res_types
 
         return None, None
 
     @classmethod
     def has_key(cls, key: str) -> bool:
         """Check if a key exists in either cache."""
-        return (cls._cache_write is not None and key in cls._cache_write) or (
-            cls._cache_read is not None and key in cls._cache_read
-        )
+        if cls._cache_write is not None and key in cls._cache_write:
+            return True
+        return cls._read_store is not None and cls._read_store.has_key(key)
 
     @classmethod
     def remove_entry(cls, key: str) -> None:
@@ -128,13 +127,13 @@ class LocalSeparateCache(BaseCache):
             item = cls._cache_write.pop(key, None)
             if item is not None:
                 with open(cls.get_cache_filepath(cls._cache_name_write), "w") as f:
-                    for key, value in cls._cache_write.items():
+                    for write_key, value in cls._cache_write.items():
                         _write_to_ndjson_cache(
                             f,
-                            key,
+                            write_key,
                             value["value"],
                             value["res_types"],
                         )
 
-        if cls._cache_read:
-            cls._cache_read.pop(key, None)
+        if cls._read_store is not None:
+            cls._read_store.remove(key)
