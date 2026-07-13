@@ -187,6 +187,19 @@ def _normalize_assistant_message_content(chat_completion: Any) -> bool:
     return True
 
 
+def _cancel_inflight_task(task: asyncio.Task) -> None:
+    """Request cancellation without delaying the limit-denial response."""
+    task.cancel()
+
+    def consume_result(completed_task: asyncio.Task) -> None:
+        try:
+            completed_task.result()
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    task.add_done_callback(consume_result)
+
+
 def _safe_deduct_credits(
     amount: float,
     *,
@@ -323,6 +336,55 @@ def _route_openai_tool_reasoning_via_responses(
         kw["model"] = f"{_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX}{public}"
     kw["tools"] = _copy_tools_for_responses_bridge(tools)
     _allow_responses_bridge_params(kw)
+
+
+def _openrouter_chat_fallback_kw(kw: dict) -> dict | None:
+    """Map ``openrouter/responses/...`` → ``openrouter/...`` for empty-output fallback."""
+    model = str(kw.get("model") or "")
+    if not model.startswith(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX):
+        return None
+    fallback = dict(kw)
+    fallback["model"] = (
+        f"{_OPENROUTER_MODEL_PREFIX}"
+        f"{model[len(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX) :]}"
+    )
+    return fallback
+
+
+def _is_empty_responses_output_error(exc: BaseException) -> bool:
+    return "unknown items in responses api response" in str(exc).lower()
+
+
+async def _acompletion_with_empty_responses_fallback(
+    *,
+    shared_session: Any,
+    client: Any,
+    **kw: Any,
+) -> Any:
+    """Call ``litellm.acompletion``, falling back to OpenRouter chat on empty Responses.
+
+    OpenRouter's Responses endpoint occasionally returns an empty ``output``
+    array that LiteLLM surfaces as ``APIConnectionError``. Retries alone keep
+    hitting the same empty Responses path; drop to chat completions once.
+    """
+    from ..helpers import retry_transient_400_async
+
+    async def _call(current_kw: dict) -> Any:
+        return await litellm.acompletion(
+            shared_session=shared_session,
+            client=client,
+            **current_kw,
+        )
+
+    try:
+        return await retry_transient_400_async(lambda: _call(kw))
+    except litellm.APIConnectionError as e:
+        if not _is_empty_responses_output_error(e):
+            raise
+        fallback_kw = _openrouter_chat_fallback_kw(kw)
+        if fallback_kw is None:
+            raise
+        return await retry_transient_400_async(lambda: _call(fallback_kw))
 
 
 def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
@@ -1540,6 +1602,15 @@ class Unify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ) as span:
+                if is_limit_check_enabled():
+                    limit_request = LimitCheckRequest(
+                        model=accounting_model,
+                        endpoint=endpoint,
+                    )
+                    limit_result = check_limits_sync(limit_request)
+                    if not limit_result.allowed:
+                        raise SpendingLimitExceededError(limit_result)
+
                 if is_cache_enabled:
                     chat_completion = _get_cache(
                         fn_name="chat.completions.create",
@@ -1551,16 +1622,6 @@ class Unify(_UniClient):
                     )
                     in_cache = True if chat_completion is not None else False
                 if chat_completion is None:
-                    # Check spending limits before making LLM call (cache miss)
-                    if is_limit_check_enabled():
-                        limit_request = LimitCheckRequest(
-                            model=accounting_model,
-                            endpoint=endpoint,
-                        )
-                        limit_result = check_limits_sync(limit_request)
-                        if not limit_result.allowed:
-                            raise SpendingLimitExceededError(limit_result)
-
                     try:
                         chat_completion = retry_transient_400_sync(
                             lambda: litellm.completion(**transport_kw),
@@ -2033,12 +2094,10 @@ class AsyncUnify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ):
-                completion = await retry_transient_400_async(
-                    lambda: litellm.acompletion(
-                        shared_session=get_shared_session(),
-                        client=self._get_async_http_client(),
-                        **transport_kw,
-                    ),
+                completion = await _acompletion_with_empty_responses_fallback(
+                    shared_session=get_shared_session(),
+                    client=self._get_async_http_client(),
+                    **transport_kw,
                 )
                 _normalize_assistant_message_content(completion)
         finally:
@@ -2187,6 +2246,16 @@ class AsyncUnify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ) as span:
+                if is_limit_check_enabled():
+                    limit_request = LimitCheckRequest(
+                        model=accounting_model,
+                        endpoint=endpoint,
+                    )
+                    limit_task = asyncio.create_task(
+                        check_limits(limit_request),
+                        name="spending_limit_check",
+                    )
+
                 if is_cache_enabled:
                     chat_completion = _get_cache(
                         fn_name="chat.completions.create",
@@ -2198,26 +2267,12 @@ class AsyncUnify(_UniClient):
                     )
                     in_cache = True if chat_completion is not None else False
                 if chat_completion is None:
-                    # Start limit check and LLM call in parallel for true in-flight
-                    # cancellation. Limit check is fast (~50ms), LLM call is slow.
-                    if is_limit_check_enabled():
-                        limit_request = LimitCheckRequest(
-                            model=accounting_model,
-                            endpoint=endpoint,
-                        )
-                        limit_task = asyncio.create_task(
-                            check_limits(limit_request),
-                            name="spending_limit_check",
-                        )
-
                     # Start LLM call immediately (don't wait for limit check)
                     llm_task = asyncio.create_task(
-                        retry_transient_400_async(
-                            lambda: litellm.acompletion(
-                                shared_session=get_shared_session(),
-                                client=self._get_async_http_client(),
-                                **transport_kw,
-                            ),
+                        _acompletion_with_empty_responses_fallback(
+                            shared_session=get_shared_session(),
+                            client=self._get_async_http_client(),
+                            **transport_kw,
                         ),
                         name="llm_call",
                     )
@@ -2228,12 +2283,7 @@ class AsyncUnify(_UniClient):
                             limit_result = await limit_task
                             limit_task = None  # Mark as consumed
                             if not limit_result.allowed:
-                                # Cancel in-flight LLM call
-                                llm_task.cancel()
-                                try:
-                                    await llm_task
-                                except asyncio.CancelledError:
-                                    pass
+                                _cancel_inflight_task(llm_task)
                                 llm_task = None
                                 raise SpendingLimitExceededError(limit_result)
 
@@ -2245,6 +2295,11 @@ class AsyncUnify(_UniClient):
                         llm_error = Exception(e.message)
                         raise llm_error
                 else:
+                    if limit_task is not None:
+                        limit_result = await limit_task
+                        limit_task = None
+                        if not limit_result.allowed:
+                            raise SpendingLimitExceededError(limit_result)
                     _normalize_assistant_message_content(chat_completion)
 
                 # Determine cache status after resolution
