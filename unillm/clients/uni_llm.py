@@ -187,6 +187,19 @@ def _normalize_assistant_message_content(chat_completion: Any) -> bool:
     return True
 
 
+def _cancel_inflight_task(task: asyncio.Task) -> None:
+    """Request cancellation without delaying the limit-denial response."""
+    task.cancel()
+
+    def consume_result(completed_task: asyncio.Task) -> None:
+        try:
+            completed_task.result()
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    task.add_done_callback(consume_result)
+
+
 def _safe_deduct_credits(
     amount: float,
     *,
@@ -1540,6 +1553,15 @@ class Unify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ) as span:
+                if is_limit_check_enabled():
+                    limit_request = LimitCheckRequest(
+                        model=accounting_model,
+                        endpoint=endpoint,
+                    )
+                    limit_result = check_limits_sync(limit_request)
+                    if not limit_result.allowed:
+                        raise SpendingLimitExceededError(limit_result)
+
                 if is_cache_enabled:
                     chat_completion = _get_cache(
                         fn_name="chat.completions.create",
@@ -1551,16 +1573,6 @@ class Unify(_UniClient):
                     )
                     in_cache = True if chat_completion is not None else False
                 if chat_completion is None:
-                    # Check spending limits before making LLM call (cache miss)
-                    if is_limit_check_enabled():
-                        limit_request = LimitCheckRequest(
-                            model=accounting_model,
-                            endpoint=endpoint,
-                        )
-                        limit_result = check_limits_sync(limit_request)
-                        if not limit_result.allowed:
-                            raise SpendingLimitExceededError(limit_result)
-
                     try:
                         chat_completion = retry_transient_400_sync(
                             lambda: litellm.completion(**transport_kw),
@@ -2187,6 +2199,16 @@ class AsyncUnify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ) as span:
+                if is_limit_check_enabled():
+                    limit_request = LimitCheckRequest(
+                        model=accounting_model,
+                        endpoint=endpoint,
+                    )
+                    limit_task = asyncio.create_task(
+                        check_limits(limit_request),
+                        name="spending_limit_check",
+                    )
+
                 if is_cache_enabled:
                     chat_completion = _get_cache(
                         fn_name="chat.completions.create",
@@ -2198,18 +2220,6 @@ class AsyncUnify(_UniClient):
                     )
                     in_cache = True if chat_completion is not None else False
                 if chat_completion is None:
-                    # Start limit check and LLM call in parallel for true in-flight
-                    # cancellation. Limit check is fast (~50ms), LLM call is slow.
-                    if is_limit_check_enabled():
-                        limit_request = LimitCheckRequest(
-                            model=accounting_model,
-                            endpoint=endpoint,
-                        )
-                        limit_task = asyncio.create_task(
-                            check_limits(limit_request),
-                            name="spending_limit_check",
-                        )
-
                     # Start LLM call immediately (don't wait for limit check)
                     llm_task = asyncio.create_task(
                         retry_transient_400_async(
@@ -2228,12 +2238,7 @@ class AsyncUnify(_UniClient):
                             limit_result = await limit_task
                             limit_task = None  # Mark as consumed
                             if not limit_result.allowed:
-                                # Cancel in-flight LLM call
-                                llm_task.cancel()
-                                try:
-                                    await llm_task
-                                except asyncio.CancelledError:
-                                    pass
+                                _cancel_inflight_task(llm_task)
                                 llm_task = None
                                 raise SpendingLimitExceededError(limit_result)
 
@@ -2245,6 +2250,11 @@ class AsyncUnify(_UniClient):
                         llm_error = Exception(e.message)
                         raise llm_error
                 else:
+                    if limit_task is not None:
+                        limit_result = await limit_task
+                        limit_task = None
+                        if not limit_result.allowed:
+                            raise SpendingLimitExceededError(limit_result)
                     _normalize_assistant_message_content(chat_completion)
 
                 # Determine cache status after resolution
