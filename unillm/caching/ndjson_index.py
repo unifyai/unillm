@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 import warnings
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
@@ -34,10 +35,17 @@ def delete_index_sidecar(cache_path: str) -> None:
         os.remove(idx_path)
     except FileNotFoundError:
         pass
-    try:
-        os.remove(f"{idx_path}.tmp")
-    except FileNotFoundError:
-        pass
+    # Historical shared temp path plus per-process mkstemp leftovers.
+    parent = os.path.dirname(idx_path) or "."
+    base = os.path.basename(idx_path)
+    for name in os.listdir(parent):
+        if name == f"{base}.tmp" or (
+            name.startswith(f"{base}.") and name.endswith(".tmp")
+        ):
+            try:
+                os.remove(os.path.join(parent, name))
+            except FileNotFoundError:
+                pass
 
 
 class NdjsonIndexedStore:
@@ -325,10 +333,26 @@ class NdjsonIndexedStore:
             "size": fp[1],
             "offsets": self._offsets,
         }
-        tmp_path = f"{self.idx_path}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, separators=(",", ":"))
-        os.replace(tmp_path, self.idx_path)
+        # Unique temp path per writer: parallel pytest workers previously
+        # shared `{idx}.tmp`, so one process's os.replace could delete the
+        # other's temp before the second replace ran (FileNotFoundError).
+        parent = os.path.dirname(self.idx_path) or "."
+        os.makedirs(parent, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=f"{os.path.basename(self.idx_path)}.",
+            suffix=".tmp",
+            dir=parent,
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, separators=(",", ":"))
+            os.replace(tmp_path, self.idx_path)
+        except Exception:
+            try:
+                os.remove(tmp_path)
+            except FileNotFoundError:
+                pass
+            raise
 
     def _read_entry_at(
         self,
