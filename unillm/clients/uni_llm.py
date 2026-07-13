@@ -338,6 +338,55 @@ def _route_openai_tool_reasoning_via_responses(
     _allow_responses_bridge_params(kw)
 
 
+def _openrouter_chat_fallback_kw(kw: dict) -> dict | None:
+    """Map ``openrouter/responses/...`` → ``openrouter/...`` for empty-output fallback."""
+    model = str(kw.get("model") or "")
+    if not model.startswith(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX):
+        return None
+    fallback = dict(kw)
+    fallback["model"] = (
+        f"{_OPENROUTER_MODEL_PREFIX}"
+        f"{model[len(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX) :]}"
+    )
+    return fallback
+
+
+def _is_empty_responses_output_error(exc: BaseException) -> bool:
+    return "unknown items in responses api response" in str(exc).lower()
+
+
+async def _acompletion_with_empty_responses_fallback(
+    *,
+    shared_session: Any,
+    client: Any,
+    **kw: Any,
+) -> Any:
+    """Call ``litellm.acompletion``, falling back to OpenRouter chat on empty Responses.
+
+    OpenRouter's Responses endpoint occasionally returns an empty ``output``
+    array that LiteLLM surfaces as ``APIConnectionError``. Retries alone keep
+    hitting the same empty Responses path; drop to chat completions once.
+    """
+    from ..helpers import retry_transient_400_async
+
+    async def _call(current_kw: dict) -> Any:
+        return await litellm.acompletion(
+            shared_session=shared_session,
+            client=client,
+            **current_kw,
+        )
+
+    try:
+        return await retry_transient_400_async(lambda: _call(kw))
+    except litellm.APIConnectionError as e:
+        if not _is_empty_responses_output_error(e):
+            raise
+        fallback_kw = _openrouter_chat_fallback_kw(kw)
+        if fallback_kw is None:
+            raise
+        return await retry_transient_400_async(lambda: _call(fallback_kw))
+
+
 def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
     """Preserve OpenAI-compatible params that LiteLLM provider metadata omits."""
     current = kw.get("allowed_openai_params")
@@ -2045,12 +2094,10 @@ class AsyncUnify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ):
-                completion = await retry_transient_400_async(
-                    lambda: litellm.acompletion(
-                        shared_session=get_shared_session(),
-                        client=self._get_async_http_client(),
-                        **transport_kw,
-                    ),
+                completion = await _acompletion_with_empty_responses_fallback(
+                    shared_session=get_shared_session(),
+                    client=self._get_async_http_client(),
+                    **transport_kw,
                 )
                 _normalize_assistant_message_content(completion)
         finally:
@@ -2222,12 +2269,10 @@ class AsyncUnify(_UniClient):
                 if chat_completion is None:
                     # Start LLM call immediately (don't wait for limit check)
                     llm_task = asyncio.create_task(
-                        retry_transient_400_async(
-                            lambda: litellm.acompletion(
-                                shared_session=get_shared_session(),
-                                client=self._get_async_http_client(),
-                                **transport_kw,
-                            ),
+                        _acompletion_with_empty_responses_fallback(
+                            shared_session=get_shared_session(),
+                            client=self._get_async_http_client(),
+                            **transport_kw,
                         ),
                         name="llm_call",
                     )
