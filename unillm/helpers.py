@@ -69,6 +69,9 @@ _TRANSIENT_400_ERROR_PATTERNS = (
     "something went wrong reading your request",
     "service temporarily unavailable",
     "temporarily unavailable, please try again",
+    # OpenRouter Responses occasionally returns empty/unknown output items
+    # that LiteLLM surfaces as a connection-style parse error.
+    "unknown items in responses api response",
 )
 
 # Exception types that are inherently transient (server-side) and always
@@ -77,6 +80,7 @@ _TRANSIENT_SERVER_EXCEPTIONS = (
     litellm.ServiceUnavailableError,
     litellm.InternalServerError,
     litellm.RateLimitError,
+    litellm.APIConnectionError,
 )
 
 # Base backoff delay in seconds for transient server errors (doubles each attempt).
