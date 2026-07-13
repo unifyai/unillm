@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "jsonschema>=4.25.0",
-    "litellm==1.88.0",
+    "litellm==1.92.0",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
     "unisdk",
