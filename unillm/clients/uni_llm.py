@@ -746,9 +746,8 @@ class _UniClient(_Client, abc.ABC):
             of running the LLM query. If "write" then the cache will only be written
             to, if "read" then the cache will be read from if a cache is available but
             will not write, and if "read-only" then the argument must be present in the
-            cache, else an exception will be raised. Finally, an appending "-closest"
-            will read the closest match from the cache, and overwrite it if cache writing
-            is enabled. This argument only has any effect when stream=False.
+            cache, else an exception will be raised. This argument only has any effect
+            when stream=False.
 
             origin: An optional string tag for identifying the origin of LLM
             calls in log files, OTel spans, and events. Useful when multiple
@@ -1216,9 +1215,8 @@ class _UniClient(_Client, abc.ABC):
             of running the LLM query. If "write" then the cache will only be written
             to, if "read" then the cache will be read from if a cache is available but
             will not write, and if "read-only" then the argument must be present in the
-            cache, else an exception will be raised. Finally, an appending "-closest"
-            will read the closest match from the cache, and overwrite it if cache writing
-            is enabled. This argument only has any effect when stream=False.
+            cache, else an exception will be raised. This argument only has any effect
+            when stream=False.
 
             origin: An optional string tag for identifying the origin of this
             LLM call in log files, OTel spans, and events.
@@ -1579,12 +1577,6 @@ class Unify(_UniClient):
         if pending_path and self._on_log_file_pending:
             self._on_log_file_pending(pending_path)
 
-        if isinstance(cache, str) and cache.endswith("-closest"):
-            cache = cache.removesuffix("-closest")
-            read_closest = True
-        else:
-            read_closest = False
-
         # Initialize before try block so finally can access them
         chat_completion = None
         is_cache_enabled = cache in [True, "both", "read", "read-only"]
@@ -1616,8 +1608,6 @@ class Unify(_UniClient):
                         fn_name="chat.completions.create",
                         kw=kw,
                         raise_on_empty=cache == "read-only",
-                        read_closest=read_closest,
-                        delete_closest=read_closest,
                         backend=cache_backend,
                     )
                     in_cache = True if chat_completion is not None else False
@@ -1735,7 +1725,7 @@ class Unify(_UniClient):
 
         # Cache the FINAL response (after any post-processing), not intermediate ones
         did_postprocess = chat_completion is not original_completion
-        if (chat_completion is not None or read_closest) and cache in [
+        if chat_completion is not None and cache in [
             True,
             "both",
             "write",
@@ -2219,12 +2209,6 @@ class AsyncUnify(_UniClient):
         if pending_path and self._on_log_file_pending:
             self._on_log_file_pending(pending_path)
 
-        if isinstance(cache, str) and cache.endswith("-closest"):
-            cache = cache.removesuffix("-closest")
-            read_closest = True
-        else:
-            read_closest = False
-
         # Initialize before try block so finally can access them
         chat_completion = None
         is_cache_enabled = cache in [True, "both", "read", "read-only"]
@@ -2261,8 +2245,6 @@ class AsyncUnify(_UniClient):
                         fn_name="chat.completions.create",
                         kw=kw,
                         raise_on_empty=cache == "read-only",
-                        read_closest=read_closest,
-                        delete_closest=read_closest,
                         backend=cache_backend,
                     )
                     in_cache = True if chat_completion is not None else False
@@ -2427,7 +2409,7 @@ class AsyncUnify(_UniClient):
 
         # Cache the FINAL response (after any post-processing), not intermediate ones
         did_postprocess = chat_completion is not original_completion
-        if (chat_completion is not None or read_closest) and cache in [
+        if chat_completion is not None and cache in [
             True,
             "both",
             "write",
