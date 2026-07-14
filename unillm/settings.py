@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     # Controls whether LLM responses are cached locally.
     # - UNILLM_CACHE=true / false: Enable or disable caching (default: false)
     # - UNILLM_CACHE=<mode>: Fine-grained cache mode
-    #   Modes: both, write, read, read-only, read-closest
+    #   Modes: both, write, read, read-only
     UNILLM_CACHE: CacheParam = False
 
     # ─────────────────────────────────────────────────────────────────────────
