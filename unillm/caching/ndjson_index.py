@@ -193,7 +193,7 @@ class NdjsonIndexedStore:
         return True
 
     def list_keys(self) -> List[str]:
-        """Scan the file for full keys (used only for miss diagnostics)."""
+        """Scan the file for full keys (introspection / tests)."""
         self._ensure_fresh()
         if self._keys_cache is not None:
             return list(self._keys_cache)

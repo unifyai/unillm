@@ -5,7 +5,6 @@ CACHE_MODES = (
     "write",
     "read",
     "read-only",
-    "read-closest",
 )
 
 CacheMode = Literal[
@@ -13,7 +12,6 @@ CacheMode = Literal[
     "write",
     "read",
     "read-only",
-    "read-closest",
 ]
 
 CacheParam = Union[bool, CacheMode]
