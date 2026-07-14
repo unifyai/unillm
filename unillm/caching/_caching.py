@@ -5,7 +5,6 @@ This module provides decorators and utilities for caching function results
 with multiple backend options and flexible caching modes.
 """
 
-import difflib
 import json
 import threading
 from typing import Any, Dict, Optional, Type
@@ -75,36 +74,12 @@ def is_caching_enabled() -> bool:
     return CACHING_ENABLED
 
 
-def _minimal_char_diff(a: str, b: str, context: int = 5) -> str:
-    matcher = difflib.SequenceMatcher(None, a, b)
-    diff_parts = []
-
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal":
-            segment = a[i1:i2]
-            # If the segment is too long, show only a context at the beginning and end.
-            if len(segment) > 2 * context:
-                diff_parts.append(segment[:context] + "..." + segment[-context:])
-            else:
-                diff_parts.append(segment)
-        elif tag == "replace":
-            diff_parts.append(f"[{a[i1:i2]}|{b[j1:j2]}]")
-        elif tag == "delete":
-            diff_parts.append(f"[-{a[i1:i2]}-]")
-        elif tag == "insert":
-            diff_parts.append(f"[+{b[j1:j2]}+]")
-
-    return "".join(diff_parts)
-
-
 @record_get_cache
 def _get_cache(
     fn_name: str,
     kw: Dict[str, Any],
     filename: str = None,
     raise_on_empty: bool = False,
-    read_closest: bool = False,
-    delete_closest: bool = False,
     backend: Optional[str] = None,
 ) -> Optional[Any]:
     global CACHE_LOCK
@@ -122,34 +97,15 @@ def _get_cache(
         kw_str = BaseCache.serialize_object(kw)
         cache_str = f"{fn_name}_{kw_str}"
         if not current_backend.has_key(cache_str):
-            if raise_on_empty or read_closest:
-                keys_to_search = current_backend.list_keys()
-                if len(keys_to_search) == 0:
-                    CACHE_LOCK.release()
-                    raise Exception(
-                        f"Failed to get cache for function {fn_name} with kwargs {BaseCache.serialize_object(kw, indent=4)} "
-                        f"Cache is empty, mode is read-only ",
-                    )
-                closest_match = difflib.get_close_matches(
-                    cache_str,
-                    keys_to_search,
-                    n=1,
-                    cutoff=0,
-                )[0]
-                minimal_char_diff = _minimal_char_diff(cache_str, closest_match)
-                if read_closest:
-                    cache_str = closest_match
-                else:
-                    CACHE_LOCK.release()
-                    raise Exception(
-                        f"Failed to get cache for function {fn_name} with kwargs {BaseCache.serialize_object(kw, indent=4)} "
-                        f"from cache at {filename}. \n\nCorresponding key\n{cache_str}\nwas not found in the cache.\n\n"
-                        f"The closest match is:\n{closest_match}\n\n"
-                        f"The contracted diff is:\n{minimal_char_diff}\n\n",
-                    )
-            else:
+            if raise_on_empty:
                 CACHE_LOCK.release()
-                return
+                raise Exception(
+                    f"Failed to get cache for function {fn_name} with kwargs "
+                    f"{BaseCache.serialize_object(kw, indent=4)} "
+                    f"from cache at {filename}. Key was not found in the cache.",
+                )
+            CACHE_LOCK.release()
+            return
         ret, res_types = current_backend.retrieve_entry(cache_str)
         if res_types is None:
             CACHE_LOCK.release()
@@ -158,8 +114,6 @@ def _get_cache(
             type_str = type_str.split("[")[0]
             idx_list = json.loads(idx_str)
             if len(idx_list) == 0:
-                if read_closest and delete_closest:
-                    current_backend.remove_entry(cache_str)
                 CACHE_LOCK.release()
                 typ = type_mapping[type_str]
                 if issubclass(typ, BaseModel):
@@ -177,8 +131,6 @@ def _get_cache(
                         )
                     break
                 item = item[idx]
-        if read_closest and delete_closest:
-            current_backend.remove_entry(cache_str)
         CACHE_LOCK.release()
         return ret
     except Exception as e:

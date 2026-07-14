@@ -449,7 +449,7 @@ class TestNdjsonIndexedStore:
             value, _ = store.get(big)
             assert value == {"ok": True}
 
-    def test_read_only_miss_closest_key_path(self):
+    def test_read_only_miss_raises_without_closest_match(self):
         with _CacheHandler():
             LocalCache.initialize_cache()
             LocalCache.store_entry(
@@ -467,7 +467,9 @@ class TestNdjsonIndexedStore:
                     raise_on_empty=True,
                 )
             assert exc_info.value.__cause__ is not None
-            assert "closest match" in str(exc_info.value.__cause__)
+            cause = str(exc_info.value.__cause__)
+            assert "Key was not found in the cache" in cause
+            assert "closest match" not in cause
 
 
 class TestLocalSeparateIndexedRead:
