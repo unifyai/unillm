@@ -95,7 +95,8 @@ class Settings(BaseSettings):
     #   https://community.openai.com/t/error-something-went-wrong-if-this-issue-persists/200411
     #
     # Set to 0 to disable this retry logic entirely.
-    UNILLM_TRANSIENT_RETRY_COUNT: int = 3
+    # Default 6 → backoff sleeps of 1/2/4/8/16/32s between attempts.
+    UNILLM_TRANSIENT_RETRY_COUNT: int = 6
 
     @field_validator("UNILLM_TERMINAL_LOG", "UNILLM_OTEL", mode="before")
     @classmethod
