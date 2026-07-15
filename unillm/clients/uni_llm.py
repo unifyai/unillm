@@ -355,19 +355,41 @@ def _is_empty_responses_output_error(exc: BaseException) -> bool:
     return "unknown items in responses api response" in str(exc).lower()
 
 
+def _strip_encrypted_reasoning_in_kw(kw: dict, exc: BaseException) -> bool:
+    """Mutate ``kw['messages']`` to drop poison encrypted reasoning; return changed."""
+    from .encrypted_reasoning_retry import strip_encrypted_reasoning_for_error
+
+    messages = kw.get("messages")
+    if not messages:
+        return False
+    return strip_encrypted_reasoning_for_error(messages, exc)
+
+
+_RESPONSES_RECOVERY_EXCEPTIONS = (
+    litellm.APIConnectionError,
+    litellm.BadRequestError,
+    litellm.exceptions.APIError,
+)
+
+
 async def _acompletion_with_empty_responses_fallback(
     *,
     shared_session: Any,
     client: Any,
     **kw: Any,
 ) -> Any:
-    """Call ``litellm.acompletion``, falling back to OpenRouter chat on empty Responses.
+    """Call ``litellm.acompletion`` with Responses-path recoveries.
 
-    OpenRouter's Responses endpoint occasionally returns an empty ``output``
-    array that LiteLLM surfaces as ``APIConnectionError``. Retries alone keep
-    hitting the same empty Responses path; drop to chat completions once.
+    1. Transient retries (via ``retry_transient_400_async``).
+    2. On ``invalid_encrypted_content`` / encrypted ``invalid_prompt``: drop the
+       offending (or all encrypted) ``reasoning_items`` from ``messages`` in
+       place and retry once. Encrypted reasoning is optional continuity; the
+       visible transcript is enough to continue.
+    3. On empty OpenRouter Responses ``output``: fall back to OpenRouter chat
+       completions once.
     """
     from ..helpers import retry_transient_400_async
+    from .encrypted_reasoning_retry import is_invalid_encrypted_content_error
 
     async def _call(current_kw: dict) -> Any:
         return await litellm.acompletion(
@@ -378,13 +400,40 @@ async def _acompletion_with_empty_responses_fallback(
 
     try:
         return await retry_transient_400_async(lambda: _call(kw))
-    except litellm.APIConnectionError as e:
+    except _RESPONSES_RECOVERY_EXCEPTIONS as e:
+        if is_invalid_encrypted_content_error(e):
+            if _strip_encrypted_reasoning_in_kw(kw, e):
+                return await retry_transient_400_async(lambda: _call(kw))
+            raise
         if not _is_empty_responses_output_error(e):
             raise
         fallback_kw = _openrouter_chat_fallback_kw(kw)
         if fallback_kw is None:
             raise
         return await retry_transient_400_async(lambda: _call(fallback_kw))
+
+
+def _completion_with_empty_responses_fallback(**kw: Any) -> Any:
+    """Sync counterpart of ``_acompletion_with_empty_responses_fallback``."""
+    from ..helpers import retry_transient_400_sync
+    from .encrypted_reasoning_retry import is_invalid_encrypted_content_error
+
+    def _call(current_kw: dict) -> Any:
+        return litellm.completion(**current_kw)
+
+    try:
+        return retry_transient_400_sync(lambda: _call(kw))
+    except _RESPONSES_RECOVERY_EXCEPTIONS as e:
+        if is_invalid_encrypted_content_error(e):
+            if _strip_encrypted_reasoning_in_kw(kw, e):
+                return retry_transient_400_sync(lambda: _call(kw))
+            raise
+        if not _is_empty_responses_output_error(e):
+            raise
+        fallback_kw = _openrouter_chat_fallback_kw(kw)
+        if fallback_kw is None:
+            raise
+        return retry_transient_400_sync(lambda: _call(fallback_kw))
 
 
 def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
@@ -1458,8 +1507,8 @@ class Unify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ):
-                completion = retry_transient_400_sync(
-                    lambda: litellm.completion(**transport_kw),
+                completion = _completion_with_empty_responses_fallback(
+                    **transport_kw,
                 )
                 _normalize_assistant_message_content(completion)
         finally:
@@ -1613,8 +1662,8 @@ class Unify(_UniClient):
                     in_cache = True if chat_completion is not None else False
                 if chat_completion is None:
                     try:
-                        chat_completion = retry_transient_400_sync(
-                            lambda: litellm.completion(**transport_kw),
+                        chat_completion = _completion_with_empty_responses_fallback(
+                            **transport_kw,
                         )
                         _normalize_assistant_message_content(chat_completion)
                     except litellm.exceptions.APIError as e:
