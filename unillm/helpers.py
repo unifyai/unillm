@@ -98,8 +98,23 @@ def _is_transient_400_error(exc: BaseException) -> bool:
     return any(pattern in msg for pattern in _TRANSIENT_400_ERROR_PATTERNS)
 
 
+def _is_invalid_encrypted_content_error(exc: BaseException) -> bool:
+    """OpenAI poison encrypted-reasoning replay — permanent for this request shape."""
+    msg = str(exc).lower()
+    if (
+        "invalid_encrypted_content" in msg
+        or "encrypted content could not be decrypted" in msg
+        or "encrypted content could not be verified" in msg
+    ):
+        return True
+    return "invalid_prompt" in msg and "encrypted content" in msg
+
+
 def _is_retryable(exc: BaseException) -> bool:
     """Return True if the exception represents a transient failure worth retrying."""
+    # Same ciphertext will keep failing; callers strip reasoning items and retry.
+    if _is_invalid_encrypted_content_error(exc):
+        return False
     if isinstance(exc, _TRANSIENT_SERVER_EXCEPTIONS):
         return True
     if isinstance(exc, (litellm.BadRequestError, litellm.exceptions.APIError)):
