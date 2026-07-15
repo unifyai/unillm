@@ -84,6 +84,7 @@ _TRANSIENT_SERVER_EXCEPTIONS = (
 )
 
 # Base backoff delay in seconds for transient server errors (doubles each attempt).
+# With UNILLM_TRANSIENT_RETRY_COUNT=6 this yields 1/2/4/8/16/32s between attempts.
 _BACKOFF_BASE_SECONDS = 1.0
 
 
@@ -132,7 +133,8 @@ def retry_transient_400_sync(fn: Callable[[], T]) -> T:
     - InternalServerError (500)
     - RateLimitError (429)
 
-    Uses exponential backoff for server-side errors (503/500/429).
+    Uses exponential backoff for server-side errors (503/500/429),
+    doubling from ``_BACKOFF_BASE_SECONDS`` (default schedule 1/2/4/8/16/32s).
     """
     import time
 
@@ -169,7 +171,8 @@ async def retry_transient_400_async(fn: Callable[[], Awaitable[T]]) -> T:
     - InternalServerError (500)
     - RateLimitError (429)
 
-    Uses exponential backoff for server-side errors (503/500/429).
+    Uses exponential backoff for server-side errors (503/500/429),
+    doubling from ``_BACKOFF_BASE_SECONDS`` (default schedule 1/2/4/8/16/32s).
     """
     max_retries = SETTINGS.UNILLM_TRANSIENT_RETRY_COUNT
     last_exc: BaseException | None = None
