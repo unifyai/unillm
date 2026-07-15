@@ -1,18 +1,12 @@
 """
 Tests for transient HTTP error retry logic.
 
-The retry helpers in ``unillm.helpers`` currently only catch transient 400
-errors (BadRequestError with specific message patterns). They do **not**
-retry genuine server-side transient errors:
-
-- 503 ServiceUnavailableError (e.g. Anthropic overflow / upstream reset)
-- 500 InternalServerError
-- 429 RateLimitError
-
-These tests verify the expected retry behaviour for all three error classes.
-They will FAIL against the current implementation and PASS once the helpers
-are broadened to cover 5xx / 429 errors.
+Covers 503 ServiceUnavailableError, 500 InternalServerError, and 429
+RateLimitError (plus mixed sequences). Sleeps are patched so exhaustion
+tests stay fast under the default 1/2/4/8/16/32s backoff schedule.
 """
+
+from unittest.mock import AsyncMock, patch
 
 import litellm
 import pytest
@@ -21,6 +15,14 @@ from unillm.helpers import (
     retry_transient_400_async,
     retry_transient_400_sync,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_backoff_sleep():
+    """Skip real exponential backoff delays in this module."""
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        yield
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Exception factories
