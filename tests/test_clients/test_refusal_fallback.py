@@ -12,6 +12,7 @@ from unillm.clients.provider_postprocessing import (
 )
 
 FABLE_5 = "anthropic/claude-fable-5"
+OPUS_5 = "anthropic/claude-opus-5"
 OPUS_4_8 = "anthropic/claude-opus-4-8"
 
 
@@ -42,6 +43,15 @@ def _kw(model: str = FABLE_5) -> dict:
 def test_check_safety_refusal_maps_fable_to_opus():
     refusal = _completion(content=None, finish_reason="content_filter")
     assert check_safety_refusal(response=refusal, kw=_kw()) == OPUS_4_8
+
+
+def test_check_safety_refusal_maps_opus_5_to_opus_4_8():
+    refusal = _completion(
+        content=None,
+        finish_reason="content_filter",
+        model=OPUS_5,
+    )
+    assert check_safety_refusal(response=refusal, kw=_kw(model=OPUS_5)) == OPUS_4_8
 
 
 def test_check_safety_refusal_ignores_normal_stop():

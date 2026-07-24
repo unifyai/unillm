@@ -21,6 +21,7 @@ _ANTHROPIC_PUBLIC_ALIASES = {
     "claude-4.6-opus": "anthropic/claude-opus-4-6",
     "claude-4.6-sonnet": "anthropic/claude-sonnet-4-6",
     "claude-4.8-opus": "anthropic/claude-opus-4-8",
+    "claude-opus-5": "anthropic/claude-opus-5",
     "claude-fable-5": "anthropic/claude-fable-5",
     "claude-sonnet-5": "anthropic/claude-sonnet-5",
 }
@@ -89,6 +90,8 @@ def _public_model_alias(provider: str, model: str, alias: str) -> str:
         return _DEEPSEEK_PUBLIC_ALIASES.get(model, alias)
     if provider == "minimax" and model == "minimax-v3":
         return "minimax/MiniMax-M3"
+    if provider == "moonshotai":
+        return f"moonshotai/{model}"
     if provider == "xiaomi-mimo":
         return f"xiaomi_mimo/{model}"
     if provider == "zai":
