@@ -16,6 +16,7 @@ models = {
     "claude-4.6-opus": "anthropic/claude-opus-4-6",
     "claude-4.6-sonnet": "anthropic/claude-sonnet-4-6",
     "claude-4.8-opus": "anthropic/claude-opus-4-8",
+    "claude-opus-5": "anthropic/claude-opus-5",
     "claude-fable-5": "anthropic/claude-fable-5",
     "claude-sonnet-5": "anthropic/claude-sonnet-5",
 }
@@ -37,6 +38,8 @@ CONTEXT_1M_MODELS = {
 ADAPTIVE_THINKING_MODELS = {
     "anthropic/claude-opus-4-8",
     models["claude-4.8-opus"],
+    "anthropic/claude-opus-5",
+    models["claude-opus-5"],
     "anthropic/claude-fable-5",
     models["claude-fable-5"],
     "anthropic/claude-sonnet-5",
@@ -49,6 +52,8 @@ ADAPTIVE_THINKING_MODELS = {
 SAMPLING_PARAMS_REJECTED_MODELS = {
     "anthropic/claude-opus-4-8",
     models["claude-4.8-opus"],
+    "anthropic/claude-opus-5",
+    models["claude-opus-5"],
     "anthropic/claude-fable-5",
     models["claude-fable-5"],
     "anthropic/claude-sonnet-5",
@@ -61,6 +66,7 @@ SAMPLING_PARAMS_REJECTED_MODELS = {
 # that a refused request can usually be served by another Claude model, so
 # each classifier-gated model maps to the fallback used for a one-shot retry.
 REFUSAL_FALLBACK_MODELS = {
+    "anthropic/claude-opus-5": "anthropic/claude-opus-4-8",
     "anthropic/claude-fable-5": "anthropic/claude-opus-4-8",
 }
 
@@ -94,6 +100,16 @@ register_litellm_model_info(
             "litellm_provider": provider,
             "mode": "chat",
             "max_input_tokens": 1_000_000,
+            "input_cost_per_token": 5.00 / 1_000_000,
+            "output_cost_per_token": 25.00 / 1_000_000,
+        },
+        # Claude Opus 5: 1M context by default (no beta header), adaptive
+        # thinking with effort control, same $5/$25 rates as Opus 4.8.
+        "anthropic/claude-opus-5": {
+            "litellm_provider": provider,
+            "mode": "chat",
+            "max_input_tokens": 1_000_000,
+            "max_output_tokens": 128_000,
             "input_cost_per_token": 5.00 / 1_000_000,
             "output_cost_per_token": 25.00 / 1_000_000,
         },

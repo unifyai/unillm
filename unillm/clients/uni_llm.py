@@ -89,6 +89,7 @@ _OPENROUTER_HARD_PROVIDER_ORDER: dict[str, tuple[str, ...]] = {
         "decart",
         "venice",
     ),
+    "moonshotai/kimi-k3": ("moonshotai",),
 }
 
 # Back-compat aliases for tests that import the per-family tuples.
