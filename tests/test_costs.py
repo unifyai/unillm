@@ -47,9 +47,11 @@ class TestNormalizeModelName:
         assert _normalize_model_name("") == ""
 
     def test_handles_multiple_at_symbols(self):
-        """Test that only first @ is used for splitting."""
-        # Edge case: if model name somehow has multiple @, only split on first
-        assert _normalize_model_name("model@provider@extra") == "model"
+        """Test that only the final @provider suffix is stripped (rsplit)."""
+        # OpenRouter ids use '/', not '@'; if multiple '@' appear, keep the
+        # model portion left of the final provider suffix.
+        assert _normalize_model_name("model@provider@extra") == "model@provider"
+        assert _normalize_model_name("openai/gpt-4o@openrouter") == "openai/gpt-4o"
 
 
 class TestComputeCostWithProviderSuffix:

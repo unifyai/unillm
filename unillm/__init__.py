@@ -32,6 +32,7 @@ from .costs import (
     compute_cost,
     compute_cost_from_response,
     compute_full_cost_from_usage,
+    extract_openrouter_usage_cost,
 )
 from .helpers import get_seed, set_seed
 from .tokens import (

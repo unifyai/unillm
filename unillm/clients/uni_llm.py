@@ -243,6 +243,44 @@ def _safe_deduct_credits(
         _LOGGER.warning("Failed to deduct credits: $%.6f", amount, exc_info=True)
 
 
+def _provider_cost_from_stream_usage(
+    accounting_model: str,
+    usage_info: object,
+) -> tuple[float | None, int, int]:
+    """Return (provider_cost, prompt_tokens, completion_tokens) for a stream usage blob.
+
+    Prefers OpenRouter's authoritative ``usage.cost`` when present; otherwise
+    prices tokens via LiteLLM / catalog fallback.
+    """
+
+    from ..costs import (
+        compute_cost,
+        extract_openrouter_usage_cost,
+    )
+
+    prompt_tokens = getattr(usage_info, "prompt_tokens", 0) or 0
+    completion_tokens = getattr(usage_info, "completion_tokens", 0) or 0
+    if isinstance(usage_info, dict):
+        prompt_tokens = usage_info.get("prompt_tokens", 0) or 0
+        completion_tokens = usage_info.get("completion_tokens", 0) or 0
+
+    reported = extract_openrouter_usage_cost(usage_info)
+    if reported is not None:
+        return reported, prompt_tokens, completion_tokens
+
+    if prompt_tokens <= 0 and completion_tokens <= 0:
+        return None, prompt_tokens, completion_tokens
+
+    try:
+        return (
+            compute_cost(accounting_model, prompt_tokens, completion_tokens),
+            prompt_tokens,
+            completion_tokens,
+        )
+    except ValueError:
+        return None, prompt_tokens, completion_tokens
+
+
 def _canonical_model_for_accounting(model: str | None) -> str:
     """Return the provider model name used for pricing, limits, and ledger metadata."""
     if not model:
@@ -311,30 +349,34 @@ def _route_openai_tool_reasoning_via_responses(
     provider: str,
     stream: bool,
 ) -> None:
-    """Route GPT-5.4+ tool+reasoning calls through the Responses API.
+    """Route GPT-5.2+ tool+reasoning calls through the Responses API.
 
-    OpenAI catalog models are transported via OpenRouter; prefer OpenRouter's
-    native ``/responses`` endpoint. Fall back to LiteLLM's direct OpenAI
-    ``openai/responses/`` bridge when the transport is not OpenRouter-prefixed.
+    Native ``*@openai`` transports use LiteLLM's ``openai/responses/`` bridge.
+    OpenRouter-hosted OpenAI catalog models (``openai/...@openrouter``) use
+    OpenRouter's ``openrouter/responses/`` path.
     """
     model = str(kw.get("model") or "")
     tools = kw.get("tools")
     if (
-        provider != "openai"
-        or stream
+        stream
         or not tools
         or kw.get("reasoning_effort") is None
         or not _is_openai_gpt_responses_tool_model(model)
     ):
         return
 
+    is_openrouter_transport = model.startswith(
+        _OPENROUTER_MODEL_PREFIX,
+    ) or model.startswith(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX)
+
     public = _openai_public_model_name(model)
-    if model.startswith(_OPENROUTER_MODEL_PREFIX) or model.startswith(
-        _OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX,
-    ):
+    if provider == "openai" and not is_openrouter_transport:
+        kw["model"] = f"{_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX}{public}"
+    elif provider == "openrouter" or is_openrouter_transport:
         kw["model"] = f"{_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX}openai/{public}"
     else:
-        kw["model"] = f"{_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX}{public}"
+        return
+
     kw["tools"] = _copy_tools_for_responses_bridge(tools)
     _allow_responses_bridge_params(kw)
 
@@ -885,7 +927,7 @@ class _UniClient(_Client, abc.ABC):
         self._model_alias = get_model_alias(value)
         self._transport_model_alias = get_transport_model_alias(value)
         self._endpoint = value
-        self._model, self._provider = value.split("@")
+        self._model, self._provider = value.rsplit("@", 1)
         return self
 
     @staticmethod
@@ -1428,26 +1470,21 @@ class Unify(_UniClient):
         finally:
             # Deduct credits based on usage after streaming completes
             if usage_info is not None:
-                prompt_tokens = getattr(usage_info, "prompt_tokens", 0) or 0
-                completion_tokens = getattr(usage_info, "completion_tokens", 0) or 0
-                if prompt_tokens > 0 or completion_tokens > 0:
-                    from ..costs import compute_cost, get_cost_margin
+                from ..costs import get_cost_margin
 
-                    provider_cost = compute_cost(
-                        accounting_model,
-                        prompt_tokens,
-                        completion_tokens,
+                provider_cost, prompt_tokens, completion_tokens = (
+                    _provider_cost_from_stream_usage(accounting_model, usage_info)
+                )
+                if provider_cost is not None and provider_cost > 0:
+                    billed_cost = provider_cost * get_cost_margin()
+                    _safe_deduct_credits(
+                        billed_cost,
+                        api_key=self._api_key,
+                        model=accounting_model,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        provider_cost=provider_cost,
                     )
-                    if provider_cost > 0:
-                        billed_cost = provider_cost * get_cost_margin()
-                        _safe_deduct_credits(
-                            billed_cost,
-                            api_key=self._api_key,
-                            model=accounting_model,
-                            prompt_tokens=prompt_tokens,
-                            completion_tokens=completion_tokens,
-                            provider_cost=provider_cost,
-                        )
 
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
@@ -2050,30 +2087,25 @@ class AsyncUnify(_UniClient):
 
             # Deduct credits based on usage after streaming completes
             if usage_info is not None:
-                prompt_tokens = getattr(usage_info, "prompt_tokens", 0) or 0
-                completion_tokens = getattr(usage_info, "completion_tokens", 0) or 0
-                if prompt_tokens > 0 or completion_tokens > 0:
-                    from ..costs import compute_cost, get_cost_margin
+                from ..costs import get_cost_margin
 
-                    provider_cost = compute_cost(
-                        accounting_model,
-                        prompt_tokens,
-                        completion_tokens,
+                provider_cost, prompt_tokens, completion_tokens = (
+                    _provider_cost_from_stream_usage(accounting_model, usage_info)
+                )
+                if provider_cost is not None and provider_cost > 0:
+                    billed_cost = provider_cost * get_cost_margin()
+                    asyncio.create_task(
+                        asyncio.to_thread(
+                            _safe_deduct_credits,
+                            billed_cost,
+                            api_key=self._api_key,
+                            model=accounting_model,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            provider_cost=provider_cost,
+                        ),
+                        name="unillm_deduct_credits_stream",
                     )
-                    if provider_cost > 0:
-                        billed_cost = provider_cost * get_cost_margin()
-                        asyncio.create_task(
-                            asyncio.to_thread(
-                                _safe_deduct_credits,
-                                billed_cost,
-                                api_key=self._api_key,
-                                model=accounting_model,
-                                prompt_tokens=prompt_tokens,
-                                completion_tokens=completion_tokens,
-                                provider_cost=provider_cost,
-                            ),
-                            name="unillm_deduct_credits_stream",
-                        )
 
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
