@@ -64,7 +64,7 @@ refresh before merging:
    `confirm_llm_spend=LLM_SPEND_OK` and the relevant `test_path`.
 
 After publish completes, re-run promotion PR CI if it started before the artifact
-was ready. See `.cursor/rules/llm-cache-invalidation.mdc` for the full
+was ready. See `.agents/rules/llm-cache-invalidation.md` for the full
 step-by-step playbook.
 
 ## Code style

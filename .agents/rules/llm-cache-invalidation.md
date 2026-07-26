@@ -1,6 +1,5 @@
 ---
 description: Refresh or publish the LLM response cache when cache keys change or staging→main pytest fails on cache misses
-alwaysApply: true
 ---
 
 # LLM Cache Invalidation & CI Hydration

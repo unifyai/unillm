@@ -6,7 +6,6 @@
 .sensitive_data
 
 .cursor/*
-!.cursor/rules/
 /.cursor/projects/
 /.cursor/plans/
 
