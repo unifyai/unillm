@@ -1,6 +1,5 @@
 """Tests for LLM event hooks."""
 
-import os
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -13,7 +12,6 @@ from unillm import (
     allm_event_hook_scope,
 )
 from unillm.llm_events import _emit_llm_event
-from unillm.costs import get_cost_margin
 
 
 class TestLLMEventDataclass:
@@ -52,31 +50,6 @@ class TestLLMEventDataclass:
         event = LLMEvent(request={"model": "gpt-4@openai"})
         assert event.provider_cost is None
         assert event.billed_cost is None
-
-
-class TestCostMargin:
-    """Tests for the cost margin configuration."""
-
-    def test_default_margin(self):
-        from unillm.costs import get_cost_margin
-
-        # Clear env var if set
-        with patch.dict(os.environ, {}, clear=True):
-            # Remove UNILLM_COST_MARGIN if it exists
-            os.environ.pop("UNILLM_COST_MARGIN", None)
-            assert get_cost_margin() == 1.2
-
-    def test_margin_from_env_var(self):
-        from unillm.costs import get_cost_margin
-
-        with patch.dict(os.environ, {"UNILLM_COST_MARGIN": "3.5"}):
-            assert get_cost_margin() == 3.5
-
-    def test_invalid_margin_falls_back_to_default(self):
-        from unillm.costs import get_cost_margin
-
-        with patch.dict(os.environ, {"UNILLM_COST_MARGIN": "not_a_number"}):
-            assert get_cost_margin() == 1.2
 
 
 class TestSetLLMEventHook:
@@ -651,49 +624,7 @@ class TestLLMEventCosts:
         # Provider cost should be set
         assert event.provider_cost == 0.001
 
-        assert event.billed_cost == pytest.approx(0.001 * get_cost_margin())
-
-    def test_costs_with_custom_margin(self):
-        """Billed cost should respect UNILLM_COST_MARGIN env var."""
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Hello"
-        mock_response.model_dump.return_value = {}
-        mock_response.usage = MagicMock()
-        mock_response.usage.prompt_tokens = 10
-        mock_response.usage.completion_tokens = 5
-
-        captured = []
-
-        def capture_hook(event: LLMEvent) -> None:
-            captured.append(event)
-
-        with patch.dict(os.environ, {"UNILLM_COST_MARGIN": "3"}):
-            with patch(
-                "unillm.clients.uni_llm.litellm.completion",
-                return_value=mock_response,
-            ):
-                with patch("unillm.clients.uni_llm._get_cache", return_value=None):
-                    with patch("unillm.clients.uni_llm._write_to_cache"):
-                        with patch(
-                            "unillm.clients.uni_llm.compute_cost_from_response",
-                            return_value=0.001,
-                        ):
-                            with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                                client = unillm.Unify("gpt-4@openai", cache=True)
-                                with llm_event_hook_scope(capture_hook):
-                                    client.generate(
-                                        messages=[{"role": "user", "content": "Hi"}],
-                                    )
-
-        assert len(captured) == 1
-        event = captured[0]
-
-        # Provider cost should be set
-        assert event.provider_cost == 0.001
-
-        # Billed cost should be provider_cost * 3 (custom margin)
-        assert event.billed_cost == 0.003
+        assert event.billed_cost == pytest.approx(0.001)
 
     def test_cache_hit_has_no_costs(self):
         """Cache hits should not incur costs."""
@@ -786,7 +717,7 @@ class TestLLMEventCosts:
         event = captured[0]
 
         assert event.provider_cost == 0.002
-        assert event.billed_cost == pytest.approx(0.002 * get_cost_margin())
+        assert event.billed_cost == pytest.approx(0.002)
 
 
 # ---------------------------------------------------------------------------

@@ -42,7 +42,7 @@ class CostEvent:
         model: The model identifier used for the request (e.g., "gpt-4o").
         provider_cost: The raw cost charged by the LLM provider (in USD).
             0.0 for cache hits or when cost cannot be determined.
-        billed_cost: The cost charged to the user (provider_cost x margin, in USD).
+        billed_cost: The cost charged to the user (in USD).
             0.0 for cache hits or when cost cannot be determined.
         prompt_tokens: Number of input/prompt tokens used. 0 for cache hits.
         completion_tokens: Number of output/completion tokens used. 0 for cache hits.
