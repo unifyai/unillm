@@ -46,7 +46,7 @@ jobs:
       UNILLM_CACHE: "true"
       UNILLM_CACHE_BACKEND: "local_separate"
       UNILLM_LOG_DIR: ${{ github.workspace }}/logs/unillm
-      # OpenRouter routes openai, deepseek, minimax, xiaomi-mimo, and zai transports.
+      # OpenRouter routes openai, deepseek, minimax, moonshotai, xiaomi-mimo, and zai transports.
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

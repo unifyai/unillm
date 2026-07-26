@@ -1,0 +1,798 @@
+From f6727bb96009b75224b5c2102449e3dfefa20448 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Sun, 26 Jul 2026 21:05:27 +0000
+Subject: [PATCH] Expose OpenRouter catalog for assistant model selection.
+
+Rewrite curated GPT defaults to openai/<id>@openrouter, accept any
+capability-eligible *@openrouter endpoint, add catalog search API, and
+migrate stored assistant model fields off the old OpenAI aliases.
+---
+ ...-08-13-00-00_openrouter_model_endpoints.py |  81 +++++++
+ orchestra/services/openrouter_catalog.py      | 197 ++++++++++++++++++
+ .../test_assistant/test_default_model.py      |  26 +--
+ orchestra/web/api/assistant/default_models.py |  65 ++++--
+ orchestra/web/api/assistant/schema.py         |  52 +++--
+ orchestra/web/api/assistant/views.py          |  54 ++++-
+ orchestra/web/api/plot/llm_inference.py       |   2 +-
+ 7 files changed, 429 insertions(+), 48 deletions(-)
+ create mode 100644 orchestra/db/migrations/versions/2026-08-13-00-00_openrouter_model_endpoints.py
+ create mode 100644 orchestra/services/openrouter_catalog.py
+
+diff --git a/orchestra/db/migrations/versions/2026-08-13-00-00_openrouter_model_endpoints.py b/orchestra/db/migrations/versions/2026-08-13-00-00_openrouter_model_endpoints.py
+new file mode 100644
+index 00000000..a290a5f8
+--- /dev/null
++++ b/orchestra/db/migrations/versions/2026-08-13-00-00_openrouter_model_endpoints.py
+@@ -0,0 +1,81 @@
++"""Migrate assistant LLM endpoints from OpenAI-aliased OpenRouter routes.
++
++Previously ``gpt-*@openai`` was transported via OpenRouter inside UniLLM.
++Those public aliases now mean native OpenAI. Rewrite stored assistant
++``default_model`` / ``slow_brain_model`` values to the canonical
++``openai/<id>@openrouter`` form so production assistants keep working
++without OpenAI API keys.
++
++Revision ID: openrouter_model_endpoints
++Revises: ms_teams_bot_welcomes
++Create Date: 2026-07-26 21:00:00.000000
++"""
++
++from __future__ import annotations
++
++import sqlalchemy as sa
++from alembic import op
++
++revision = "openrouter_model_endpoints"
++down_revision = "ms_teams_bot_welcomes"
++branch_labels = None
++depends_on = None
++
++# Exact endpoint rewrites for previously OpenRouter-aliased OpenAI names.
++_REWRITES: tuple[tuple[str, str], ...] = (
++    ("gpt-5.6-sol@openai", "openai/gpt-5.6-sol@openrouter"),
++    ("gpt-5.6-terra@openai", "openai/gpt-5.6-terra@openrouter"),
++    ("gpt-5.6-luna@openai", "openai/gpt-5.6-luna@openrouter"),
++    ("gpt-5.5@openai", "openai/gpt-5.5@openrouter"),
++    ("gpt-5.4@openai", "openai/gpt-5.4@openrouter"),
++    ("gpt-5.4-mini@openai", "openai/gpt-5.4-mini@openrouter"),
++    ("gpt-5.4-nano@openai", "openai/gpt-5.4-nano@openrouter"),
++    ("gpt-5.2@openai", "openai/gpt-5.2@openrouter"),
++    ("gpt-5.1@openai", "openai/gpt-5.1@openrouter"),
++    ("gpt-5@openai", "openai/gpt-5@openrouter"),
++    ("gpt-5-mini@openai", "openai/gpt-5-mini@openrouter"),
++    ("gpt-5-nano@openai", "openai/gpt-5-nano@openrouter"),
++    ("gpt-4.1@openai", "openai/gpt-4.1@openrouter"),
++    ("gpt-4.1-mini@openai", "openai/gpt-4.1-mini@openrouter"),
++    ("gpt-4.1-nano@openai", "openai/gpt-4.1-nano@openrouter"),
++    ("gpt-4o@openai", "openai/gpt-4o@openrouter"),
++    ("gpt-4o-mini@openai", "openai/gpt-4o-mini@openrouter"),
++)
++
++
++def upgrade() -> None:
++    conn = op.get_bind()
++    for old, new in _REWRITES:
++        conn.execute(
++            sa.text(
++                "UPDATE assistants SET default_model = :new "
++                "WHERE default_model = :old",
++            ),
++            {"old": old, "new": new},
++        )
++        conn.execute(
++            sa.text(
++                "UPDATE assistants SET slow_brain_model = :new "
++                "WHERE slow_brain_model = :old",
++            ),
++            {"old": old, "new": new},
++        )
++
++
++def downgrade() -> None:
++    conn = op.get_bind()
++    for old, new in _REWRITES:
++        conn.execute(
++            sa.text(
++                "UPDATE assistants SET default_model = :old "
++                "WHERE default_model = :new",
++            ),
++            {"old": old, "new": new},
++        )
++        conn.execute(
++            sa.text(
++                "UPDATE assistants SET slow_brain_model = :old "
++                "WHERE slow_brain_model = :new",
++            ),
++            {"old": old, "new": new},
++        )
+diff --git a/orchestra/services/openrouter_catalog.py b/orchestra/services/openrouter_catalog.py
+new file mode 100644
+index 00000000..6e3a5fdf
+--- /dev/null
++++ b/orchestra/services/openrouter_catalog.py
+@@ -0,0 +1,197 @@
++"""OpenRouter model catalog for assistant default/slow-brain selection.
++
++Fetches ``GET /api/v1/models``, caches a TTL snapshot, and exposes capability
++filters used by the assistant model picker (multimodal image input required).
++"""
++
++from __future__ import annotations
++
++import logging
++import time
++from typing import Any, Optional
++
++import httpx
++
++from orchestra.settings import settings
++
++_LOGGER = logging.getLogger(__name__)
++
++_OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
++_DEFAULT_TTL_SECONDS = 6 * 60 * 60
++
++_lock = threading.RLock()
++_snapshot: dict[str, Any] | None = None
++_snapshot_fetched_at: float = 0.0
++
++
++def _api_key() -> str:
++    return (settings.openrouter_api_key or "").strip()
++
++
++def _normalize(raw: dict[str, Any]) -> dict[str, Any] | None:
++    model_id = raw.get("id")
++    if not isinstance(model_id, str) or not model_id:
++        return None
++    pricing = raw.get("pricing") or {}
++    architecture = raw.get("architecture") or {}
++    input_modalities = architecture.get("input_modalities") or raw.get(
++        "input_modalities",
++    )
++    if not isinstance(input_modalities, list):
++        input_modalities = []
++    modalities = {str(m).lower() for m in input_modalities}
++    supported_params = raw.get("supported_parameters") or []
++    if not isinstance(supported_params, list):
++        supported_params = []
++    supported_l = {str(p).lower() for p in supported_params}
++
++    def _f(key: str) -> float | None:
++        value = pricing.get(key)
++        if value is None:
++            return None
++        try:
++            return float(value)
++        except (TypeError, ValueError):
++            return None
++
++    return {
++        "id": model_id,
++        "name": raw.get("name") or model_id,
++        "context_length": raw.get("context_length"),
++        "input_cost_per_token": _f("prompt"),
++        "output_cost_per_token": _f("completion"),
++        "input_modalities": sorted(modalities),
++        "supports_image_input": "image" in modalities,
++        "supports_tools": bool(
++            {"tools", "tool_choice", "functions", "function_call"} & supported_l,
++        ),
++        "supports_reasoning": bool(
++            {"reasoning", "include_reasoning", "reasoning_effort"} & supported_l,
++        ),
++    }
++
++
++def _fetch() -> dict[str, Any] | None:
++    headers = {"Accept": "application/json", "User-Agent": "orchestra"}
++    key = _api_key()
++    if key:
++        headers["Authorization"] = f"Bearer {key}"
++    try:
++        with httpx.Client(timeout=30.0) as client:
++            response = client.get(_OPENROUTER_MODELS_URL, headers=headers)
++            response.raise_for_status()
++            payload = response.json()
++    except Exception:
++        _LOGGER.warning("Failed to fetch OpenRouter model catalog", exc_info=True)
++        return None
++
++    raw_models = payload.get("data") if isinstance(payload, dict) else None
++    if not isinstance(raw_models, list):
++        return None
++    models: dict[str, dict[str, Any]] = {}
++    for entry in raw_models:
++        if not isinstance(entry, dict):
++            continue
++        normalized = _normalize(entry)
++        if normalized is None:
++            continue
++        models[normalized["id"]] = normalized
++    return {
++        "fetched_at": time.time(),
++        "models": models,
++    }
++
++
++def get_catalog(*, refresh: bool = False) -> dict[str, dict[str, Any]]:
++    """Return ``{openrouter_id: metadata}`` from memory or remote fetch."""
++
++    global _snapshot, _snapshot_fetched_at
++    with _lock:
++        now = time.time()
++        if (
++            not refresh
++            and _snapshot is not None
++            and now - _snapshot_fetched_at < _DEFAULT_TTL_SECONDS
++        ):
++            return dict(_snapshot.get("models") or {})
++        remote = _fetch()
++        if remote is not None:
++            _snapshot = remote
++            _snapshot_fetched_at = float(remote["fetched_at"])
++            return dict(_snapshot.get("models") or {})
++        if _snapshot is not None:
++            return dict(_snapshot.get("models") or {})
++        return {}
++
++
++def openrouter_endpoint(model_id: str) -> str:
++    return f"{model_id}@openrouter"
++
++
++def parse_openrouter_endpoint(endpoint: str) -> Optional[str]:
++    if not endpoint.endswith("@openrouter"):
++        return None
++    model_id = endpoint[: -len("@openrouter")]
++    return model_id or None
++
++
++def get_model(model_id: str) -> dict[str, Any] | None:
++    catalog = get_catalog()
++    info = catalog.get(model_id)
++    if info is not None:
++        return info
++    catalog = get_catalog(refresh=True)
++    return catalog.get(model_id)
++
++
++def is_eligible_assistant_model(
++    endpoint: str,
++    *,
++    require_tools: bool = False,
++) -> tuple[bool, str | None]:
++    """Return (ok, disabled_reason) for assistant actor/slow-brain selection."""
++
++    model_id = parse_openrouter_endpoint(endpoint)
++    if model_id is None:
++        return False, "Only *@openrouter endpoints are accepted from the OpenRouter catalog."
++    info = get_model(model_id)
++    if info is None:
++        return False, f"Unknown OpenRouter model {model_id!r}."
++    if not info.get("supports_image_input"):
++        return False, "Model does not support native image input (required)."
++    if require_tools and not info.get("supports_tools"):
++        return False, "Model does not support tool calling (required for task model)."
++    return True, None
++
++
++def search_models(
++    query: str,
++    *,
++    limit: int = 50,
++    require_tools: bool = False,
++) -> list[dict[str, Any]]:
++    """Search catalog models; incompatible rows included with disabled_reason."""
++
++    q = query.strip().lower()
++    catalog = get_catalog()
++    results: list[dict[str, Any]] = []
++    for model_id, info in catalog.items():
++        hay = f"{model_id} {info.get('name') or ''}".lower()
++        if q and q not in hay:
++            continue
++        endpoint = openrouter_endpoint(model_id)
++        ok, reason = True, None
++        if not info.get("supports_image_input"):
++            ok, reason = False, "No native image input"
++        elif require_tools and not info.get("supports_tools"):
++            ok, reason = False, "No tool calling"
++        results.append(
++            {
++                **info,
++                "endpoint": endpoint,
++                "eligible": ok,
++                "disabled_reason": reason,
++            },
++        )
++    results.sort(key=lambda row: (not row["eligible"], row["id"]))
++    return results[: max(1, min(limit, 200))]
+diff --git a/orchestra/tests/test_assistant/test_default_model.py b/orchestra/tests/test_assistant/test_default_model.py
+index e311bee5..e19543e5 100644
+--- a/orchestra/tests/test_assistant/test_default_model.py
++++ b/orchestra/tests/test_assistant/test_default_model.py
+@@ -60,9 +60,9 @@ async def test_list_default_model_options(client: AsyncClient):
+     assert ("minimax-v3@minimax", None) in pairs
+     assert ("kimi-k3@moonshotai", None) in pairs
+     assert (PLATFORM_DEFAULT_MODEL, "high") in pairs
+-    assert ("gpt-5.6-sol@openai", "high") in pairs
+-    assert ("gpt-5.6-terra@openai", "medium") in pairs
+-    assert ("gpt-5.6-luna@openai", "low") in pairs
++    assert ("openai/gpt-5.6-sol@openrouter", "high") in pairs
++    assert ("openai/gpt-5.6-terra@openrouter", "medium") in pairs
++    assert ("openai/gpt-5.6-luna@openrouter", "low") in pairs
+     assert ("claude-4.8-opus@anthropic", "medium") in pairs
+     assert ("claude-opus-5@anthropic", "high") in pairs
+     assert ("claude-fable-5@anthropic", "low") in pairs
+@@ -91,7 +91,7 @@ async def test_list_slow_brain_model_options(client: AsyncClient):
+     assert options[0]["approx_credits_per_message"] == next(
+         o.approx_credits_per_message
+         for o in DEFAULT_MODEL_OPTIONS
+-        if o.model == "gpt-5.6-terra@openai" and o.reasoning_effort == "high"
++        if o.model == "openai/gpt-5.6-terra@openrouter" and o.reasoning_effort == "high"
+     )
+     # Selectable pairs match the actor catalog (minus the system-default row).
+     actor = await client.get("/v0/assistant/default-model-options", headers=HEADERS)
+@@ -135,12 +135,12 @@ async def test_message_credits_rank_sensibly(client: AsyncClient):
+     terra_high = next(
+         o["approx_credits_per_message"]
+         for o in options
+-        if o["model"] == "gpt-5.6-terra@openai" and o["reasoning_effort"] == "high"
++        if o["model"] == "openai/gpt-5.6-terra@openrouter" and o["reasoning_effort"] == "high"
+     )
+     luna_high = next(
+         o["approx_credits_per_message"]
+         for o in options
+-        if o["model"] == "gpt-5.6-luna@openai" and o["reasoning_effort"] == "high"
++        if o["model"] == "openai/gpt-5.6-luna@openrouter" and o["reasoning_effort"] == "high"
+     )
+     assert terra_high > luna_high
+ 
+@@ -196,7 +196,7 @@ async def test_update_default_model(client: AsyncClient, mock_assistant_infra_ca
+     patch_resp = await client.patch(
+         f"/v0/assistant/{aid}/config",
+         json={
+-            "default_model": "gpt-5.6-sol@openai",
++            "default_model": "openai/gpt-5.6-sol@openrouter",
+             "default_reasoning_effort": "medium",
+             "create_infra": False,
+         },
+@@ -204,7 +204,7 @@ async def test_update_default_model(client: AsyncClient, mock_assistant_infra_ca
+     )
+     assert patch_resp.status_code == 200
+     updated = patch_resp.json()["info"]
+-    assert updated["default_model"] == "gpt-5.6-sol@openai"
++    assert updated["default_model"] == "openai/gpt-5.6-sol@openrouter"
+     assert updated["default_reasoning_effort"] == "medium"
+     # Changing the default model is a runtime-facing update.
+     _, mock_reawaken = mock_assistant_infra_calls
+@@ -217,7 +217,7 @@ async def test_update_slow_brain_model(client: AsyncClient, mock_assistant_infra
+     patch_resp = await client.patch(
+         f"/v0/assistant/{aid}/config",
+         json={
+-            "slow_brain_model": "gpt-5.6-luna@openai",
++            "slow_brain_model": "openai/gpt-5.6-luna@openrouter",
+             "slow_brain_reasoning_effort": "medium",
+             "create_infra": False,
+         },
+@@ -225,7 +225,7 @@ async def test_update_slow_brain_model(client: AsyncClient, mock_assistant_infra
+     )
+     assert patch_resp.status_code == 200
+     updated = patch_resp.json()["info"]
+-    assert updated["slow_brain_model"] == "gpt-5.6-luna@openai"
++    assert updated["slow_brain_model"] == "openai/gpt-5.6-luna@openrouter"
+     assert updated["slow_brain_reasoning_effort"] == "medium"
+     _, mock_reawaken = mock_assistant_infra_calls
+     mock_reawaken.assert_awaited_once()
+@@ -255,7 +255,7 @@ async def test_update_default_model_invalid_pair(client: AsyncClient):
+     patch_resp = await client.patch(
+         f"/v0/assistant/{aid}/config",
+         json={
+-            "default_model": "gpt-5.6-sol@openai",
++            "default_model": "openai/gpt-5.6-sol@openrouter",
+             "default_reasoning_effort": "max",
+             "create_infra": False,
+         },
+@@ -279,7 +279,7 @@ async def test_update_effort_without_model_rejected(client: AsyncClient):
+ async def test_clear_default_model(client: AsyncClient):
+     aid = await _create_assistant(
+         client,
+-        default_model="gpt-5.6-sol@openai",
++        default_model="openai/gpt-5.6-sol@openrouter",
+         default_reasoning_effort="high",
+     )
+     patch_resp = await client.patch(
+@@ -297,7 +297,7 @@ async def test_clear_default_model(client: AsyncClient):
+ async def test_clear_slow_brain_model(client: AsyncClient):
+     aid = await _create_assistant(
+         client,
+-        slow_brain_model="gpt-5.6-sol@openai",
++        slow_brain_model="openai/gpt-5.6-sol@openrouter",
+         slow_brain_reasoning_effort="high",
+     )
+     patch_resp = await client.patch(
+diff --git a/orchestra/web/api/assistant/default_models.py b/orchestra/web/api/assistant/default_models.py
+index 0a4f3c63..5f305515 100644
+--- a/orchestra/web/api/assistant/default_models.py
++++ b/orchestra/web/api/assistant/default_models.py
+@@ -29,12 +29,12 @@ from __future__ import annotations
+ from dataclasses import dataclass, replace
+ from typing import Literal, Optional, Tuple
+ 
+-PLATFORM_DEFAULT_MODEL = "gpt-5.6-sol@openai"
++PLATFORM_DEFAULT_MODEL = "openai/gpt-5.6-sol@openrouter"
+ PLATFORM_DEFAULT_REASONING_EFFORT = "high"
+ PLATFORM_DEFAULT_DISPLAY_NAME = "GPT-5.6 Sol"
+ 
+ # Matches Unify's UNITY_CONVERSATION_SLOW_BRAIN_* defaults.
+-PLATFORM_SLOW_BRAIN_MODEL = "gpt-5.6-terra@openai"
++PLATFORM_SLOW_BRAIN_MODEL = "openai/gpt-5.6-terra@openrouter"
+ PLATFORM_SLOW_BRAIN_DISPLAY_NAME = "GPT-5.6 Terra"
+ PLATFORM_SLOW_BRAIN_REASONING_EFFORT = "high"
+ 
+@@ -166,7 +166,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
+         aa_slug="gemini-3-1-pro-preview",
+     ),
+     _opt(
+-        model="gpt-5.6-luna@openai",
++        model="openai/gpt-5.6-luna@openrouter",
+         reasoning_effort="low",
+         label="GPT-5.6 Luna (low thinking)",
+         approx_credits_per_task=50,
+@@ -175,7 +175,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
+         aa_slug="gpt-5-6-luna",
+     ),
+     _opt(
+-        model="gpt-5.6-luna@openai",
++        model="openai/gpt-5.6-luna@openrouter",
+         reasoning_effort="medium",
+         label="GPT-5.6 Luna (medium thinking)",
+         approx_credits_per_task=70,
+@@ -184,7 +184,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
+         aa_slug="gpt-5-6-luna",
+     ),
+     _opt(
+-        model="gpt-5.6-luna@openai",
++        model="openai/gpt-5.6-luna@openrouter",
+         reasoning_effort="high",
+         label="GPT-5.6 Luna (high thinking)",
+         approx_credits_per_task=95,
+@@ -193,7 +193,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
+         aa_slug="gpt-5-6-luna",
+     ),
+     _opt(
+-        model="gpt-5.6-terra@openai",
++        model="openai/gpt-5.6-terra@openrouter",
+         reasoning_effort="low",
+         label="GPT-5.6 Terra (low thinking)",
+         approx_credits_per_task=120,
+@@ -202,7 +202,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
+         aa_slug="gpt-5-6-terra",
+     ),
+     _opt(
+-        model="gpt-5.6-terra@openai",
++        model="openai/gpt-5.6-terra@openrouter",
+         reasoning_effort="medium",
+         label="GPT-5.6 Terra (medium thinking)",
+         approx_credits_per_task=170,
+@@ -211,7 +211,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
+         aa_slug="gpt-5-6-terra",
+     ),
+     _opt(
+-        model="gpt-5.6-terra@openai",
++        model="openai/gpt-5.6-terra@openrouter",
+         reasoning_effort="high",
+         label="GPT-5.6 Terra (high thinking)",
+         approx_credits_per_task=240,
+@@ -220,7 +220,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
+         aa_slug="gpt-5-6-terra",
+     ),
+     _opt(
+-        model="gpt-5.6-sol@openai",
++        model="openai/gpt-5.6-sol@openrouter",
+         reasoning_effort="low",
+         label="GPT-5.6 Sol (low thinking)",
+         approx_credits_per_task=240,
+@@ -229,7 +229,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
+         aa_slug="gpt-5-6-sol",
+     ),
+     _opt(
+-        model="gpt-5.6-sol@openai",
++        model="openai/gpt-5.6-sol@openrouter",
+         reasoning_effort="medium",
+         label="GPT-5.6 Sol (medium thinking)",
+         approx_credits_per_task=330,
+@@ -238,7 +238,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
+         aa_slug="gpt-5-6-sol",
+     ),
+     _opt(
+-        model="gpt-5.6-sol@openai",
++        model="openai/gpt-5.6-sol@openrouter",
+         reasoning_effort="high",
+         label="GPT-5.6 Sol (high thinking)",
+         approx_credits_per_task=475,
+@@ -385,6 +385,8 @@ _VALID_PAIRS = {
+     if option.model is not None
+ }
+ 
++_VALID_EFFORTS = {None, "low", "medium", "high"}
++
+ # Terra high — used for the slow-brain system-default credit display.
+ _SLOW_BRAIN_SYSTEM_DEFAULT_CREDITS = next(
+     option.approx_credits_per_message
+@@ -403,20 +405,51 @@ _SLOW_BRAIN_SYSTEM_DEFAULT_URL = next(
+ def is_valid_default_model(
+     model: str,
+     reasoning_effort: Optional[str],
++    *,
++    require_tools: bool = False,
+ ) -> bool:
+-    """Return whether (model, reasoning_effort) is a catalog option."""
++    """Return whether (model, reasoning_effort) may be set on an assistant.
++
++    Accepts curated catalog pairs, or any OpenRouter catalog endpoint that
++    meets the multimodal (and optional tools) capability policy.
++    """
++
++    if (model, reasoning_effort) in _VALID_PAIRS:
++        return True
++    if reasoning_effort not in _VALID_EFFORTS:
++        return False
++
++    from orchestra.services.openrouter_catalog import (
++        get_model,
++        is_eligible_assistant_model,
++        parse_openrouter_endpoint,
++    )
++
++    ok, _reason = is_eligible_assistant_model(model, require_tools=require_tools)
++    if not ok:
++        return False
++    model_id = parse_openrouter_endpoint(model)
++    if model_id is None:
++        return False
++    info = get_model(model_id) or {}
++    if reasoning_effort is not None and not info.get("supports_reasoning"):
++        return False
++    return True
+ 
+-    return (model, reasoning_effort) in _VALID_PAIRS
+ 
++def is_valid_slow_brain_model(
++    model: str,
++    reasoning_effort: Optional[str],
++) -> bool:
++    """Slow brain shares the multimodal catalog; tools are not required."""
+ 
+-# Alias: slow brain uses the same curated pairs as the actor default.
+-is_valid_slow_brain_model = is_valid_default_model
++    return is_valid_default_model(model, reasoning_effort, require_tools=False)
+ 
+ 
+ def list_model_options(
+     usage: Literal["actor", "slow_brain"] = "actor",
+ ) -> Tuple[DefaultModelOption, ...]:
+-    """Return catalog options, with the system-default row labeled for ``usage``."""
++    """Return curated recommended options, labeled for ``usage``."""
+ 
+     if usage == "actor":
+         return DEFAULT_MODEL_OPTIONS
+diff --git a/orchestra/web/api/assistant/schema.py b/orchestra/web/api/assistant/schema.py
+index ba17fe16..1afdee5e 100644
+--- a/orchestra/web/api/assistant/schema.py
++++ b/orchestra/web/api/assistant/schema.py
+@@ -167,7 +167,7 @@ class AssistantCreate(BaseModel):
+             "(see GET /assistant/default-model-options). NULL means the "
+             "platform default applies."
+         ),
+-        example="gpt-5.6-sol@openai",
++        example="openai/gpt-5.6-sol@openrouter",
+     )
+     default_reasoning_effort: Optional[str] = Field(
+         None,
+@@ -185,7 +185,7 @@ class AssistantCreate(BaseModel):
+             "(see GET /assistant/default-model-options?usage=slow_brain). "
+             "NULL means the platform slow-brain default applies."
+         ),
+-        example="gpt-5.6-terra@openai",
++        example="openai/gpt-5.6-terra@openrouter",
+     )
+     slow_brain_reasoning_effort: Optional[str] = Field(
+         None,
+@@ -283,6 +283,7 @@ class AssistantCreate(BaseModel):
+             if self.default_model is not None and not is_valid_default_model(
+                 self.default_model,
+                 self.default_reasoning_effort,
++                require_tools=True,
+             ):
+                 raise ValueError(
+                     f"({self.default_model!r}, {self.default_reasoning_effort!r}) "
+@@ -1169,7 +1170,7 @@ class AssistantUpdate(BaseModel):
+             "(see GET /assistant/default-model-options). Send null to reset "
+             "to the platform default."
+         ),
+-        example="gpt-5.6-sol@openai",
++        example="openai/gpt-5.6-sol@openrouter",
+     )
+     default_reasoning_effort: Optional[str] = Field(
+         None,
+@@ -1187,7 +1188,7 @@ class AssistantUpdate(BaseModel):
+             "(see GET /assistant/default-model-options?usage=slow_brain). "
+             "Send null to reset to the platform slow-brain default."
+         ),
+-        example="gpt-5.6-terra@openai",
++        example="openai/gpt-5.6-terra@openrouter",
+     )
+     slow_brain_reasoning_effort: Optional[str] = Field(
+         None,
+@@ -1287,6 +1288,7 @@ class AssistantUpdate(BaseModel):
+         if not is_valid_default_model(
+             self.default_model,
+             self.default_reasoning_effort,
++            require_tools=True,
+         ):
+             raise ValueError(
+                 f"({self.default_model!r}, {self.default_reasoning_effort!r}) "
+@@ -1470,7 +1472,7 @@ class DefaultModelOptionRead(BaseModel):
+             "unillm 'model@provider' endpoint. Null means the system default "
+             "(leave the assistant unset so the runtime applies its own defaults)."
+         ),
+-        example="gpt-5.6-sol@openai",
++        example="openai/gpt-5.6-sol@openrouter",
+     )
+     reasoning_effort: Optional[str] = Field(
+         None,
+@@ -1483,30 +1485,46 @@ class DefaultModelOptionRead(BaseModel):
+     label: str = Field(
+         ...,
+         description="Human-readable label for the option.",
+-        example="GPT-5.5 (high thinking)",
++        example="GPT-5.6 Sol (high thinking)",
+     )
+-    approx_credits_per_task: int = Field(
+-        ...,
++    approx_credits_per_task: Optional[int] = Field(
++        None,
+         description=(
+             "Order-of-magnitude estimate of what one typical assistant task "
+-            "costs at this option, in customer-facing credits. Display-only."
++            "costs at this option, in customer-facing credits. Display-only. "
++            "Null when pricing is unknown (OpenRouter search results)."
+         ),
+         example=475,
+     )
+-    approx_credits_per_message: int = Field(
+-        ...,
++    approx_credits_per_message: Optional[int] = Field(
++        None,
+         description=(
+             "Order-of-magnitude estimate of what one typical ConversationManager "
+             "slow-brain message costs at this option, in customer-facing "
+-            "credits. Derived from raw token rates for a controlled turn "
+-            "budget. Display-only."
++            "credits. Null when pricing is unknown."
+         ),
+         example=25,
+     )
+-    artificial_analysis_url: str = Field(
+-        ...,
+-        description="Artificial Analysis benchmark page for the model.",
+-        example="https://artificialanalysis.ai/models/gpt-5-5",
++    artificial_analysis_url: Optional[str] = Field(
++        None,
++        description="Artificial Analysis benchmark page for the model, when known.",
++        example="https://artificialanalysis.ai/models/gpt-5-6-sol",
++    )
++    recommended: bool = Field(
++        True,
++        description="True for curated recommended options; False for catalog search hits.",
++    )
++    eligible: bool = Field(
++        True,
++        description="False when the model fails capability policy for this usage.",
++    )
++    disabled_reason: Optional[str] = Field(
++        None,
++        description="Why the option is not selectable, when eligible is False.",
++    )
++    supports_reasoning: Optional[bool] = Field(
++        None,
++        description="Whether reasoning_effort may be set for this model.",
+     )
+ 
+ 
+diff --git a/orchestra/web/api/assistant/views.py b/orchestra/web/api/assistant/views.py
+index 1f46998e..6327e223 100644
+--- a/orchestra/web/api/assistant/views.py
++++ b/orchestra/web/api/assistant/views.py
+@@ -5877,7 +5877,9 @@ async def clone_voice(
+         "Returns the curated catalog of multimodal LLM options that can be "
+         "set as an assistant's default (actor) or slow-brain model. Pass "
+         "usage=slow_brain to label the system-default row for the platform "
+-        "slow-brain default."
++        "slow-brain default. Use "
++        "GET /assistant/default-model-options/search to browse the full "
++        "OpenRouter catalog."
+     ),
+     tags=["Assistant Management"],
+ )
+@@ -5901,12 +5903,62 @@ def list_default_model_options(
+                 approx_credits_per_task=option.approx_credits_per_task,
+                 approx_credits_per_message=option.approx_credits_per_message,
+                 artificial_analysis_url=option.artificial_analysis_url,
++                recommended=True,
++                eligible=True,
++                disabled_reason=None,
++                supports_reasoning=True,
+             )
+             for option in list_model_options(usage)
+         ],
+     )
+ 
+ 
++@router.get(
++    "/assistant/default-model-options/search",
++    response_model=InfoResponse[List[DefaultModelOptionRead]],
++    status_code=status.HTTP_200_OK,
++    summary="Search OpenRouter model options",
++    description=(
++        "Search the OpenRouter model catalog for assistant default / "
++        "slow-brain selection. Results that fail the multimodal (and for "
++        "actor usage, tools) policy are returned with eligible=false."
++    ),
++    tags=["Assistant Management"],
++)
++def search_default_model_options(
++    q: str = Query("", description="Case-insensitive substring match on id/name."),
++    usage: Literal["actor", "slow_brain"] = Query(
++        "actor",
++        description="Actor requires tools; slow_brain requires image input only.",
++    ),
++    limit: int = Query(50, ge=1, le=200),
++) -> InfoResponse[List[DefaultModelOptionRead]]:
++    from orchestra.services.openrouter_catalog import search_models
++
++    rows = search_models(
++        q,
++        limit=limit,
++        require_tools=(usage == "actor"),
++    )
++    return InfoResponse(
++        info=[
++            DefaultModelOptionRead(
++                model=row["endpoint"],
++                reasoning_effort=None,
++                label=str(row.get("name") or row["id"]),
++                approx_credits_per_task=None,
++                approx_credits_per_message=None,
++                artificial_analysis_url=None,
++                recommended=False,
++                eligible=bool(row.get("eligible")),
++                disabled_reason=row.get("disabled_reason"),
++                supports_reasoning=bool(row.get("supports_reasoning")),
++            )
++            for row in rows
++        ],
++    )
++
++
+ @router.get(
+     "/assistant/voice",
+     response_model=InfoResponse[List[VoiceRead]],
+diff --git a/orchestra/web/api/plot/llm_inference.py b/orchestra/web/api/plot/llm_inference.py
+index ebcf2a1b..0d054973 100644
+--- a/orchestra/web/api/plot/llm_inference.py
++++ b/orchestra/web/api/plot/llm_inference.py
+@@ -379,7 +379,7 @@ async def infer_plot_config(
+     )
+ 
+     payload = {
+-        "model": "gpt-4o-mini@openai",
++        "model": "openai/gpt-4o-mini@openrouter",
+         "messages": [
+             {"role": "system", "content": SYSTEM_PROMPT},
+             {"role": "user", "content": user_prompt},
+-- 
+2.43.0
+

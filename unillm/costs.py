@@ -42,8 +42,35 @@ def _normalize_model_name(model: str) -> str:
         The model name without provider suffix.
     """
     if "@" in model:
-        return model.split("@")[0]
+        return model.rsplit("@", 1)[0]
     return model
+
+
+def _is_openrouter_model(model: str) -> bool:
+    """Return whether *model* is an OpenRouter transport or ``*@openrouter`` endpoint."""
+
+    if model.endswith("@openrouter"):
+        return True
+    return model.startswith("openrouter/")
+
+
+def extract_openrouter_usage_cost(usage: Union[dict, object, None]) -> Optional[float]:
+    """Return OpenRouter's authoritative ``usage.cost`` (USD) when present."""
+
+    if usage is None:
+        return None
+    cost = _get_nested_attr(usage, "cost", default=None)
+    if cost is None and isinstance(usage, dict):
+        cost = usage.get("cost")
+    if cost is None:
+        return None
+    try:
+        value = float(cost)
+    except (TypeError, ValueError):
+        return None
+    if value < 0:
+        return None
+    return value
 
 
 def _get_model_info(model: str) -> dict:
@@ -63,6 +90,7 @@ def _get_model_info(model: str) -> dict:
         ensure_endpoints_imported,
         get_model_alias,
         get_transport_model_alias,
+        openrouter_model,
     )
 
     ensure_endpoints_imported()
@@ -73,8 +101,14 @@ def _get_model_info(model: str) -> dict:
             candidates.append(get_transport_model_alias(model))
         except ValueError:
             candidates.append(_normalize_model_name(model))
+            if model.endswith("@openrouter"):
+                candidates.append(openrouter_model(_normalize_model_name(model)))
     else:
         candidates.append(model)
+        if model.startswith("openrouter/"):
+            pass
+        elif "/" in model:
+            candidates.append(openrouter_model(model))
 
     last_error: Exception | None = None
     for candidate in dict.fromkeys(candidates):
@@ -82,6 +116,19 @@ def _get_model_info(model: str) -> dict:
             return litellm.get_model_info(candidate)
         except Exception as e:
             last_error = e
+
+    # Fall back to OpenRouter catalog snapshot pricing when LiteLLM is missing
+    # the model (common for the long tail of *@openrouter endpoints).
+    if _is_openrouter_model(model):
+        from .openrouter_catalog import catalog_pricing_as_litellm_info
+
+        model_id = _normalize_model_name(model)
+        if model_id.startswith("openrouter/"):
+            model_id = model_id[len("openrouter/") :]
+        catalog_info = catalog_pricing_as_litellm_info(model_id)
+        if catalog_info is not None:
+            return catalog_info
+
     raise ValueError(f"Could not find pricing info for model '{model}': {last_error}")
 
 
@@ -214,7 +261,9 @@ def compute_cost_from_response(
     """
     Compute cost from a ChatCompletion response object.
 
-    Extracts token usage from the response and computes the cost.
+    For OpenRouter transports, prefers the authoritative ``usage.cost`` field
+    when present. Otherwise extracts token usage and prices via LiteLLM /
+    catalog fallback.
 
     Args:
         model: The model identifier.
@@ -226,17 +275,27 @@ def compute_cost_from_response(
     # Extract usage from response
     if hasattr(response, "usage"):
         usage = response.usage
-        if hasattr(usage, "prompt_tokens"):
-            prompt_tokens = usage.prompt_tokens or 0
-            completion_tokens = usage.completion_tokens or 0
-        else:
+        if usage is None:
             return None
     elif isinstance(response, dict):
         usage = response.get("usage", {})
         if not usage:
             return None
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
+    else:
+        return None
+
+    # OpenRouter reports the true charged USD amount on usage.cost.
+    if _is_openrouter_model(model):
+        reported = extract_openrouter_usage_cost(usage)
+        if reported is not None:
+            return reported
+
+    if hasattr(usage, "prompt_tokens"):
+        prompt_tokens = usage.prompt_tokens or 0
+        completion_tokens = usage.completion_tokens or 0
+    elif isinstance(usage, dict):
+        prompt_tokens = usage.get("prompt_tokens", 0) or 0
+        completion_tokens = usage.get("completion_tokens", 0) or 0
     else:
         return None
 
@@ -247,6 +306,11 @@ def compute_cost_from_response(
     ) or _get_nested_attr(usage, "cache_read_input_tokens")
 
     if prompt_tokens == 0 and completion_tokens == 0:
+        # Still allow OpenRouter zero-token responses with an explicit cost.
+        if _is_openrouter_model(model):
+            reported = extract_openrouter_usage_cost(usage)
+            if reported is not None:
+                return reported
         return None
 
     try:

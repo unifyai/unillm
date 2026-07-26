@@ -4,7 +4,9 @@ from . import deepseek
 from . import groq
 from . import minimax
 from . import mistral
+from . import moonshotai
 from . import openai
+from . import openrouter
 from . import openrouter_overrides
 from . import replicate
 from . import togetherai

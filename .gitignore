@@ -6,7 +6,6 @@
 .sensitive_data
 
 .cursor/*
-!.cursor/rules/
 /.cursor/projects/
 /.cursor/plans/
 
@@ -24,3 +23,6 @@ unillm.egg-info/
 # Ignore log contents but keep the README
 logs/*
 !logs/README.md
+
+# Local sibling clones for path deps in this environment
+.deps/
