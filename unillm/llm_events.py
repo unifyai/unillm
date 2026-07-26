@@ -43,7 +43,7 @@ class LLMEvent:
             None for streaming requests or errors.
         provider_cost: The raw cost charged by the LLM provider (in USD).
             None for cache hits, streaming, or errors.
-        billed_cost: The cost charged to the user (provider_cost × margin, in USD).
+        billed_cost: The cost charged to the user (in USD).
             None for cache hits, streaming, or errors.
         origin: Optional user-supplied tag identifying the call origin
             (e.g. ``"ConversationManager.decide"``). ``None`` when not set.

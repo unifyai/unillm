@@ -1470,13 +1470,11 @@ class Unify(_UniClient):
         finally:
             # Deduct credits based on usage after streaming completes
             if usage_info is not None:
-                from ..costs import get_cost_margin
-
                 provider_cost, prompt_tokens, completion_tokens = (
                     _provider_cost_from_stream_usage(accounting_model, usage_info)
                 )
                 if provider_cost is not None and provider_cost > 0:
-                    billed_cost = provider_cost * get_cost_margin()
+                    billed_cost = provider_cost
                     _safe_deduct_credits(
                         billed_cost,
                         api_key=self._api_key,
@@ -1568,13 +1566,10 @@ class Unify(_UniClient):
             except Exception:
                 pass
         if completion is not None:
-            from ..costs import get_cost_margin
-
             accounting_model = _canonical_model_for_accounting(retry_kw.get("model"))
             cost = compute_cost_from_response(accounting_model, completion)
             if cost is not None and cost > 0:
-                margin = get_cost_margin()
-                billed = cost * margin
+                billed = cost
                 _safe_deduct_credits(
                     billed,
                     api_key=self._api_key,
@@ -1761,14 +1756,12 @@ class Unify(_UniClient):
 
             # Compute costs for event (only for cache misses - cache hits are free)
             if not in_cache and chat_completion is not None:
-                from ..costs import get_cost_margin
-
                 provider_cost = compute_cost_from_response(
                     accounting_model,
                     chat_completion,
                 )
                 if provider_cost is not None and provider_cost > 0:
-                    billed_cost = provider_cost * get_cost_margin()
+                    billed_cost = provider_cost
 
             # Emit LLM event (after LLM call, always runs)
             # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
@@ -2087,13 +2080,11 @@ class AsyncUnify(_UniClient):
 
             # Deduct credits based on usage after streaming completes
             if usage_info is not None:
-                from ..costs import get_cost_margin
-
                 provider_cost, prompt_tokens, completion_tokens = (
                     _provider_cost_from_stream_usage(accounting_model, usage_info)
                 )
                 if provider_cost is not None and provider_cost > 0:
-                    billed_cost = provider_cost * get_cost_margin()
+                    billed_cost = provider_cost
                     asyncio.create_task(
                         asyncio.to_thread(
                             _safe_deduct_credits,
@@ -2191,13 +2182,10 @@ class AsyncUnify(_UniClient):
             except Exception:
                 pass
         if completion is not None:
-            from ..costs import get_cost_margin
-
             accounting_model = _canonical_model_for_accounting(retry_kw.get("model"))
             cost = compute_cost_from_response(accounting_model, completion)
             if cost is not None and cost > 0:
-                margin = get_cost_margin()
-                billed = cost * margin
+                billed = cost
                 asyncio.create_task(
                     asyncio.to_thread(
                         _safe_deduct_credits,
@@ -2427,14 +2415,12 @@ class AsyncUnify(_UniClient):
 
             # Compute costs for event (only for cache misses - cache hits are free)
             if not in_cache and chat_completion is not None:
-                from ..costs import get_cost_margin
-
                 provider_cost = compute_cost_from_response(
                     accounting_model,
                     chat_completion,
                 )
                 if provider_cost is not None and provider_cost > 0:
-                    billed_cost = provider_cost * get_cost_margin()
+                    billed_cost = provider_cost
 
             # Emit LLM event (after LLM call, always runs)
             # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
