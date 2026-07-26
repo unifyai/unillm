@@ -8,6 +8,41 @@ _MODEL_TRANSPORT_ALIAS_MAP: Dict[str, str] = {}
 _MODEL_INFO_MAP: Dict[str, Dict[str, Any]] = {}
 _ENDPOINTS_IMPORTED = False
 _OPENROUTER_PREFIX = "openrouter/"
+_OPENROUTER_PROVIDER = "openrouter"
+
+
+def _split_endpoint(endpoint: str) -> tuple[str, str]:
+    """Split ``model@provider``; model may contain ``/`` (OpenRouter ids)."""
+
+    if "@" not in endpoint:
+        raise ValueError(
+            f"Invalid endpoint {endpoint!r}; expected 'model@provider'",
+        )
+    model, provider = endpoint.rsplit("@", 1)
+    if not model or not provider:
+        raise ValueError(
+            f"Invalid endpoint {endpoint!r}; expected 'model@provider'",
+        )
+    return model, provider
+
+
+def _is_dynamic_openrouter_endpoint(endpoint: str) -> bool:
+    try:
+        _, provider = _split_endpoint(endpoint)
+    except ValueError:
+        return False
+    return provider == _OPENROUTER_PROVIDER
+
+
+def _dynamic_openrouter_aliases(endpoint: str) -> tuple[str, str]:
+    """Return (public_alias, transport_alias) for ``*@openrouter``."""
+
+    model_id, provider = _split_endpoint(endpoint)
+    if provider != _OPENROUTER_PROVIDER:
+        raise ValueError(f"Model {endpoint} not found")
+    transport = openrouter_model(model_id)
+    return transport, transport
+
 
 _ANTHROPIC_PUBLIC_ALIASES = {
     "claude-3-haiku": "anthropic/claude-3-haiku-20240307",
@@ -84,6 +119,14 @@ def openrouter_model(model_id: str) -> str:
 def _public_model_alias(provider: str, model: str, alias: str) -> str:
     if provider == "openai":
         return model
+    if provider == "openrouter":
+        # Public/accounting id is the OpenRouter transport id so pricing and
+        # LiteLLM metadata resolve without a second lookup.
+        return (
+            openrouter_model(model)
+            if not alias.startswith(_OPENROUTER_PREFIX)
+            else alias
+        )
     if provider == "anthropic":
         return _ANTHROPIC_PUBLIC_ALIASES.get(model, alias)
     if provider == "deepseek":
@@ -125,9 +168,12 @@ def get_model_alias(endpoint: str) -> str:
     """
     ensure_endpoints_imported()
     alias = _MODEL_ALIAS_MAP.get(endpoint)
-    if alias is None:
-        raise ValueError(f"Model {endpoint} not found")
-    return alias
+    if alias is not None:
+        return alias
+    if _is_dynamic_openrouter_endpoint(endpoint):
+        public, _transport = _dynamic_openrouter_aliases(endpoint)
+        return public
+    raise ValueError(f"Model {endpoint} not found")
 
 
 def get_transport_model_alias(endpoint: str) -> str:
@@ -140,48 +186,70 @@ def get_transport_model_alias(endpoint: str) -> str:
 
     ensure_endpoints_imported()
     alias = _MODEL_TRANSPORT_ALIAS_MAP.get(endpoint)
-    if alias is None:
-        return get_model_alias(endpoint)
-    return alias
+    if alias is not None:
+        return alias
+    if _is_dynamic_openrouter_endpoint(endpoint):
+        _public, transport = _dynamic_openrouter_aliases(endpoint)
+        return transport
+    return get_model_alias(endpoint)
 
 
-def list_models(provider: str) -> list[str]:
+def list_models(
+    provider: str, *, include_openrouter_catalog: bool = False
+) -> list[str]:
     ensure_endpoints_imported()
     suffix = f"@{provider}"
-    return sorted(
+    models = {
         endpoint[: -len(suffix)]
         for endpoint in _MODEL_ALIAS_MAP
         if endpoint.endswith(suffix)
-    )
+    }
+    if provider == _OPENROUTER_PROVIDER and include_openrouter_catalog:
+        from unillm.openrouter_catalog import list_openrouter_model_ids
+
+        models.update(list_openrouter_model_ids(allow_fetch=True))
+    return sorted(models)
 
 
 def list_providers() -> list[str]:
     """Return provider names with at least one registered model endpoint."""
 
     ensure_endpoints_imported()
-    return sorted(
-        {
-            endpoint.rsplit("@", 1)[1]
-            for endpoint in _MODEL_ALIAS_MAP
-            if "@" in endpoint
-        },
-    )
+    providers = {
+        endpoint.rsplit("@", 1)[1] for endpoint in _MODEL_ALIAS_MAP if "@" in endpoint
+    }
+    providers.add(_OPENROUTER_PROVIDER)
+    return sorted(providers)
 
 
-def list_endpoints(provider: str | None = None) -> list[str]:
+def list_endpoints(
+    provider: str | None = None,
+    *,
+    include_openrouter_catalog: bool = False,
+) -> list[str]:
     """Return supported model endpoints in ``model@provider`` form.
 
     Args:
         provider: Optional provider filter, e.g. ``"openai"``.
+        include_openrouter_catalog: When True, merge in OpenRouter catalog ids
+            as ``<id>@openrouter`` (network/disk snapshot; best-effort).
     """
 
     ensure_endpoints_imported()
+    endpoints = set(_MODEL_ALIAS_MAP)
+    if include_openrouter_catalog and (
+        provider is None or provider == _OPENROUTER_PROVIDER
+    ):
+        from unillm.openrouter_catalog import list_openrouter_model_ids
+
+        endpoints.update(
+            f"{model_id}@{_OPENROUTER_PROVIDER}"
+            for model_id in list_openrouter_model_ids(allow_fetch=True)
+        )
     if provider is None:
-        return sorted(_MODEL_ALIAS_MAP)
+        return sorted(endpoints)
     suffix = f"@{provider}"
-    return sorted(
-        endpoint for endpoint in _MODEL_ALIAS_MAP if endpoint.endswith(suffix)
-    )
+    return sorted(endpoint for endpoint in endpoints if endpoint.endswith(suffix))
 
 
 def get_model_info(endpoint: str) -> Dict[str, Any]:

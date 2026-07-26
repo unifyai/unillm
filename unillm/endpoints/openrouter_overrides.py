@@ -39,7 +39,7 @@ def _openai_chat(
     cache_write: float | None = None,
     supports_reasoning: bool = False,
 ) -> dict:
-    """OpenAI catalog models routed via OpenRouter.
+    """OpenAI catalog models (shared metadata for OpenRouter transport ids).
 
     LiteLLM's ``drop_params=True`` strips ``reasoning_effort`` / tool controls
     unless these capability flags are present on the OpenRouter model entry.
