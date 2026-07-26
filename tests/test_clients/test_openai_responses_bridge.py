@@ -1,4 +1,8 @@
-"""Regression tests for OpenAI Responses bridge routing via OpenRouter."""
+"""Regression tests for OpenAI Responses bridge routing.
+
+Native ``*@openai`` uses LiteLLM's ``openai/responses/`` bridge.
+``openai/...@openrouter`` uses OpenRouter's ``openrouter/responses/`` path.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ import unillm.logger as unillm_logger
 from unillm.caching.local_cache import LocalCache
 from unillm.llm_events import allm_event_hook_scope
 
+OPENAI_RESPONSES_GPT_55 = "openai/responses/gpt-5.5"
 OPENROUTER_RESPONSES_GPT_55 = "openrouter/responses/openai/gpt-5.5"
 
 
@@ -63,7 +68,7 @@ GPT_55_TOOL = {
 
 
 def test_sync_openai_tool_reasoning_call_uses_responses_bridge() -> None:
-    """Sync GPT-5.5 tool calls with reasoning use OpenRouter's Responses bridge."""
+    """Sync GPT-5.5 tool calls with reasoning use the native OpenAI Responses bridge."""
     captured: dict = {}
     prompt = f"Find Alice. request={uuid4()}"
 
@@ -89,7 +94,7 @@ def test_sync_openai_tool_reasoning_call_uses_responses_bridge() -> None:
             return_full_completion=True,
         )
 
-    assert captured["model"] == OPENROUTER_RESPONSES_GPT_55
+    assert captured["model"] == OPENAI_RESPONSES_GPT_55
     assert captured["reasoning_effort"] == "low"
     assert captured["tool_choice"] == "required"
     assert captured["parallel_tool_calls"] is False  # explicit False is preserved
@@ -102,6 +107,35 @@ def test_sync_openai_tool_reasoning_call_uses_responses_bridge() -> None:
     assert GPT_55_TOOL["strict"] is True
     assert "strict" not in GPT_55_TOOL["function"]
     assert response.choices[0].message.tool_calls[0].function.name == "filter_contacts"
+
+
+def test_sync_openrouter_openai_tool_reasoning_uses_openrouter_responses() -> None:
+    """OpenRouter-hosted GPT-5.5 uses OpenRouter's Responses bridge."""
+    captured: dict = {}
+    prompt = f"Find Alice. request={uuid4()}"
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return _tool_response(tool_call=True)
+
+    with (
+        patch("unillm.clients.uni_llm.litellm.completion", side_effect=fake_completion),
+        patch("unillm.clients.uni_llm.compute_cost_from_response", return_value=None),
+    ):
+        client = unillm.Unify(
+            "openai/gpt-5.5@openrouter",
+            reasoning_effort="low",
+            api_key="test-key",
+            cache=False,
+        )
+        client.generate(
+            messages=[{"role": "user", "content": prompt}],
+            tools=[GPT_55_TOOL],
+            tool_choice="required",
+            return_full_completion=True,
+        )
+
+    assert captured["model"] == OPENROUTER_RESPONSES_GPT_55
 
 
 @pytest.mark.asyncio
@@ -135,7 +169,7 @@ async def test_async_openai_responses_bridge_preserves_stateful_tool_history() -
             return_full_completion=True,
         )
 
-    assert captured["model"] == OPENROUTER_RESPONSES_GPT_55
+    assert captured["model"] == OPENAI_RESPONSES_GPT_55
     assert captured["tool_choice"] == "required"
     assert client.messages[-1]["role"] == "assistant"
     assert client.messages[-1]["tool_calls"][0]["function"]["name"] == "filter_contacts"
@@ -178,13 +212,13 @@ async def test_openai_responses_bridge_cost_events_use_canonical_model() -> None
                     return_full_completion=True,
                 )
 
-    assert captured["model"] == OPENROUTER_RESPONSES_GPT_55
+    assert captured["model"] == OPENAI_RESPONSES_GPT_55
     assert compute_cost.call_args.args[0] == "gpt-5.5"
     assert len(events) == 1
     assert events[0].model == "gpt-5.5"
     assert events[0].provider_cost == 0.02
     assert llm_events[0].request["model"] == "gpt-5.5"
-    assert llm_events[0].request["transport_model"] == OPENROUTER_RESPONSES_GPT_55
+    assert llm_events[0].request["transport_model"] == OPENAI_RESPONSES_GPT_55
 
 
 @pytest.mark.asyncio
@@ -235,7 +269,7 @@ async def test_openai_responses_bridge_cache_and_logging_round_trip(
         )
 
     assert len(calls) == 1
-    assert calls[0]["model"] == OPENROUTER_RESPONSES_GPT_55
+    assert calls[0]["model"] == OPENAI_RESPONSES_GPT_55
     assert first.choices[0].message.content == second.choices[0].message.content
 
     log_text = "\n".join(path.read_text() for path in (tmp_path / "logs").glob("*.txt"))

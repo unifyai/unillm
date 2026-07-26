@@ -2,7 +2,11 @@
 
 import unillm
 from unillm.endpoints import list_endpoints, list_providers
-from unillm.endpoints.utils import get_model_alias, list_models
+from unillm.endpoints.utils import (
+    get_model_alias,
+    get_transport_model_alias,
+    list_models,
+)
 
 _GPT_56_FAMILY = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
 
@@ -12,7 +16,17 @@ def test_gpt_5_6_family_is_available_through_openai_endpoint() -> None:
     openai_models = list_models("openai")
     for model in _GPT_56_FAMILY:
         assert get_model_alias(f"{model}@openai") == model
+        assert get_transport_model_alias(f"{model}@openai") == model
         assert model in openai_models
+        assert not get_transport_model_alias(f"{model}@openai").startswith(
+            "openrouter/",
+        )
+
+
+def test_gpt_5_6_family_is_available_through_openrouter_endpoint() -> None:
+    for model in _GPT_56_FAMILY:
+        endpoint = f"openai/{model}@openrouter"
+        assert get_transport_model_alias(endpoint) == f"openrouter/openai/{model}"
 
 
 def test_async_unify_accepts_gpt_5_6_sol_endpoint() -> None:

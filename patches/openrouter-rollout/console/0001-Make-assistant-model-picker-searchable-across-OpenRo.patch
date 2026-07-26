@@ -1,0 +1,456 @@
+From 41230d881d4dfcd11d6974677dbfc450f3ef7b8b Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Sun, 26 Jul 2026 21:05:27 +0000
+Subject: [PATCH] Make assistant model picker searchable across OpenRouter.
+
+Replace the static Select with a combobox that keeps curated
+recommendations and searches Orchestra's OpenRouter catalog endpoint.
+---
+ .../default-model-options/search/route.ts     |  41 +++
+ .../Assistants/Profile/DefaultModelPicker.tsx | 256 ++++++++++++++----
+ .../Assistants/useDefaultModelOptions.ts      |  10 +-
+ src/lib/client/defaultModels.ts               |  25 ++
+ src/types/assistants/assistant.ts             |  17 +-
+ 5 files changed, 297 insertions(+), 52 deletions(-)
+ create mode 100644 src/app/api/assistant/default-model-options/search/route.ts
+
+diff --git a/src/app/api/assistant/default-model-options/search/route.ts b/src/app/api/assistant/default-model-options/search/route.ts
+new file mode 100644
+index 00000000..c59ac187
+--- /dev/null
++++ b/src/app/api/assistant/default-model-options/search/route.ts
+@@ -0,0 +1,41 @@
++import { NextRequest, NextResponse } from 'next/server';
++import { getApiKeyFromRequest, unauthorized } from '../../../_utils/auth';
++import { snakeToCamelObject } from '@/utils/casing';
++import type { DefaultModelOption } from '@/types/assistants/assistant';
++
++const ORCHESTRA_BASE_URL = `${process.env.ORCHESTRA_URL}/v0`;
++
++export async function GET(request: NextRequest) {
++  const apiKey = await getApiKeyFromRequest(request);
++  if (!apiKey) {
++    return unauthorized();
++  }
++
++  const usage = request.nextUrl.searchParams.get('usage') || 'actor';
++  if (usage !== 'actor' && usage !== 'slow_brain') {
++    return NextResponse.json({ detail: "usage must be 'actor' or 'slow_brain'" }, { status: 400 });
++  }
++
++  const q = request.nextUrl.searchParams.get('q') || '';
++  const limit = request.nextUrl.searchParams.get('limit') || '50';
++
++  try {
++    const params = new URLSearchParams({ usage, q, limit });
++    const response = await fetch(
++      `${ORCHESTRA_BASE_URL}/assistant/default-model-options/search?${params}`,
++      {
++        headers: { Authorization: `Bearer ${apiKey}` },
++      }
++    );
++    const data = await response.json();
++
++    if (!response.ok) {
++      return NextResponse.json(data, { status: response.status });
++    }
++
++    const options = snakeToCamelObject<DefaultModelOption[]>(data.info ?? []);
++    return NextResponse.json(options, { status: response.status });
++  } catch {
++    return NextResponse.json({ detail: 'Failed to search default model options' }, { status: 500 });
++  }
++}
+diff --git a/src/components/Pages/Assistants/Profile/DefaultModelPicker.tsx b/src/components/Pages/Assistants/Profile/DefaultModelPicker.tsx
+index 023868cd..480e1e8e 100644
+--- a/src/components/Pages/Assistants/Profile/DefaultModelPicker.tsx
++++ b/src/components/Pages/Assistants/Profile/DefaultModelPicker.tsx
+@@ -1,22 +1,32 @@
+ 'use client';
+ 
+ import * as React from 'react';
++import { Check, ChevronsUpDown } from 'lucide-react';
++import { cn } from '@/lib/utils';
+ import { Label } from '@/components/UI/label';
++import { Button } from '@/components/UI/button';
+ import {
+-  Select,
+-  SelectContent,
+-  SelectItem,
+-  SelectTrigger,
+-  SelectValue,
+-} from '@/components/UI/select';
++  Command,
++  CommandEmpty,
++  CommandGroup,
++  CommandInput,
++  CommandItem,
++  CommandList,
++} from '@/components/UI/command';
++import { Popover, PopoverContent, PopoverTrigger } from '@/components/UI/popover';
+ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/UI/tooltip';
+ import { InfoSquareButton } from '@/components/UI/info-square-button';
+ import {
+   useDefaultModelOptions,
+   encodeDefaultModelValue,
+   decodeDefaultModelValue,
++  SYSTEM_DEFAULT_MODEL_VALUE,
+ } from '@/hooks/Assistants/useDefaultModelOptions';
+-import type { ModelCatalogUsage } from '@/lib/client/defaultModels';
++import {
++  searchDefaultModelOptions,
++  type ModelCatalogUsage,
++} from '@/lib/client/defaultModels';
++import type { DefaultModelOption } from '@/types/assistants/assistant';
+ 
+ export interface DefaultModelPickerProps {
+   model: string | null;
+@@ -34,9 +44,14 @@ export interface DefaultModelPickerProps {
+   creditUnit?: 'task' | 'message';
+ }
+ 
++function formatCredits(credits: number | null | undefined, suffix: string): string {
++  if (credits == null) return 'Credits vary';
++  return `~${new Intl.NumberFormat('en-US').format(credits)} credits / ${suffix}`;
++}
++
+ /**
+- * Catalog picker for an assistant conversation or task model.
+- * System Default leaves the field unset; other options pin a concrete model.
++ * Searchable catalog picker for an assistant conversation or task model.
++ * Recommended curated options appear first; OpenRouter search fills the rest.
+  */
+ export function DefaultModelPicker({
+   model,
+@@ -49,12 +64,90 @@ export function DefaultModelPicker({
+   usage = 'actor',
+   creditUnit = 'task',
+ }: DefaultModelPickerProps) {
+-  const { options, isLoading } = useDefaultModelOptions(usage);
++  const { options: recommended, isLoading } = useDefaultModelOptions(usage);
++  const [open, setOpen] = React.useState(false);
++  const [query, setQuery] = React.useState('');
++  const [searchHits, setSearchHits] = React.useState<DefaultModelOption[]>([]);
++  const [isSearching, setIsSearching] = React.useState(false);
++
+   const selectedValue = encodeDefaultModelValue(model, reasoningEffort);
+-  const selectedOption = options.find(
++  const creditSuffix = creditUnit === 'message' ? 'typical message' : 'typical task';
++
++  React.useEffect(() => {
++    if (!open) return;
++    const trimmed = query.trim();
++    if (trimmed.length < 2) {
++      setSearchHits([]);
++      setIsSearching(false);
++      return;
++    }
++    let cancelled = false;
++    setIsSearching(true);
++    const handle = window.setTimeout(() => {
++      void (async () => {
++        const result = await searchDefaultModelOptions(trimmed, usage);
++        if (cancelled) return;
++        if (Array.isArray(result)) {
++          setSearchHits(result);
++        } else {
++          setSearchHits([]);
++        }
++        setIsSearching(false);
++      })();
++    }, 250);
++    return () => {
++      cancelled = true;
++      window.clearTimeout(handle);
++    };
++  }, [query, usage, open]);
++
++  const recommendedKeys = React.useMemo(
++    () =>
++      new Set(
++        recommended.map((option) => encodeDefaultModelValue(option.model, option.reasoningEffort))
++      ),
++    [recommended]
++  );
++
++  const filteredSearchHits = React.useMemo(
++    () =>
++      searchHits.filter((hit) => {
++        const key = encodeDefaultModelValue(hit.model, hit.reasoningEffort);
++        return !recommendedKeys.has(key);
++      }),
++    [searchHits, recommendedKeys]
++  );
++
++  const allVisible = React.useMemo(() => {
++    const merged = [...recommended, ...filteredSearchHits];
++    if (!model) return merged;
++    const selectedKey = encodeDefaultModelValue(model, reasoningEffort);
++    if (merged.some((option) => encodeDefaultModelValue(option.model, option.reasoningEffort) === selectedKey)) {
++      return merged;
++    }
++    return [
++      {
++        model,
++        reasoningEffort,
++        label: model,
++        approxCreditsPerTask: null,
++        approxCreditsPerMessage: null,
++        artificialAnalysisUrl: null,
++        recommended: false,
++        eligible: true,
++      } satisfies DefaultModelOption,
++      ...merged,
++    ];
++  }, [recommended, filteredSearchHits, model, reasoningEffort]);
++
++  const selectedOption = allVisible.find(
+     (option) => encodeDefaultModelValue(option.model, option.reasoningEffort) === selectedValue
+   );
+-  const creditSuffix = creditUnit === 'message' ? 'typical message' : 'typical task';
++
++  const triggerLabel =
++    selectedOption?.label ||
++    (selectedValue === SYSTEM_DEFAULT_MODEL_VALUE ? 'System Default' : model) ||
++    'Select a model';
+ 
+   return (
+     <div className="space-y-1.5">
+@@ -71,40 +164,111 @@ export function DefaultModelPicker({
+           </Tooltip>
+         </TooltipProvider>
+       </div>
+-      <Select
+-        value={selectedValue}
+-        onValueChange={(value) => {
+-          const decoded = decodeDefaultModelValue(value);
+-          onChange(decoded.model, decoded.reasoningEffort);
+-        }}
+-        disabled={disabled || isLoading || options.length === 0}
+-      >
+-        <SelectTrigger id={id} className="bg-card">
+-          <SelectValue placeholder={isLoading ? 'Loading models...' : 'Select a model'} />
+-        </SelectTrigger>
+-        <SelectContent>
+-          {options.map((option) => {
+-            const credits =
+-              creditUnit === 'message'
+-                ? option.approxCreditsPerMessage
+-                : option.approxCreditsPerTask;
+-            return (
+-              <SelectItem
+-                key={encodeDefaultModelValue(option.model, option.reasoningEffort)}
+-                value={encodeDefaultModelValue(option.model, option.reasoningEffort)}
+-              >
+-                <div className="flex flex-col items-start">
+-                  <span>{option.label}</span>
+-                  <span className="text-caption text-muted-foreground">
+-                    ~{new Intl.NumberFormat('en-US').format(credits)} credits / {creditSuffix}
+-                  </span>
+-                </div>
+-              </SelectItem>
+-            );
+-          })}
+-        </SelectContent>
+-      </Select>
+-      {selectedOption && (
++      <Popover open={open} onOpenChange={setOpen}>
++        <PopoverTrigger asChild>
++          <Button
++            id={id}
++            variant="outline"
++            role="combobox"
++            aria-expanded={open}
++            disabled={disabled || isLoading}
++            className="bg-card w-full justify-between px-3"
++          >
++            <span className="truncate">{isLoading ? 'Loading models...' : triggerLabel}</span>
++            <ChevronsUpDown className="ml-1 h-4 w-4 shrink-0 opacity-50" />
++          </Button>
++        </PopoverTrigger>
++        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
++          <Command shouldFilter={false}>
++            <CommandInput
++              placeholder="Search OpenRouter models…"
++              value={query}
++              onValueChange={setQuery}
++              onKeyDown={(e) => {
++                e.stopPropagation();
++                e.nativeEvent.stopImmediatePropagation();
++              }}
++            />
++            <CommandList>
++              <CommandEmpty>
++                {isSearching ? 'Searching…' : 'No matching models.'}
++              </CommandEmpty>
++              <CommandGroup heading="Recommended">
++                {recommended.map((option) => {
++                  const value = encodeDefaultModelValue(option.model, option.reasoningEffort);
++                  const credits =
++                    creditUnit === 'message'
++                      ? option.approxCreditsPerMessage
++                      : option.approxCreditsPerTask;
++                  return (
++                    <CommandItem
++                      key={value}
++                      value={value}
++                      keywords={[option.label, option.model || '']}
++                      onSelect={() => {
++                        const decoded = decodeDefaultModelValue(value);
++                        onChange(decoded.model, decoded.reasoningEffort);
++                        setOpen(false);
++                      }}
++                    >
++                      <div className="flex min-w-0 flex-1 flex-col items-start">
++                        <span className="truncate">{option.label}</span>
++                        <span className="text-caption text-muted-foreground">
++                          {formatCredits(credits, creditSuffix)}
++                        </span>
++                      </div>
++                      <Check
++                        className={cn(
++                          'ml-auto h-4 w-4',
++                          value === selectedValue ? 'opacity-100' : 'opacity-0'
++                        )}
++                      />
++                    </CommandItem>
++                  );
++                })}
++              </CommandGroup>
++              {filteredSearchHits.length > 0 && (
++                <CommandGroup heading="OpenRouter">
++                  {filteredSearchHits.map((option) => {
++                    const value = encodeDefaultModelValue(option.model, option.reasoningEffort);
++                    const eligible = option.eligible !== false;
++                    return (
++                      <CommandItem
++                        key={value}
++                        value={value}
++                        disabled={!eligible}
++                        keywords={[option.label, option.model || '']}
++                        onSelect={() => {
++                          if (!eligible) return;
++                          const decoded = decodeDefaultModelValue(value);
++                          onChange(decoded.model, decoded.reasoningEffort);
++                          setOpen(false);
++                        }}
++                      >
++                        <div className="flex min-w-0 flex-1 flex-col items-start">
++                          <span className="truncate">{option.label}</span>
++                          <span className="text-caption text-muted-foreground">
++                            {eligible
++                              ? formatCredits(null, creditSuffix)
++                              : option.disabledReason || 'Unavailable'}
++                          </span>
++                        </div>
++                        <Check
++                          className={cn(
++                            'ml-auto h-4 w-4',
++                            value === selectedValue ? 'opacity-100' : 'opacity-0'
++                          )}
++                        />
++                      </CommandItem>
++                    );
++                  })}
++                </CommandGroup>
++              )}
++            </CommandList>
++          </Command>
++        </PopoverContent>
++      </Popover>
++      {selectedOption?.artificialAnalysisUrl && (
+         <a
+           href={selectedOption.artificialAnalysisUrl}
+           target="_blank"
+diff --git a/src/hooks/Assistants/useDefaultModelOptions.ts b/src/hooks/Assistants/useDefaultModelOptions.ts
+index 2c9894c4..eab9633a 100644
+--- a/src/hooks/Assistants/useDefaultModelOptions.ts
++++ b/src/hooks/Assistants/useDefaultModelOptions.ts
+@@ -51,6 +51,12 @@ export function decodeDefaultModelValue(value: string): {
+   if (!value || value === SYSTEM_DEFAULT_MODEL_VALUE) {
+     return { model: null, reasoningEffort: null };
+   }
+-  const [model, reasoningEffort] = value.split('::');
+-  return { model, reasoningEffort: reasoningEffort || null };
++  const sep = value.indexOf('::');
++  if (sep < 0) {
++    return { model: value, reasoningEffort: null };
++  }
++  return {
++    model: value.slice(0, sep),
++    reasoningEffort: value.slice(sep + 2) || null,
++  };
+ }
+diff --git a/src/lib/client/defaultModels.ts b/src/lib/client/defaultModels.ts
+index cf30a013..647d720a 100644
+--- a/src/lib/client/defaultModels.ts
++++ b/src/lib/client/defaultModels.ts
+@@ -25,3 +25,28 @@ export async function fetchDefaultModelOptions(
+     };
+   }
+ }
++
++export async function searchDefaultModelOptions(
++  query: string,
++  usage: ModelCatalogUsage = 'actor',
++  limit = 50
++): Promise<DefaultModelOption[] | ResponseProps> {
++  try {
++    const params = new URLSearchParams({
++      usage,
++      q: query,
++      limit: String(limit),
++    });
++    const res = await fetch(`/api/assistant/default-model-options/search?${params}`);
++    const data = await res.json();
++
++    if (!res.ok) {
++      return { detail: data?.detail || 'Failed to search default model options' };
++    }
++    return data;
++  } catch (error) {
++    return {
++      detail: error instanceof Error ? error.message : 'Failed to search default model options',
++    };
++  }
++}
+diff --git a/src/types/assistants/assistant.ts b/src/types/assistants/assistant.ts
+index 6f2a8e5c..eac0ff62 100644
+--- a/src/types/assistants/assistant.ts
++++ b/src/types/assistants/assistant.ts
+@@ -412,7 +412,8 @@ export interface AssistantUpdatePayload {
+ 
+ /**
+  * One selectable per-assistant LLM option, served by Orchestra's curated
+- * multimodal catalog (GET /api/assistant/default-model-options).
++ * multimodal catalog (GET /api/assistant/default-model-options) or OpenRouter
++ * search (GET /api/assistant/default-model-options/search).
+  */
+ export interface DefaultModelOption {
+   /** Null means system default (leave the assistant unset). */
+@@ -420,11 +421,19 @@ export interface DefaultModelOption {
+   reasoningEffort: string | null;
+   label: string;
+   /** Order-of-magnitude credits estimate for one typical actor task (display-only). */
+-  approxCreditsPerTask: number;
++  approxCreditsPerTask: number | null;
+   /** Order-of-magnitude credits estimate for one typical slow-brain message (display-only). */
+-  approxCreditsPerMessage: number;
++  approxCreditsPerMessage: number | null;
+   /** Artificial Analysis benchmark page for the model. */
+-  artificialAnalysisUrl: string;
++  artificialAnalysisUrl: string | null;
++  /** True for curated recommendations; false for OpenRouter search hits. */
++  recommended?: boolean;
++  /** False when the model fails capability policy for this usage. */
++  eligible?: boolean;
++  /** Why the option is not selectable, when eligible is false. */
++  disabledReason?: string | null;
++  /** Whether reasoning_effort may be set for this model. */
++  supportsReasoning?: boolean | null;
+ }
+ 
+ // Assistant voice types
+-- 
+2.43.0
+

@@ -11,7 +11,15 @@ from unillm.costs import (
     compute_cost_from_response,
     compute_full_cost_from_usage,
 )
-from unillm.endpoints import anthropic, deepseek, minimax, openai, xiaomi_mimo, zai
+from unillm.endpoints import (
+    anthropic,
+    deepseek,
+    minimax,
+    moonshotai,
+    openai,
+    xiaomi_mimo,
+    zai,
+)
 
 
 class TestNormalizeModelName:
@@ -39,9 +47,11 @@ class TestNormalizeModelName:
         assert _normalize_model_name("") == ""
 
     def test_handles_multiple_at_symbols(self):
-        """Test that only first @ is used for splitting."""
-        # Edge case: if model name somehow has multiple @, only split on first
-        assert _normalize_model_name("model@provider@extra") == "model"
+        """Test that only the final @provider suffix is stripped (rsplit)."""
+        # OpenRouter ids use '/', not '@'; if multiple '@' appear, keep the
+        # model portion left of the final provider suffix.
+        assert _normalize_model_name("model@provider@extra") == "model@provider"
+        assert _normalize_model_name("openai/gpt-4o@openrouter") == "openai/gpt-4o"
 
 
 class TestComputeCostWithProviderSuffix:
@@ -241,6 +251,7 @@ class TestSupportedModelPricingCoverage:
         "anthropic": anthropic.models,
         "deepseek": deepseek.models,
         "minimax": minimax.models,
+        "moonshotai": moonshotai.models,
         "xiaomi-mimo": xiaomi_mimo.models,
         "zai": zai.models,
     }

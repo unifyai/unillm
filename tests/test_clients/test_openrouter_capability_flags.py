@@ -14,7 +14,7 @@ from unillm.endpoints.utils import get_transport_model_alias
 
 
 def test_openrouter_gpt_55_keeps_reasoning_effort_and_tool_flags() -> None:
-    transport = get_transport_model_alias("gpt-5.5@openai")
+    transport = get_transport_model_alias("openai/gpt-5.5@openrouter")
     assert transport == "openrouter/openai/gpt-5.5"
 
     info = litellm.get_model_info(transport)
@@ -45,3 +45,9 @@ def test_openrouter_gpt_55_keeps_reasoning_effort_and_tool_flags() -> None:
     assert optional.get("reasoning_effort") == "high"
     assert optional.get("parallel_tool_calls") is True
     assert optional.get("tool_choice") == "auto"
+
+
+def test_native_openai_gpt_55_transport_is_not_openrouter() -> None:
+    transport = get_transport_model_alias("gpt-5.5@openai")
+    assert transport == "gpt-5.5"
+    assert not transport.startswith("openrouter/")
