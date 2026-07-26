@@ -1,0 +1,428 @@
+From 40abf02a1cecbfef65452932cd47b8b8cbdb7239 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Sun, 26 Jul 2026 21:02:34 +0000
+Subject: [PATCH] Retarget platform LLM defaults to *@openrouter.
+
+With UniLLM making gpt-*@openai native OpenAI (not OpenRouter), move
+production defaults, act profiles, observation scaling keys, and related
+tests to openai/<id>@openrouter. Accept OPENROUTER_API_KEY in provider
+credential validation.
+---
+ tests/common/test_act_llm_profiles.py          |  6 +++---
+ tests/common/test_llm_client.py                | 12 ++++++------
+ tests/common/test_production_settings.py       | 18 +++++++++++++++++-
+ .../actions/integration/conftest.py            |  2 +-
+ .../actions/test_persist_action.py             |  2 +-
+ .../test_coordinator_product_literacy_eval.py  |  2 +-
+ unify/actor/base.py                            |  4 ++--
+ unify/actor/environments/actor.py              |  2 +-
+ unify/common/act_llm_profiles.py               | 10 +++++-----
+ unify/common/observation_scaling_policy.json   |  9 +++++----
+ .../domains/brain_action_tools.py              |  2 +-
+ .../livekit_unify_adapter.py                   |  2 +-
+ unify/conversation_manager/settings.py         |  4 ++--
+ unify/file_manager/file_parsers/settings.py    |  2 +-
+ unify/gateway/local_setup.py                   |  7 ++++++-
+ unify/settings.py                              |  8 ++++++--
+ 16 files changed, 59 insertions(+), 33 deletions(-)
+
+diff --git a/tests/common/test_act_llm_profiles.py b/tests/common/test_act_llm_profiles.py
+index 2238569e0..4d4c2b49b 100644
+--- a/tests/common/test_act_llm_profiles.py
++++ b/tests/common/test_act_llm_profiles.py
+@@ -24,7 +24,7 @@ def test_default_profile_uses_actor_model():
+ def test_gpt_5_5_high_profile_uses_openai_high_effort():
+     profile = resolve_act_llm_profile(GPT_5_5_HIGH_ACT_LLM_PROFILE)
+ 
+-    assert profile.model == "gpt-5.5@openai"
++    assert profile.model == "openai/gpt-5.5@openrouter"
+     assert profile.reasoning_effort == "high"
+     assert profile.client_kwargs == {"reasoning_effort": "high"}
+ 
+@@ -45,8 +45,8 @@ def test_profile_docs_are_curated_and_include_relative_prices():
+     }
+     assert "roughly 17x the MiniMax input-token rate" in docs
+     assert "25x the MiniMax output-token rate" in docs
+-    assert "gpt-5.5@openai" in docs
+-    assert "gpt-5.6-sol@openai" in docs
++    assert "openai/gpt-5.5@openrouter" in docs
++    assert "openai/gpt-5.6-sol@openrouter" in docs
+ 
+ 
+ def test_profile_context_is_scoped():
+diff --git a/tests/common/test_llm_client.py b/tests/common/test_llm_client.py
+index 56c2df1f3..398741883 100644
+--- a/tests/common/test_llm_client.py
++++ b/tests/common/test_llm_client.py
+@@ -75,7 +75,7 @@ def test_new_slow_brain_llm_client_uses_terra_high_by_default() -> None:
+     with patch("unify.common.llm_client.unillm.AsyncUnify") as mock_async:
+         new_slow_brain_llm_client(origin="ConversationManager")
+         mock_async.assert_called_once_with(
+-            "gpt-5.6-terra@openai",
++            "openai/gpt-5.6-terra@openrouter",
+             reasoning_effort="high",
+             stateful=False,
+             origin="ConversationManager",
+@@ -83,12 +83,12 @@ def test_new_slow_brain_llm_client_uses_terra_high_by_default() -> None:
+ 
+ 
+ def test_new_slow_brain_llm_client_uses_assistant_slow_brain() -> None:
+-    SESSION_DETAILS.assistant.slow_brain_model = "gpt-5.6-luna@openai"
++    SESSION_DETAILS.assistant.slow_brain_model = "openai/gpt-5.6-luna@openrouter"
+     SESSION_DETAILS.assistant.slow_brain_reasoning_effort = "low"
+     with patch("unify.common.llm_client.unillm.AsyncUnify") as mock_async:
+         new_slow_brain_llm_client(origin="ConversationManager")
+         mock_async.assert_called_once_with(
+-            "gpt-5.6-luna@openai",
++            "openai/gpt-5.6-luna@openrouter",
+             reasoning_effort="low",
+             stateful=False,
+             origin="ConversationManager",
+@@ -97,12 +97,12 @@ def test_new_slow_brain_llm_client_uses_assistant_slow_brain() -> None:
+ 
+ def test_new_llm_client_uses_assistant_default_model_and_effort() -> None:
+     """The assistant default pins model and overrides call-site effort."""
+-    SESSION_DETAILS.assistant.default_model = "gpt-5.5@openai"
++    SESSION_DETAILS.assistant.default_model = "openai/gpt-5.5@openrouter"
+     SESSION_DETAILS.assistant.default_reasoning_effort = "low"
+     with patch("unify.common.llm_client.unillm.AsyncUnify") as mock_async:
+         new_llm_client(reasoning_effort="high")
+         mock_async.assert_called_once_with(
+-            "gpt-5.5@openai",
++            "openai/gpt-5.5@openrouter",
+             reasoning_effort="low",
+             stateful=False,
+             origin=None,
+@@ -125,7 +125,7 @@ def test_new_llm_client_without_effort_keeps_call_site_effort() -> None:
+ 
+ def test_new_llm_client_explicit_model_bypasses_assistant_default() -> None:
+     """Call sites pinning a model (fast brain, profiles) are untouched."""
+-    SESSION_DETAILS.assistant.default_model = "gpt-5.5@openai"
++    SESSION_DETAILS.assistant.default_model = "openai/gpt-5.5@openrouter"
+     SESSION_DETAILS.assistant.default_reasoning_effort = "low"
+     with patch("unify.common.llm_client.unillm.AsyncUnify") as mock_async:
+         new_llm_client("claude-4.8-opus@anthropic", reasoning_effort="high")
+diff --git a/tests/common/test_production_settings.py b/tests/common/test_production_settings.py
+index 2bedea736..67148482c 100644
+--- a/tests/common/test_production_settings.py
++++ b/tests/common/test_production_settings.py
+@@ -16,7 +16,7 @@ class TestLLMProviderValidation:
+     def test_default_model_is_gpt_5_6_sol(self):
+         """UNIFY_MODEL defaults to the primary production reasoning model."""
+         field_info = ProductionSettings.model_fields["UNIFY_MODEL"]
+-        assert field_info.default == "gpt-5.6-sol@openai"
++        assert field_info.default == "openai/gpt-5.6-sol@openrouter"
+         effort = ProductionSettings.model_fields["UNIFY_REASONING_EFFORT"]
+         assert effort.default == "high"
+ 
+@@ -27,6 +27,7 @@ class TestLLMProviderValidation:
+             OPENAI_API_KEY="",
+             ANTHROPIC_API_KEY="",
+             DEEPSEEK_API_KEY="",
++            OPENROUTER_API_KEY="",
+         )
+         with pytest.raises(RuntimeError) as exc_info:
+             settings.validate_llm_providers()
+@@ -41,6 +42,18 @@ class TestLLMProviderValidation:
+             OPENAI_API_KEY="sk-test",
+             ANTHROPIC_API_KEY="",
+             DEEPSEEK_API_KEY="",
++            OPENROUTER_API_KEY="",
++        )
++        settings.validate_llm_providers()
++
++    def test_validation_passes_when_openrouter_credential_provided(self):
++        """Validation accepts OpenRouter for *@openrouter platform defaults."""
++        settings = ProductionSettings(
++            UNITY_VALIDATE_LLM_PROVIDERS=True,
++            OPENAI_API_KEY="",
++            ANTHROPIC_API_KEY="",
++            DEEPSEEK_API_KEY="",
++            OPENROUTER_API_KEY="sk-or-test",
+         )
+         settings.validate_llm_providers()
+ 
+@@ -51,6 +64,7 @@ class TestLLMProviderValidation:
+             OPENAI_API_KEY="",
+             ANTHROPIC_API_KEY="",
+             DEEPSEEK_API_KEY="sk-test",
++            OPENROUTER_API_KEY="",
+         )
+         settings.validate_llm_providers()
+ 
+@@ -61,6 +75,7 @@ class TestLLMProviderValidation:
+             OPENAI_API_KEY="sk-test-openai",
+             ANTHROPIC_API_KEY="sk-ant-test",
+             DEEPSEEK_API_KEY="",
++            OPENROUTER_API_KEY="sk-or-test",
+         )
+         # Should not raise
+         settings.validate_llm_providers()
+@@ -72,6 +87,7 @@ class TestLLMProviderValidation:
+             OPENAI_API_KEY="",
+             ANTHROPIC_API_KEY="",
+             DEEPSEEK_API_KEY="",
++            OPENROUTER_API_KEY="",
+         )
+         # Should not raise even with empty credentials
+         settings.validate_llm_providers()
+diff --git a/tests/conversation_manager/actions/integration/conftest.py b/tests/conversation_manager/actions/integration/conftest.py
+index c46fce1f2..b24a1690b 100644
+--- a/tests/conversation_manager/actions/integration/conftest.py
++++ b/tests/conversation_manager/actions/integration/conftest.py
+@@ -64,7 +64,7 @@ def pytest_configure(config) -> None:
+     os.environ["UNITY_WEB_ENABLED"] = "false"
+     os.environ["UNITY_MEMORY_ENABLED"] = "false"
+ 
+-    # Production actor/model defaults (gpt-5.6-sol@openai) come from SETTINGS.
++    # Production actor/model defaults (openai/gpt-5.6-sol@openrouter) come from SETTINGS.
+ 
+     # Ensure NEW marker comparisons are stable in tests.
+     os.environ.setdefault("UNITY_INCREMENTING_TIMESTAMPS", "true")
+diff --git a/tests/conversation_manager/actions/test_persist_action.py b/tests/conversation_manager/actions/test_persist_action.py
+index 20ab2a3df..d2f38211f 100644
+--- a/tests/conversation_manager/actions/test_persist_action.py
++++ b/tests/conversation_manager/actions/test_persist_action.py
+@@ -192,7 +192,7 @@ class TestActLLMProfileParameter:
+         description = schema["function"]["description"]
+         assert "gpt_5_5_high" in description
+         assert "use all of your thinking effort" in description
+-        assert "gpt-5.6-sol@openai" in description
++        assert "openai/gpt-5.6-sol@openrouter" in description
+         assert "high reasoning effort" in description
+ 
+     @pytest.mark.asyncio
+diff --git a/tests/conversation_manager/core/test_coordinator_product_literacy_eval.py b/tests/conversation_manager/core/test_coordinator_product_literacy_eval.py
+index c3de0e8a0..dd6da182c 100644
+--- a/tests/conversation_manager/core/test_coordinator_product_literacy_eval.py
++++ b/tests/conversation_manager/core/test_coordinator_product_literacy_eval.py
+@@ -43,7 +43,7 @@ _ACCESSIBLE_ORGANIZATIONS = [
+ ]
+ 
+ _PRIMARY_LLM_CONFIG = {
+-    "model": "gpt-5.5@openai",
++    "model": "openai/gpt-5.5@openrouter",
+     "reasoning_effort": "high",
+ }
+ 
+diff --git a/unify/actor/base.py b/unify/actor/base.py
+index ab86033bf..5e96db331 100644
+--- a/unify/actor/base.py
++++ b/unify/actor/base.py
+@@ -310,13 +310,13 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
+                 in more than one catalog.
+             llm_profile: Optional curated model profile for this actor run.
+                 Leave unset for the default profile, which uses the actor's
+-                configured model (normally ``gpt-5.6-sol@openai`` at high
++                configured model (normally ``openai/gpt-5.6-sol@openrouter`` at high
+                 reasoning effort). Available premium profiles are
+                 ``gpt_5_5_low``, ``gpt_5_5_medium``, and ``gpt_5_5_high``. Use
+                 ``gpt_5_5_high`` when the user explicitly asks for maximum
+                 thinking effort or the task is highly ambiguous/high-stakes
+                 enough to justify premium cost and latency. GPT-5.5 profiles
+-                use ``gpt-5.5@openai`` and are priced similarly to the Sol
++                use ``openai/gpt-5.5@openrouter`` and are priced similarly to the Sol
+                 default on a per-token basis; prefer them when the caller
+                 wants the GPT-5.5 family specifically.
+         """
+diff --git a/unify/actor/environments/actor.py b/unify/actor/environments/actor.py
+index f56a0b35b..b4e1c9e57 100644
+--- a/unify/actor/environments/actor.py
++++ b/unify/actor/environments/actor.py
+@@ -517,7 +517,7 @@ class _ActorRunner:
+             Use with caution to avoid excessive nesting.
+         llm_profile : str, optional
+             Optional curated model profile for this actor run. Leave unset for
+-            the default profile, normally ``gpt-5.6-sol@openai`` at high
++            the default profile, normally ``openai/gpt-5.6-sol@openrouter`` at high
+             reasoning effort. Available premium profiles are ``gpt_5_5_low``,
+             ``gpt_5_5_medium``, and ``gpt_5_5_high``. Use ``gpt_5_5_high``
+             when the sub-task itself needs maximum thinking effort. This
+diff --git a/unify/common/act_llm_profiles.py b/unify/common/act_llm_profiles.py
+index a00b29cb8..56cd72661 100644
+--- a/unify/common/act_llm_profiles.py
++++ b/unify/common/act_llm_profiles.py
+@@ -31,12 +31,12 @@ GPT_5_5_HIGH_ACT_LLM_PROFILE = "gpt_5_5_high"
+ _MINIMAX_PRICE_BASELINE = (
+     "Baseline profile. Uses the actor's configured model: the assistant's "
+     "per-assistant default model when one is set, otherwise the platform "
+-    "default (normally gpt-5.6-sol@openai at high reasoning effort). The "
++    "default (normally openai/gpt-5.6-sol@openrouter at high reasoning effort). The "
+     "platform Sol registry rate is about $5/M input tokens and $30/M output "
+     "tokens; cheaper options such as MiniMax M3 cost substantially less."
+ )
+ _GPT_5_5_PRICE = (
+-    "Premium OpenAI profile. gpt-5.5@openai is about $5/M input tokens and "
++    "Premium OpenAI profile. openai/gpt-5.5@openrouter is about $5/M input tokens and "
+     "$30/M output tokens, roughly 17x the MiniMax input-token rate and "
+     "25x the MiniMax output-token rate before accounting for any extra "
+     "reasoning/output tokens used by higher effort."
+@@ -57,7 +57,7 @@ ACT_LLM_PROFILES: dict[str, ActLLMProfile] = {
+     ),
+     "gpt_5_5_low": ActLLMProfile(
+         name="gpt_5_5_low",
+-        model="gpt-5.5@openai",
++        model="openai/gpt-5.5@openrouter",
+         reasoning_effort="low",
+         description=(
+             "Use GPT-5.5 with low reasoning effort for premium-model quality "
+@@ -67,7 +67,7 @@ ACT_LLM_PROFILES: dict[str, ActLLMProfile] = {
+     ),
+     "gpt_5_5_medium": ActLLMProfile(
+         name="gpt_5_5_medium",
+-        model="gpt-5.5@openai",
++        model="openai/gpt-5.5@openrouter",
+         reasoning_effort="medium",
+         description=(
+             "Use GPT-5.5 with medium reasoning effort for difficult work that "
+@@ -77,7 +77,7 @@ ACT_LLM_PROFILES: dict[str, ActLLMProfile] = {
+     ),
+     GPT_5_5_HIGH_ACT_LLM_PROFILE: ActLLMProfile(
+         name=GPT_5_5_HIGH_ACT_LLM_PROFILE,
+-        model="gpt-5.5@openai",
++        model="openai/gpt-5.5@openrouter",
+         reasoning_effort="high",
+         description=(
+             "Use GPT-5.5 with high reasoning effort when the user explicitly "
+diff --git a/unify/common/observation_scaling_policy.json b/unify/common/observation_scaling_policy.json
+index a913f58f0..afe984666 100644
+--- a/unify/common/observation_scaling_policy.json
++++ b/unify/common/observation_scaling_policy.json
+@@ -7,6 +7,7 @@
+   "providerMaxEdge": {
+     "anthropic": 1568,
+     "openai": 2048,
++    "openrouter": 2048,
+     "google": 4096,
+     "gemini": 4096,
+     "minimax": 2048,
+@@ -15,10 +16,10 @@
+     "modelObservationMaxEdge": {
+     "claude-4.6-sonnet@anthropic": 1568,
+     "claude-4.6-opus@anthropic": 1568,
+-    "gpt-5.5@openai": 2048,
+-    "gpt-5.6-sol@openai": 2048,
+-    "gpt-5.6-terra@openai": 2048,
+-    "gpt-5.6-luna@openai": 2048,
++    "openai/gpt-5.5@openrouter": 2048,
++    "openai/gpt-5.6-sol@openrouter": 2048,
++    "openai/gpt-5.6-terra@openrouter": 2048,
++    "openai/gpt-5.6-luna@openrouter": 2048,
+     "minimax-v3@minimax": 2048
+   }
+ }
+diff --git a/unify/conversation_manager/domains/brain_action_tools.py b/unify/conversation_manager/domains/brain_action_tools.py
+index 7f99a47c7..9798b5d97 100644
+--- a/unify/conversation_manager/domains/brain_action_tools.py
++++ b/unify/conversation_manager/domains/brain_action_tools.py
+@@ -1563,7 +1563,7 @@ class ConversationManagerBrainActionTools:
+                 (interject, ask) on this action will also skip context forwarding.
+             llm_profile: Optional curated LLM profile for this action. Leave
+                 unset for the default actor profile, normally
+-                ``gpt-5.6-sol@openai`` at high reasoning effort. Use
++                ``openai/gpt-5.6-sol@openrouter`` at high reasoning effort. Use
+                 ``gpt_5_5_low``, ``gpt_5_5_medium``, or ``gpt_5_5_high`` only
+                 when the task or the user's wording warrants the GPT-5.5
+                 family specifically. Requests to "use all of your thinking effort"
+diff --git a/unify/conversation_manager/livekit_unify_adapter.py b/unify/conversation_manager/livekit_unify_adapter.py
+index fe3a6bfbd..d792c4246 100644
+--- a/unify/conversation_manager/livekit_unify_adapter.py
++++ b/unify/conversation_manager/livekit_unify_adapter.py
+@@ -47,7 +47,7 @@ class UnifyLLM(llm.LLM):
+ 
+     def __init__(
+         self,
+-        model: str = "gpt-5.4-mini@openai",
++        model: str = "openai/gpt-5.4-mini@openrouter",
+         *,
+         reasoning_effort: str | None = None,
+         temperature: float | None = None,
+diff --git a/unify/conversation_manager/settings.py b/unify/conversation_manager/settings.py
+index f57e4d368..d6ee9381b 100644
+--- a/unify/conversation_manager/settings.py
++++ b/unify/conversation_manager/settings.py
+@@ -59,9 +59,9 @@ class ConversationSettings(BaseSettings):
+             construction so rotating quick tunnels take effect immediately.
+     """
+ 
+-    FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
++    FAST_BRAIN_MODEL: str = "openai/gpt-5.4-mini@openrouter"
+     FAST_BRAIN_REASONING_EFFORT: str = "low"
+-    SLOW_BRAIN_MODEL: str = "gpt-5.6-terra@openai"
++    SLOW_BRAIN_MODEL: str = "openai/gpt-5.6-terra@openrouter"
+     SLOW_BRAIN_REASONING_EFFORT: str = "high"
+     FAST_BRAIN_CONTEXT_WINDOW: int = 50
+     IMPL: str = "real"
+diff --git a/unify/file_manager/file_parsers/settings.py b/unify/file_manager/file_parsers/settings.py
+index dbbe80d11..b5f101b67 100644
+--- a/unify/file_manager/file_parsers/settings.py
++++ b/unify/file_manager/file_parsers/settings.py
+@@ -25,7 +25,7 @@ class FileParserSettings(BaseSettings):
+     # LLM settings used by parser enrichment steps (summaries, metadata)
+     # ---------------------------------------------------------------------
+     # Default model is aligned with project preference.
+-    SUMMARY_MODEL: str = "gpt-5.2@openai"
++    SUMMARY_MODEL: str = "openai/gpt-5.2@openrouter"
+ 
+     # Summariser token accounting / backoff
+     SUMMARY_ENCODING: str = "o200k_base"
+diff --git a/unify/gateway/local_setup.py b/unify/gateway/local_setup.py
+index 931e6a667..649339b34 100644
+--- a/unify/gateway/local_setup.py
++++ b/unify/gateway/local_setup.py
+@@ -340,9 +340,14 @@ CHANNEL_SETUPS: tuple[ChannelSetup, ...] = (
+         summary="OpenAI-compatible chat completion route authenticated by user API key.",
+         kind="capability",
+         credentials=(
++            CredentialSpec(
++                "OPENROUTER_API_KEY",
++                "OpenRouter API key for *@openrouter model calls",
++                required=False,
++            ),
+             CredentialSpec(
+                 "OPENAI_API_KEY",
+-                "OpenAI API key for local model calls",
++                "OpenAI API key for native *@openai model calls",
+                 required=False,
+             ),
+             CredentialSpec(
+diff --git a/unify/settings.py b/unify/settings.py
+index 0327ecd3c..4ea1f458f 100644
+--- a/unify/settings.py
++++ b/unify/settings.py
+@@ -68,7 +68,7 @@ class ProductionSettings(BaseSettings):
+     # ─────────────────────────────────────────────────────────────────────────
+     # Core LLM Settings
+     # ─────────────────────────────────────────────────────────────────────────
+-    UNIFY_MODEL: str = "gpt-5.6-sol@openai"
++    UNIFY_MODEL: str = "openai/gpt-5.6-sol@openrouter"
+     # Reasoning effort paired with UNIFY_MODEL when no per-assistant default is
+     # set. Empty leaves per-call-site effort levels untouched.
+     UNIFY_REASONING_EFFORT: str = "high"
+@@ -79,6 +79,8 @@ class ProductionSettings(BaseSettings):
+     OPENAI_API_KEY: SecretStr = SecretStr("")
+     ANTHROPIC_API_KEY: SecretStr = SecretStr("")
+     DEEPSEEK_API_KEY: SecretStr = SecretStr("")
++    # OpenRouter — used for ``*@openrouter`` endpoints (platform defaults).
++    OPENROUTER_API_KEY: SecretStr = SecretStr("")
+     UNITY_VALIDATE_LLM_PROVIDERS: bool = True
+ 
+     # ─────────────────────────────────────────────────────────────────────────
+@@ -305,11 +307,13 @@ class ProductionSettings(BaseSettings):
+             "OPENAI_API_KEY": self.OPENAI_API_KEY,
+             "ANTHROPIC_API_KEY": self.ANTHROPIC_API_KEY,
+             "DEEPSEEK_API_KEY": self.DEEPSEEK_API_KEY,
++            "OPENROUTER_API_KEY": self.OPENROUTER_API_KEY,
+         }
+         if not any(available.values()):
+             raise RuntimeError(
+                 "At least one LLM provider credential is required. "
+-                "Set OPENAI_API_KEY, ANTHROPIC_API_KEY, and/or DEEPSEEK_API_KEY.",
++                "Set OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, "
++                "and/or DEEPSEEK_API_KEY.",
+             )
+ 
+ 
+-- 
+2.43.0
+
