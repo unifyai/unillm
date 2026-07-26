@@ -38,22 +38,22 @@ class TestGetMaxInputTokens:
         self,
         monkeypatch,
     ):
-        """OpenRouter-registered OpenAI models must resolve before LiteLLM ships them."""
+        """OpenRouter-hosted OpenAI catalog ids must resolve before LiteLLM ships them."""
         import litellm
 
         from unillm.endpoints.utils import get_transport_model_alias
 
-        endpoint = "gpt-5.6-sol@openai"
+        endpoint = "openai/gpt-5.6-sol@openrouter"
         transport = get_transport_model_alias(endpoint)
+        assert transport.startswith("openrouter/")
         real_get_model_info = litellm.get_model_info
 
         def fake_get_model_info(model, *args, **kwargs):
-            if model == "gpt-5.6-sol":
+            if model in ("gpt-5.6-sol", "openai/gpt-5.6-sol"):
                 raise Exception("public openai name not in pinned litellm")
             return real_get_model_info(model, *args, **kwargs)
 
         monkeypatch.setattr(litellm, "get_model_info", fake_get_model_info)
-        assert transport.startswith("openrouter/")
         assert get_max_input_tokens(endpoint) == 1_050_000
 
 
