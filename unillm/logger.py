@@ -565,9 +565,9 @@ def log_usage(
         label: Label for the log entry (e.g. 'gpt-4o-realtime-preview').
 
     Returns:
-        The billed cost (provider_cost * margin) that was deducted, in USD.
+        The billed cost that was deducted, in USD.
     """
-    from .costs import compute_full_cost_from_usage, get_cost_margin
+    from .costs import compute_full_cost_from_usage
 
     label = label or model
     label_prefix = f"[{label}] "
@@ -579,7 +579,7 @@ def log_usage(
 
     # Build the response body (usage stats + cost)
     provider_cost = compute_full_cost_from_usage(model, usage)
-    billed_cost = provider_cost * get_cost_margin()
+    billed_cost = provider_cost
 
     response_body = {
         "usage": usage,
