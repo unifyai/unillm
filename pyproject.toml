@@ -55,3 +55,6 @@ unisdk = { path = "../unisdk", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["unillm"]
+
+[tool.black]
+target-version = ["py312"]
