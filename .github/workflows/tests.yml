@@ -38,6 +38,7 @@ jobs:
         COMMIT_MSG: ${{ github.event.head_commit.message }}
         PR_TITLE: ${{ github.event.pull_request.title }}
         BASE_REF: ${{ github.base_ref }}
+        REF_NAME: ${{ github.ref_name }}
       run: |
         # A PR into main is the staging->main promotion gate: always run the
         # (read-only, no-cost) suite regardless of the [run-tests] marker, so it
@@ -60,10 +61,22 @@ jobs:
           if [[ "$COMMIT_MSG" == *"[run-tests]"* ]]; then
             echo "run_tests=true" >> "$GITHUB_OUTPUT"
             echo "Tests triggered by commit message containing [run-tests]"
-          else
-            echo "run_tests=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping tests - commit message does not contain [run-tests]"
+            exit 0
           fi
+
+          # staging/main take direct pushes as a matter of course (see AGENTS.md
+          # "commit directly to staging"), untagged. Skipping those outright would
+          # leave a failed release-gate context on that commit's SHA that no later
+          # staging->main PR run can outrun, since branch protection considers any
+          # matching-name check run for the SHA, not just the most recent one.
+          if [[ "$REF_NAME" == "staging" || "$REF_NAME" == "main" ]]; then
+            echo "run_tests=true" >> "$GITHUB_OUTPUT"
+            echo "Tests triggered by direct push to $REF_NAME (release-gate safety)"
+            exit 0
+          fi
+
+          echo "run_tests=false" >> "$GITHUB_OUTPUT"
+          echo "Skipping tests - commit message does not contain [run-tests]"
           exit 0
         fi
 
@@ -101,10 +114,10 @@ jobs:
         uv sync --only-group lint --no-install-project --frozen
         uv run --no-sync black --check .
 
-  # Required staging->main release gate (pytest). Ruleset and main branch
-  # protection require this context with strict latest-commit semantics;
-  # see scripts/ensure_staging_to_main_gates.sh.
-  pytest:
+  # The actual suite. The required release-gate context is republished by
+  # ``pytest-required`` below, which runs unconditionally -- see the comment
+  # there for why this job must not carry the required context itself.
+  pytest-run:
     runs-on: ubuntu-latest-8-cores
     needs: should-run-tests
     if: needs.should-run-tests.outputs.run_tests == 'true'
@@ -472,7 +485,7 @@ jobs:
   cache-consolidation:
     name: Consolidate LLM cache
     runs-on: ubuntu-latest
-    needs: [should-run-tests, pytest]
+    needs: [should-run-tests, pytest-run]
     if: always() && needs.should-run-tests.outputs.run_tests == 'true'
     steps:
     - uses: actions/checkout@v4
@@ -507,9 +520,9 @@ jobs:
   cache-check:
     name: LLM Cache Check
     runs-on: ubuntu-latest
-    needs: [should-run-tests, pytest]
+    needs: [should-run-tests, pytest-run]
     # Run after pytest completes (regardless of pass/fail), but not if cancelled or skipped
-    if: always() && needs.should-run-tests.outputs.run_tests == 'true' && needs.pytest.result != 'cancelled'
+    if: always() && needs.should-run-tests.outputs.run_tests == 'true' && needs.pytest-run.result != 'cancelled'
     steps:
     - name: Download logs from pytest job
       uses: actions/download-artifact@v4
@@ -566,3 +579,42 @@ jobs:
         echo "## ✅ LLM Cache: 100% coverage" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**$TOTAL_HITS** cache hits, **0** misses" >> $GITHUB_STEP_SUMMARY
+
+  # Single, stable required status check for staging->main releases.
+  #
+  # This job MUST run unconditionally. GitHub counts a *skipped* required check
+  # as satisfied, so a required context carried by a conditional job publishes
+  # an implicit pass on every commit where that job is skipped. A release PR
+  # shares its head SHA with pushes to staging, so such a stale pass satisfies
+  # branch protection and lets a release merge without the suite ever running.
+  # That is not hypothetical: the identical shape in orchestra let four
+  # releases merge with a failing suite, one of which put a broken test on main
+  # for thirteen hours.
+  #
+  # Running always means this context is only ever an explicit pass or fail,
+  # never an implicit pass. A non-test push therefore reports "pytest" red,
+  # which is the honest signal: this commit's tests did not run, and a release
+  # cannot be cut from it until they do.
+  #
+  # The Staging->Main ruleset and main branch protection both require this
+  # context with strict (latest-commit) semantics; see
+  # scripts/ensure_staging_to_main_gates.sh.
+  pytest-required:
+    name: pytest
+    needs: [should-run-tests, pytest-run]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Require the test suite to have passed
+      run: |
+        result="${{ needs.pytest-run.result }}"
+        echo "pytest result: $result"
+        if [[ "$result" == "success" ]]; then
+          exit 0
+        fi
+        if [[ "$result" == "skipped" ]]; then
+          echo "::error::Tests did not run for this commit, so the release gate"
+          echo "::error::cannot pass. Push with [run-tests] or open a PR into"
+          echo "::error::main/staging to run the suite."
+        fi
+        exit 1
