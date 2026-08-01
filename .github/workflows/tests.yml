@@ -38,6 +38,7 @@ jobs:
         COMMIT_MSG: ${{ github.event.head_commit.message }}
         PR_TITLE: ${{ github.event.pull_request.title }}
         BASE_REF: ${{ github.base_ref }}
+        REF_NAME: ${{ github.ref_name }}
       run: |
         # A PR into main is the staging->main promotion gate: always run the
         # (read-only, no-cost) suite regardless of the [run-tests] marker, so it
@@ -60,10 +61,22 @@ jobs:
           if [[ "$COMMIT_MSG" == *"[run-tests]"* ]]; then
             echo "run_tests=true" >> "$GITHUB_OUTPUT"
             echo "Tests triggered by commit message containing [run-tests]"
-          else
-            echo "run_tests=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping tests - commit message does not contain [run-tests]"
+            exit 0
           fi
+
+          # staging/main take direct pushes as a matter of course (see AGENTS.md
+          # "commit directly to staging"), untagged. Skipping those outright would
+          # leave a failed release-gate context on that commit's SHA that no later
+          # staging->main PR run can outrun, since branch protection considers any
+          # matching-name check run for the SHA, not just the most recent one.
+          if [[ "$REF_NAME" == "staging" || "$REF_NAME" == "main" ]]; then
+            echo "run_tests=true" >> "$GITHUB_OUTPUT"
+            echo "Tests triggered by direct push to $REF_NAME (release-gate safety)"
+            exit 0
+          fi
+
+          echo "run_tests=false" >> "$GITHUB_OUTPUT"
+          echo "Skipping tests - commit message does not contain [run-tests]"
           exit 0
         fi
 
