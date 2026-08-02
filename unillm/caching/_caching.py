@@ -58,6 +58,22 @@ def set_cache_backend(backend: str) -> None:
     CURRENT_CACHE_BACKEND = backend
 
 
+def set_cache_dir(path: str) -> None:
+    """Point every cache backend at *path*.
+
+    UNILLM_CACHE_DIR is read once, when each backend class is defined, so a
+    process that only sets the variable after importing unillm keeps writing
+    wherever the cache was first bound. Callers that choose a directory at
+    runtime -- a test session claiming a private one, say -- go through here,
+    which also drops the stores opened against the previous directory.
+
+    Applies to every backend rather than the current one alone, so a later
+    set_cache_backend() does not silently revert to the import-time location.
+    """
+    for backend in CACHE_BACKENDS.values():
+        backend.set_cache_dir(path)
+
+
 def get_cache_backend(backend: Optional[str] = None) -> Type[BaseCache]:
     """Get the cache backend class."""
     if backend is None:

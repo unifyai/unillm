@@ -16,6 +16,7 @@ from ._caching import (
     is_caching_enabled,
     set_cache_backend,
     get_cache_backend,
+    set_cache_dir,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "is_caching_enabled",
     "set_cache_backend",
     "get_cache_backend",
+    "set_cache_dir",
 ]

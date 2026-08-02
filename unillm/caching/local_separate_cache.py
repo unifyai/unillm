@@ -39,6 +39,18 @@ class LocalSeparateCache(BaseCache):
         return cls._cache_name_read
 
     @classmethod
+    def set_cache_dir(cls, path: str) -> None:
+        """Point both caches at *path* and drop the stores opened under the old one."""
+        cls._cache_dir = path
+        cls._read_store = None
+        cls._cache_write = None
+
+    @classmethod
+    def get_cache_dir(cls) -> str:
+        """Get the directory the read and write cache files live in."""
+        return cls._cache_dir
+
+    @classmethod
     def get_cache_filepath(cls, name: str = None) -> str:
         """Get the full filepath for the cache file."""
         if name is None:
