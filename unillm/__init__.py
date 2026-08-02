@@ -21,6 +21,7 @@ from .cache_events import (
 from .caching import (
     get_cache_stats,
     set_cache_backend,
+    set_cache_dir,
     CacheStats,
 )
 from .cost_tracker import (

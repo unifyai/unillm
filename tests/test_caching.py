@@ -19,6 +19,7 @@ from unillm.caching import (
     is_caching_enabled,
     set_cache_backend,
     get_cache_backend,
+    set_cache_dir,
 )
 from unillm.caching.ndjson_index import NdjsonIndexedStore, _key_hash
 
@@ -278,6 +279,91 @@ class TestCacheBackend:
     def test_get_invalid_backend_raises(self):
         with pytest.raises(ValueError, match="Invalid backend"):
             get_cache_backend("nonexistent")
+
+
+class TestCacheDir:
+    """Tests for relocating the cache directory after import."""
+
+    def _restore(self, originals):
+        for backend, path in originals.items():
+            backend.set_cache_dir(path)
+
+    def test_set_cache_dir_moves_every_backend(self):
+        originals = {
+            LocalCache: LocalCache.get_cache_dir(),
+            LocalSeparateCache: LocalSeparateCache.get_cache_dir(),
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                set_cache_dir(tmp)
+                # Every backend, not just the current one, so a later
+                # set_cache_backend() cannot revert to the import-time location.
+                assert LocalCache.get_cache_dir() == tmp
+                assert LocalSeparateCache.get_cache_dir() == tmp
+                assert LocalCache.get_cache_filepath().startswith(tmp)
+                assert LocalSeparateCache.get_cache_filepath().startswith(tmp)
+        finally:
+            self._restore(originals)
+
+    def test_set_cache_dir_beats_a_late_env_var(self):
+        """The env var is read at class definition; this is the runtime path."""
+        originals = {
+            LocalCache: LocalCache.get_cache_dir(),
+            LocalSeparateCache: LocalSeparateCache.get_cache_dir(),
+        }
+        previous_env = os.environ.get("UNILLM_CACHE_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["UNILLM_CACHE_DIR"] = "/nonexistent/ignored-after-import"
+                set_cache_dir(tmp)
+                assert LocalCache.get_cache_dir() == tmp
+                assert LocalSeparateCache.get_cache_dir() == tmp
+        finally:
+            if previous_env is None:
+                os.environ.pop("UNILLM_CACHE_DIR", None)
+            else:
+                os.environ["UNILLM_CACHE_DIR"] = previous_env
+            self._restore(originals)
+
+    def test_relocated_cache_reads_and_writes_in_the_new_dir(self):
+        originals = {
+            LocalCache: LocalCache.get_cache_dir(),
+            LocalSeparateCache: LocalSeparateCache.get_cache_dir(),
+        }
+        original_backend = get_cache_backend()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                set_cache_backend("local")
+                set_cache_dir(tmp)
+                _write_to_cache("fn", {"a": 1}, "cached-response")
+                assert os.path.exists(os.path.join(tmp, ".cache.ndjson"))
+                assert _get_cache("fn", {"a": 1}) == "cached-response"
+        finally:
+            set_cache_backend(
+                "local" if original_backend is LocalCache else "local_separate",
+            )
+            self._restore(originals)
+
+    def test_stores_do_not_survive_a_move(self):
+        """A store held open on the old directory would serve stale offsets."""
+        originals = {
+            LocalCache: LocalCache.get_cache_dir(),
+            LocalSeparateCache: LocalSeparateCache.get_cache_dir(),
+        }
+        original_backend = get_cache_backend()
+        try:
+            with tempfile.TemporaryDirectory() as first:
+                with tempfile.TemporaryDirectory() as second:
+                    set_cache_backend("local")
+                    set_cache_dir(first)
+                    _write_to_cache("fn", {"a": 1}, "first-dir-response")
+                    set_cache_dir(second)
+                    assert _get_cache("fn", {"a": 1}) is None
+        finally:
+            set_cache_backend(
+                "local" if original_backend is LocalCache else "local_separate",
+            )
+            self._restore(originals)
 
 
 class TestIsCachingEnabled:
