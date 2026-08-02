@@ -32,6 +32,17 @@ class LocalCache(BaseCache):
         return cls._cache_filename
 
     @classmethod
+    def set_cache_dir(cls, path: str) -> None:
+        """Point the cache at *path* and drop the store opened under the old one."""
+        cls._cache_dir = path
+        cls._store = None
+
+    @classmethod
+    def get_cache_dir(cls) -> str:
+        """Get the directory the cache file lives in."""
+        return cls._cache_dir
+
+    @classmethod
     def get_cache_filepath(cls, name: str = None) -> str:
         """Get the full filepath for the cache file."""
         if name is None:
