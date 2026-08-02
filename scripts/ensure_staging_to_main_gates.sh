@@ -3,14 +3,22 @@ set -euo pipefail
 
 # Keep staging->main release gates aligned with .github/workflows/tests.yml.
 # The required "pytest" context comes from the pytest-required job, which runs
-# unconditionally and reports an explicit pass or fail on every commit. The
-# suite itself is pytest-run.
+# unconditionally on pull_request/workflow_dispatch and reports an explicit
+# pass or fail there. The suite itself is pytest-run.
 #
-# pytest-required must never become conditional. GitHub counts a skipped
-# required check as satisfied, so a conditional gate publishes an implicit pass
-# on every commit where it does not run -- and because a release PR shares its
-# head SHA with pushes to staging, that stale pass satisfies this ruleset. The
+# pytest-required must never be gated on should-run-tests (or similar) again.
+# GitHub counts a skipped required check as satisfied, so a job that publishes
+# this context conditionally on whether tests ran gives an implicit pass on
+# every commit where they don't -- and because a release PR shares its head
+# SHA with pushes to staging, that stale pass satisfies this ruleset. The
 # identical shape in orchestra let four releases merge with a failing suite.
+#
+# It also must not run on plain push: that only reintroduces the same bug in
+# fail-closed form, attaching a failing run to a push's SHA that a later
+# passing pull_request run on the same SHA can never supersede (branch
+# protection blocks on any matching-name run, not just the latest). Scoping
+# to pull_request/workflow_dispatch leaves plain pushes with no run at all
+# for this context -- pending, not a stale pass or a false block.
 
 REPO="${REPO:-unifyai/unillm}"
 RULESET_ID="${RULESET_ID:-11528525}"
