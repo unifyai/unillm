@@ -83,6 +83,16 @@ class BaseCache(ABC):
 
     @classmethod
     @abstractmethod
+    def set_cache_dir(cls, path: str) -> None:
+        """Point the cache at *path*, discarding any store opened under the old one."""
+
+    @classmethod
+    @abstractmethod
+    def get_cache_dir(cls) -> str:
+        """Get the directory the cache files live in."""
+
+    @classmethod
+    @abstractmethod
     def store_entry(
         cls,
         *,
