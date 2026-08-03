@@ -506,11 +506,30 @@ jobs:
         path: cache-artifacts
 
     - name: Consolidate .cache.ndjson files
+      id: consolidate
       run: |
+        # grep -c prints 0 and exits 1 on an empty file, and prints nothing at
+        # all when the file is missing, so neither case may abort the step.
+        entries() { local n; n=$(grep -c . "$1" 2>/dev/null || true); echo "${n:-0}"; }
+        restored=$(entries .cache.ndjson)
+        # Decided here rather than in the step condition so that dying before
+        # the comparison leaves the answer at "do not publish".
+        echo "publish=false" >> "$GITHUB_OUTPUT"
         python3 .github/scripts/consolidate_cache.py \
           --artifacts-dir cache-artifacts
+        touch .cache.ndjson
+        merged=$(entries .cache.ndjson)
+        if (( merged > restored )); then
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+        fi
+        echo "Consolidated entry count: $merged (restored $restored)"
 
+    # A run that added nothing must not publish. The entry would be newer than
+    # the store it was built from, and restore-keys resolves the shared
+    # cache-ndjson- prefix to the most recently created match, so it would
+    # shadow that store for every later run.
     - name: Store consolidated cache
+      if: steps.consolidate.outputs.publish == 'true'
       uses: actions/cache/save@v4
       with:
         path: .cache.ndjson
