@@ -506,11 +506,30 @@ jobs:
         path: cache-artifacts
 
     - name: Consolidate .cache.ndjson files
+      id: consolidate
       run: |
+        # grep -c prints 0 and exits 1 on an empty file, and prints nothing at
+        # all when the file is missing, so neither case may abort the step.
+        entries() { local n; n=$(grep -c . "$1" 2>/dev/null || true); echo "${n:-0}"; }
+        restored=$(entries .cache.ndjson)
+        # Decided here rather than in the step condition so that dying before
+        # the comparison leaves the answer at "do not publish".
+        echo "publish=false" >> "$GITHUB_OUTPUT"
         python3 .github/scripts/consolidate_cache.py \
           --artifacts-dir cache-artifacts
+        touch .cache.ndjson
+        merged=$(entries .cache.ndjson)
+        if (( merged > restored )); then
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+        fi
+        echo "Consolidated entry count: $merged (restored $restored)"
 
+    # A run that added nothing must not publish. The entry would be newer than
+    # the store it was built from, and restore-keys resolves the shared
+    # cache-ndjson- prefix to the most recently created match, so it would
+    # shadow that store for every later run.
     - name: Store consolidated cache
+      if: steps.consolidate.outputs.publish == 'true'
       uses: actions/cache/save@v4
       with:
         path: .cache.ndjson
@@ -582,19 +601,25 @@ jobs:
 
   # Single, stable required status check for staging->main releases.
   #
-  # This job MUST run unconditionally. GitHub counts a *skipped* required check
-  # as satisfied, so a required context carried by a conditional job publishes
-  # an implicit pass on every commit where that job is skipped. A release PR
-  # shares its head SHA with pushes to staging, so such a stale pass satisfies
-  # branch protection and lets a release merge without the suite ever running.
-  # That is not hypothetical: the identical shape in orchestra let four
-  # releases merge with a failing suite, one of which put a broken test on main
-  # for thirteen hours.
+  # This job must run unconditionally on the triggers where the release gate
+  # actually applies (pull_request and workflow_dispatch), so this context is
+  # always an explicit pass or fail there, never an implicit pass. GitHub
+  # counts a *skipped* required check as satisfied, so a required context
+  # carried by a conditional job used to publish an implicit pass on every
+  # commit where that job was skipped. A release PR shares its head SHA with
+  # pushes to staging, so such a stale pass satisfied branch protection and let
+  # a release merge without the suite ever running. That is not hypothetical:
+  # the identical shape in orchestra let four releases merge with a failing
+  # suite, one of which put a broken test on main for thirteen hours.
   #
-  # Running always means this context is only ever an explicit pass or fail,
-  # never an implicit pass. A non-test push therefore reports "pytest" red,
-  # which is the honest signal: this commit's tests did not run, and a release
-  # cannot be cut from it until they do.
+  # It must NOT run on plain push. pytest is gated behind [run-tests] there,
+  # so an unconditional push-triggered run would either republish the same
+  # implicit-pass-by-skip bug, or -- once made to fail closed -- attach a
+  # failing "pytest" run to that push's SHA that persists even after the real
+  # pull_request-triggered run for the same SHA passes, since branch
+  # protection blocks on any matching-name run, not just the latest.
+  # Publishing nothing on push means the context is simply pending until the
+  # pull_request run supplies the real answer.
   #
   # The Staging->Main ruleset and main branch protection both require this
   # context with strict (latest-commit) semantics; see
@@ -602,7 +627,7 @@ jobs:
   pytest-required:
     name: pytest
     needs: [should-run-tests, pytest-run]
-    if: always()
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
     - name: Require the test suite to have passed
