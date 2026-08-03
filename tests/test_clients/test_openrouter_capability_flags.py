@@ -49,12 +49,6 @@ def test_openrouter_gpt_55_keeps_reasoning_effort_and_tool_flags() -> None:
     assert optional.get("tool_choice") == "auto"
 
 
-def test_native_openai_gpt_55_transport_is_not_openrouter() -> None:
-    transport = get_transport_model_alias("gpt-5.5@openai")
-    assert transport == "gpt-5.5"
-    assert not transport.startswith("openrouter/")
-
-
 def test_catalog_supplies_capabilities_for_unregistered_openrouter_model() -> None:
     """A catalog model the pinned LiteLLM release lacks keeps effort control.
 

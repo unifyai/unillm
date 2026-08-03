@@ -253,7 +253,7 @@ def llm_span(endpoint: str, model: str, **attributes):
     """Create an OTel span for an LLM call.
 
     Args:
-        endpoint: The endpoint being called (e.g., "gpt-4@openai")
+        endpoint: The endpoint being called (e.g., "openai/gpt-4o@openrouter")
         model: The model name
         **attributes: Additional span attributes
 

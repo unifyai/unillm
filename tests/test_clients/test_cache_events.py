@@ -202,7 +202,10 @@ class TestCacheEventEmissionMocked:
                         return_value=0.001,
                     ):
                         with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify("gpt-4@openai", cache=True)
+                            client = unillm.Unify(
+                                "openai/gpt-4o@openrouter",
+                                cache=True,
+                            )
                             with capture_cache_events() as events:
                                 client.generate(
                                     messages=[{"role": "user", "content": "Hi"}],
@@ -210,7 +213,7 @@ class TestCacheEventEmissionMocked:
 
         assert len(events) == 1
         assert events[0]["cache_status"] == "miss"
-        assert events[0]["endpoint"] == "gpt-4@openai"
+        assert events[0]["endpoint"] == "openai/gpt-4o@openrouter"
 
     def test_sync_client_emits_cache_hit_when_cached(self):
         mock_cached_response = MagicMock()
@@ -222,7 +225,7 @@ class TestCacheEventEmissionMocked:
             return_value=mock_cached_response,
         ):
             with patch("unillm.clients.uni_llm._write_to_cache"):
-                client = unillm.Unify("gpt-4@openai", cache=True)
+                client = unillm.Unify("openai/gpt-4o@openrouter", cache=True)
                 with capture_cache_events() as events:
                     client.generate(messages=[{"role": "user", "content": "Hi"}])
 
@@ -249,7 +252,10 @@ class TestCacheEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        client = unillm.AsyncUnify("gpt-4@openai", cache=True)
+                        client = unillm.AsyncUnify(
+                            "openai/gpt-4o@openrouter",
+                            cache=True,
+                        )
                         async with acapture_cache_events() as events:
                             await client.generate(
                                 messages=[{"role": "user", "content": "Hi"}],
@@ -257,7 +263,7 @@ class TestCacheEventEmissionMocked:
 
         assert len(events) == 1
         assert events[0]["cache_status"] == "miss"
-        assert events[0]["endpoint"] == "gpt-4@openai"
+        assert events[0]["endpoint"] == "openai/gpt-4o@openrouter"
 
     @pytest.mark.asyncio
     async def test_async_client_emits_cache_hit_when_cached(self):
@@ -270,7 +276,7 @@ class TestCacheEventEmissionMocked:
             return_value=mock_cached_response,
         ):
             with patch("unillm.clients.uni_llm._write_to_cache"):
-                client = unillm.AsyncUnify("gpt-4@openai", cache=True)
+                client = unillm.AsyncUnify("openai/gpt-4o@openrouter", cache=True)
                 async with acapture_cache_events() as events:
                     await client.generate(messages=[{"role": "user", "content": "Hi"}])
 
@@ -295,7 +301,7 @@ class TestCacheEventEmissionMocked:
                     ):
                         with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
                             client = unillm.Unify(
-                                "gpt-4@openai",
+                                "openai/gpt-4o@openrouter",
                                 cache=True,
                                 temperature=0.5,
                             )
@@ -327,7 +333,10 @@ class TestCacheEventEmissionMocked:
                         return_value=0.001,
                     ):
                         with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify("gpt-4@openai", cache=True)
+                            client = unillm.Unify(
+                                "openai/gpt-4o@openrouter",
+                                cache=True,
+                            )
                             # No capture context - should not error
                             response = client.generate(
                                 messages=[{"role": "user", "content": "Hi"}],

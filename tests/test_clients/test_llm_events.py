@@ -11,6 +11,7 @@ from unillm import (
     llm_event_hook_scope,
     allm_event_hook_scope,
 )
+from unillm.endpoints.utils import get_model_alias
 from unillm.llm_events import _emit_llm_event
 
 
@@ -20,18 +21,18 @@ class TestLLMEventDataclass:
     def test_create_event_minimal(self):
         event = LLMEvent(
             request={
-                "model": "gpt-4@openai",
+                "model": "openai/gpt-4o@openrouter",
                 "messages": [{"role": "user", "content": "Hi"}],
             },
         )
-        assert event.request["model"] == "gpt-4@openai"
+        assert event.request["model"] == "openai/gpt-4o@openrouter"
         assert event.response is None
         assert event.provider_cost is None
         assert event.billed_cost is None
 
     def test_create_event_with_response(self):
         event = LLMEvent(
-            request={"model": "gpt-4@openai", "messages": []},
+            request={"model": "openai/gpt-4o@openrouter", "messages": []},
             response={"id": "chatcmpl-123", "model": "gpt-4", "choices": []},
         )
         assert event.response is not None
@@ -39,7 +40,7 @@ class TestLLMEventDataclass:
 
     def test_create_event_with_costs(self):
         event = LLMEvent(
-            request={"model": "gpt-4@openai"},
+            request={"model": "openai/gpt-4o@openrouter"},
             provider_cost=0.001,
             billed_cost=0.005,
         )
@@ -47,7 +48,7 @@ class TestLLMEventDataclass:
         assert event.billed_cost == 0.005
 
     def test_event_costs_default_to_none(self):
-        event = LLMEvent(request={"model": "gpt-4@openai"})
+        event = LLMEvent(request={"model": "openai/gpt-4o@openrouter"})
         assert event.provider_cost is None
         assert event.billed_cost is None
 
@@ -243,7 +244,10 @@ class TestLLMEventEmissionMocked:
                         return_value=0.001,
                     ):
                         with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify("gpt-4@openai", cache=True)
+                            client = unillm.Unify(
+                                "openai/gpt-4o@openrouter",
+                                cache=True,
+                            )
                             with llm_event_hook_scope(capture_hook):
                                 client.generate(
                                     messages=[{"role": "user", "content": "Hi"}],
@@ -297,7 +301,10 @@ class TestLLMEventEmissionMocked:
                         return_value=0.001,
                     ):
                         with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify("gpt-4@openai", cache=True)
+                            client = unillm.Unify(
+                                "openai/gpt-4o@openrouter",
+                                cache=True,
+                            )
                             client.set_response_format(_Decision)
                             with llm_event_hook_scope(capture_hook):
                                 client.generate(
@@ -331,7 +338,7 @@ class TestLLMEventEmissionMocked:
             return_value=mock_cached_response,
         ):
             with patch("unillm.clients.uni_llm._write_to_cache"):
-                client = unillm.Unify("gpt-4@openai", cache=True)
+                client = unillm.Unify("openai/gpt-4o@openrouter", cache=True)
                 with llm_event_hook_scope(capture_hook):
                     client.generate(messages=[{"role": "user", "content": "Hi"}])
 
@@ -351,7 +358,7 @@ class TestLLMEventEmissionMocked:
                 "unillm.clients.uni_llm.litellm.completion",
                 side_effect=Exception("API Error"),
             ):
-                client = unillm.Unify("gpt-4@openai", cache=True)
+                client = unillm.Unify("openai/gpt-4o@openrouter", cache=True)
                 with llm_event_hook_scope(capture_hook):
                     with pytest.raises(Exception, match="API Error"):
                         client.generate(
@@ -393,7 +400,10 @@ class TestLLMEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        client = unillm.AsyncUnify("gpt-4@openai", cache=True)
+                        client = unillm.AsyncUnify(
+                            "openai/gpt-4o@openrouter",
+                            cache=True,
+                        )
                         async with allm_event_hook_scope(capture_hook):
                             await client.generate(
                                 messages=[{"role": "user", "content": "Hi"}],
@@ -422,7 +432,7 @@ class TestLLMEventEmissionMocked:
                 "unillm.clients.uni_llm.litellm.acompletion",
                 side_effect=mock_acompletion_error,
             ):
-                client = unillm.AsyncUnify("gpt-4@openai", cache=True)
+                client = unillm.AsyncUnify("openai/gpt-4o@openrouter", cache=True)
                 async with allm_event_hook_scope(capture_hook):
                     with pytest.raises(Exception, match="Async API Error"):
                         await client.generate(
@@ -456,7 +466,7 @@ class TestLLMEventEmissionMocked:
                     ):
                         with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
                             client = unillm.Unify(
-                                "gpt-4@openai",
+                                "openai/gpt-4o@openrouter",
                                 cache=True,
                                 temperature=0.7,
                             )
@@ -513,7 +523,7 @@ class TestStreamingLLMEvents:
             "unillm.clients.uni_llm.litellm.completion",
             side_effect=mock_completion,
         ):
-            client = unillm.Unify("gpt-4@openai", stream=True)
+            client = unillm.Unify("openai/gpt-4o@openrouter", stream=True)
             with llm_event_hook_scope(capture_hook):
                 # Consume the generator
                 list(client.generate(messages=[{"role": "user", "content": "Hi"}]))
@@ -555,7 +565,7 @@ class TestStreamingLLMEvents:
             "unillm.clients.uni_llm.litellm.acompletion",
             side_effect=mock_acompletion,
         ):
-            client = unillm.AsyncUnify("gpt-4@openai", stream=True)
+            client = unillm.AsyncUnify("openai/gpt-4o@openrouter", stream=True)
             async with allm_event_hook_scope(capture_hook):
                 # Consume the async generator
                 result = []
@@ -612,7 +622,10 @@ class TestLLMEventCosts:
                         return_value=0.001,
                     ):
                         with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify("gpt-4@openai", cache=True)
+                            client = unillm.Unify(
+                                "openai/gpt-4o@openrouter",
+                                cache=True,
+                            )
                             with llm_event_hook_scope(capture_hook):
                                 client.generate(
                                     messages=[{"role": "user", "content": "Hi"}],
@@ -643,7 +656,7 @@ class TestLLMEventCosts:
             return_value=mock_cached_response,
         ):
             with patch("unillm.clients.uni_llm._write_to_cache"):
-                client = unillm.Unify("gpt-4@openai", cache=True)
+                client = unillm.Unify("openai/gpt-4o@openrouter", cache=True)
                 with llm_event_hook_scope(capture_hook):
                     client.generate(messages=[{"role": "user", "content": "Hi"}])
 
@@ -665,7 +678,7 @@ class TestLLMEventCosts:
                 "unillm.clients.uni_llm.litellm.completion",
                 side_effect=Exception("API Error"),
             ):
-                client = unillm.Unify("gpt-4@openai", cache=True)
+                client = unillm.Unify("openai/gpt-4o@openrouter", cache=True)
                 with llm_event_hook_scope(capture_hook):
                     with pytest.raises(Exception, match="API Error"):
                         client.generate(
@@ -707,7 +720,10 @@ class TestLLMEventCosts:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.002,
                     ):
-                        client = unillm.AsyncUnify("gpt-4@openai", cache=True)
+                        client = unillm.AsyncUnify(
+                            "openai/gpt-4o@openrouter",
+                            cache=True,
+                        )
                         async with allm_event_hook_scope(capture_hook):
                             await client.generate(
                                 messages=[{"role": "user", "content": "Hi"}],
@@ -873,9 +889,10 @@ class TestLLMEventEmissionIntegration:
             )
 
         assert len(captured) == 1
-        # Request should have the model (note: model name only, not endpoint)
-        model_name = SETTINGS.UNILLM_DEFAULT_MODEL.split("@")[0]
-        assert captured[0].request.get("model") == model_name
+        # Request carries the public accounting alias, not the endpoint string.
+        assert captured[0].request.get("model") == get_model_alias(
+            SETTINGS.UNILLM_DEFAULT_MODEL,
+        )
         # Response should be a dict (serialized)
         assert isinstance(captured[0].response, dict)
 
