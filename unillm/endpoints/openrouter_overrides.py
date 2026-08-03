@@ -1,3 +1,11 @@
+"""Corrections to OpenRouter model metadata.
+
+Endpoint resolution registers pricing and capability flags straight from the
+OpenRouter catalog for any id the pinned LiteLLM release does not know, so a
+newly released model needs no entry here. Add one only to correct the catalog
+or to cover a model the catalog omits.
+"""
+
 from .utils import register_openrouter_model_info
 
 
