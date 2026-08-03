@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Keep staging->main release gates aligned with .github/workflows/tests.yml.
-# The required "pytest" context comes from the pytest-required job, which runs
-# unconditionally on pull_request/workflow_dispatch and reports an explicit
-# pass or fail there. The suite itself is pytest-run.
+# Keep staging->main release gates aligned with
+# .github/workflows/pytest-release-gate.yml. The required "pytest" context
+# comes from that workflow's pytest-required job. The suite itself is
+# pytest-run, in the same file.
 #
-# pytest-required must never be gated on should-run-tests (or similar) again.
-# GitHub counts a skipped required check as satisfied, so a job that publishes
-# this context conditionally on whether tests ran gives an implicit pass on
-# every commit where they don't -- and because a release PR shares its head
-# SHA with pushes to staging, that stale pass satisfies this ruleset. The
-# identical shape in orchestra let four releases merge with a failing suite.
+# pytest-required must never be gated on should-run-tests (or similar) again,
+# and the workflow that defines it must never trigger on push. GitHub counts
+# a skipped required check as satisfied, so a job that publishes this context
+# conditionally on whether tests ran gives an implicit pass on every commit
+# where they don't -- and because a release PR shares its head SHA with
+# pushes to staging, that stale pass satisfies this ruleset. The identical
+# shape in orchestra let four releases merge with a failing suite.
 #
-# It also must not run on plain push: that only reintroduces the same bug in
-# fail-closed form, attaching a failing run to a push's SHA that a later
-# passing pull_request run on the same SHA can never supersede (branch
-# protection blocks on any matching-name run, not just the latest). Scoping
-# to pull_request/workflow_dispatch leaves plain pushes with no run at all
-# for this context -- pending, not a stale pass or a false block.
+# Scoping the job's own `if:` to pull_request/workflow_dispatch is NOT
+# sufficient on its own: GitHub Actions still publishes a "skipped" check run
+# for a job whose `if` evaluates false, and a skipped required check is
+# satisfied the same as a pass. The workflow that defines pytest-required
+# must itself only ever trigger on pull_request(main)/workflow_dispatch --
+# see pytest-release-gate.yml -- so an ordinary push produces no check run
+# under this context at all (pending, not a stale pass or a false block).
+# tests.yml is a separate, non-required signal for everyday pushes/PRs.
 
 REPO="${REPO:-unifyai/unillm}"
 RULESET_ID="${RULESET_ID:-11528525}"
