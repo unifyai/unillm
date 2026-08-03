@@ -1,123 +1,33 @@
-# CI for unillm
-#
-# Two modes:
-#   Internal (CLONE_TOKEN available): Clones Orchestra, starts a local server,
-#     and runs tests against it. Full observability (GCP, OTel, logs).
-#   External (no CLONE_TOKEN): Tests run without a local Orchestra. Credit
-#     deduction falls back to the production API (or silently warns if no
-#     UNIFY_KEY). External contributors can rely on cached responses; cache refresh
-#     needs OPENROUTER_API_KEY and ANTHROPIC_API_KEY in the llm-cache-refresh env.
+name: pytest release gate
 
-name: Testing unillm
+# Dedicated staging->main release gate for the pytest suite.
+#
+# This workflow exists to make the required "pytest" context safe. It must
+# only ever trigger on pull_request(main) or workflow_dispatch -- never push.
+# GitHub Actions publishes a "skipped" check run for a job whose `if`
+# evaluates false, and branch protection treats a skipped required check as
+# satisfied. Scoping just the aggregator job's `if:` (as this used to do,
+# living in the same workflow as the push-triggered everyday runner) still
+# left a skipped "pytest" run on every ordinary push, which could satisfy the
+# release gate before the real pull_request-triggered run for the same SHA
+# finished -- the identical shape in orchestra let four releases merge with a
+# failing suite. Keeping this gate in a workflow with no push trigger at all
+# means an ordinary push produces no check run under this context whatsoever
+# -- pending, not a stale pass or a false block.
+#
+# tests.yml is the separate, non-gating everyday runner for pushes and
+# non-release PRs; it does not define this context.
 
 on:
-  # Manual trigger - always runs tests
-  workflow_dispatch:
-
-  # Push events - tests only run if commit message contains [run-tests]
-  push:
-    branches:
-    - '**'
-
-  # Pull request events - tests only run if PR title contains [run-tests]
   pull_request:
     branches:
-    - '**'
+    - main
+  workflow_dispatch:
 
 jobs:
-  # Determine if tests should run based on trigger and commit/PR message
-  should-run-tests:
-    runs-on: ubuntu-latest
-    outputs:
-      run_tests: ${{ steps.check.outputs.run_tests }}
-    steps:
-    - name: Check if tests should run
-      id: check
-      env:
-        EVENT_NAME: ${{ github.event_name }}
-        COMMIT_MSG: ${{ github.event.head_commit.message }}
-        PR_TITLE: ${{ github.event.pull_request.title }}
-        REF_NAME: ${{ github.ref_name }}
-      run: |
-        # The staging->main promotion gate lives entirely in
-        # pytest-release-gate.yml now (pull_request(main)/workflow_dispatch
-        # only), so this workflow no longer special-cases base==main: doing
-        # so here would run the suite a second time on every release PR.
-
-        # workflow_dispatch always runs tests
-        if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-          echo "run_tests=true" >> "$GITHUB_OUTPUT"
-          echo "Tests triggered by workflow_dispatch"
-          exit 0
-        fi
-
-        # For push events, check commit message for [run-tests]
-        if [[ "$EVENT_NAME" == "push" ]]; then
-          if [[ "$COMMIT_MSG" == *"[run-tests]"* ]]; then
-            echo "run_tests=true" >> "$GITHUB_OUTPUT"
-            echo "Tests triggered by commit message containing [run-tests]"
-            exit 0
-          fi
-
-          # staging/main take direct pushes as a matter of course (see AGENTS.md
-          # "commit directly to staging"), untagged -- run the suite on those
-          # regardless so an untagged trunk push still gets real feedback. This
-          # is independent of the staging->main release gate, which lives
-          # entirely in pytest-release-gate.yml and never reads this output.
-          if [[ "$REF_NAME" == "staging" || "$REF_NAME" == "main" ]]; then
-            echo "run_tests=true" >> "$GITHUB_OUTPUT"
-            echo "Tests triggered by direct push to $REF_NAME"
-            exit 0
-          fi
-
-          echo "run_tests=false" >> "$GITHUB_OUTPUT"
-          echo "Skipping tests - commit message does not contain [run-tests]"
-          exit 0
-        fi
-
-        # For pull_request events, check PR title for [run-tests]
-        if [[ "$EVENT_NAME" == "pull_request" ]]; then
-          if [[ "$PR_TITLE" == *"[run-tests]"* ]]; then
-            echo "run_tests=true" >> "$GITHUB_OUTPUT"
-            echo "Tests triggered by PR title containing [run-tests]"
-          else
-            echo "run_tests=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping tests - PR title does not contain [run-tests]"
-          fi
-          exit 0
-        fi
-
-        # Default: don't run tests
-        echo "run_tests=false" >> "$GITHUB_OUTPUT"
-        echo "Skipping tests - unknown event type"
-
-  black:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-
-    - name: Install uv
-      uses: astral-sh/setup-uv@v5
-
-    - name: Format check (locked black)
-      run: |
-        uv sync --only-group lint --no-install-project --frozen
-        uv run --no-sync black --check .
-
-  # The everyday suite, for developer feedback on pushes and non-release PRs.
-  # The required "pytest" release-gate context is published entirely by
-  # pytest-release-gate.yml, which runs this same job on
-  # pull_request(main)/workflow_dispatch only -- never push -- so an ordinary
-  # push here can never satisfy that gate with a stale pass.
   pytest-run:
     runs-on: ubuntu-latest-8-cores
-    needs: should-run-tests
-    if: needs.should-run-tests.outputs.run_tests == 'true'
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'staging'
     timeout-minutes: 120
     # actions:read lets the cross-branch cache hydrate step list and download
     # the llm-cache-refresh artifact; contents:read is for checkout.
@@ -224,9 +134,9 @@ jobs:
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
 
-    # The Actions cache is branch-scoped: a promotion PR into main runs as
-    # pull_request (base=main) and can't restore the staging-scoped cache, so
-    # the read-only suite would miss every entry. Artifacts are not
+    # The Actions cache is branch-scoped: this gate runs as pull_request
+    # (base=main) and can't restore the staging-scoped cache, so the
+    # read-only suite would miss every entry. Artifacts are not
     # branch-scoped, so hydrate the consolidated cache from the latest
     # successful llm-cache-refresh run on the head branch (fallback: staging).
     # This makes the staging->main promotion pytest a meaningful, passable gate.
@@ -397,17 +307,6 @@ jobs:
           echo "No orchestra log file found"
         fi
 
-    # Upload cache diff artifact (new entries from this run)
-    - name: Upload cache artifact
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: cache-diff-${{ github.run_id }}
-        path: .cache_write.ndjson
-        if-no-files-found: ignore
-        include-hidden-files: true
-        retention-days: 1
-
     - name: Prepare logs for upload
       if: always()
       run: |
@@ -478,120 +377,22 @@ jobs:
       run: |
         "${{ github.workspace }}/orchestra/scripts/local.sh" stop || true
 
-  # Cache consolidation job: merges new cache entries and saves to GitHub cache
-  cache-consolidation:
-    name: Consolidate LLM cache
+  # Single, stable required status check for staging->main releases.
+  pytest-required:
+    name: pytest
+    needs: pytest-run
+    if: always()
     runs-on: ubuntu-latest
-    needs: [should-run-tests, pytest-run]
-    if: always() && needs.should-run-tests.outputs.run_tests == 'true'
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Restore existing consolidated cache
-      id: cache-restore
-      uses: actions/cache/restore@v4
-      with:
-        path: .cache.ndjson
-        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: |
-          cache-ndjson-${{ runner.os }}-
-
-    - name: Download cache artifacts from current run
-      uses: actions/download-artifact@v4
-      with:
-        pattern: cache-diff-*
-        path: cache-artifacts
-
-    - name: Consolidate .cache.ndjson files
-      id: consolidate
+    - name: Require the test suite to have passed
       run: |
-        # grep -c prints 0 and exits 1 on an empty file, and prints nothing at
-        # all when the file is missing, so neither case may abort the step.
-        entries() { local n; n=$(grep -c . "$1" 2>/dev/null || true); echo "${n:-0}"; }
-        restored=$(entries .cache.ndjson)
-        # Decided here rather than in the step condition so that dying before
-        # the comparison leaves the answer at "do not publish".
-        echo "publish=false" >> "$GITHUB_OUTPUT"
-        python3 .github/scripts/consolidate_cache.py \
-          --artifacts-dir cache-artifacts
-        touch .cache.ndjson
-        merged=$(entries .cache.ndjson)
-        if (( merged > restored )); then
-          echo "publish=true" >> "$GITHUB_OUTPUT"
-        fi
-        echo "Consolidated entry count: $merged (restored $restored)"
-
-    # A run that added nothing must not publish. The entry would be newer than
-    # the store it was built from, and restore-keys resolves the shared
-    # cache-ndjson- prefix to the most recently created match, so it would
-    # shadow that store for every later run.
-    - name: Store consolidated cache
-      if: steps.consolidate.outputs.publish == 'true'
-      uses: actions/cache/save@v4
-      with:
-        path: .cache.ndjson
-        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-
-  # Cache check job: verifies cache coverage
-  cache-check:
-    name: LLM Cache Check
-    runs-on: ubuntu-latest
-    needs: [should-run-tests, pytest-run]
-    # Run after pytest completes (regardless of pass/fail), but not if cancelled or skipped
-    if: always() && needs.should-run-tests.outputs.run_tests == 'true' && needs.pytest-run.result != 'cancelled'
-    steps:
-    - name: Download logs from pytest job
-      uses: actions/download-artifact@v4
-      with:
-        pattern: logs-*
-        path: all-logs
-        merge-multiple: true
-
-    - name: Check cache statistics
-      run: |
-        # Count cache hits and misses from unillm logs
-        TOTAL_HITS=0
-        TOTAL_MISSES=0
-
-        if [ -d "all-logs/unillm" ]; then
-          # Count files ending in _hit.txt (cache hits) and _miss.txt (cache misses)
-          TOTAL_HITS=$(find all-logs/unillm -name "*_hit.txt" -type f 2>/dev/null | wc -l | tr -d ' ')
-          TOTAL_MISSES=$(find all-logs/unillm -name "*_miss.txt" -type f 2>/dev/null | wc -l | tr -d ' ')
-        fi
-
-        TOTAL=$((TOTAL_HITS + TOTAL_MISSES))
-
-        echo "=== LLM Cache Statistics ==="
-        echo "  Hits:   $TOTAL_HITS"
-        echo "  Misses: $TOTAL_MISSES"
-        echo "  Total:  $TOTAL"
-
-        # Handle case with no LLM calls
-        if [ $TOTAL -eq 0 ]; then
-          echo ""
-          echo "✅ No LLM calls made - cache check passed"
-          echo "## ✅ LLM Cache: No LLM calls" >> $GITHUB_STEP_SUMMARY
+        result="${{ needs.pytest-run.result }}"
+        echo "pytest result: $result"
+        if [[ "$result" == "success" ]]; then
           exit 0
         fi
-
-        HIT_RATE=$(python3 -c "print(f'{$TOTAL_HITS * 100.0 / $TOTAL:.1f}')")
-        echo "  Hit Rate: ${HIT_RATE}%"
-        echo ""
-
-        # Require 100% cache coverage - fail CI on misses
-        if [ $TOTAL_MISSES -gt 0 ]; then
-          echo "❌ Cache coverage is not 100% - $TOTAL_MISSES cache misses detected"
-          echo ""
-          echo "Re-run CI to populate cache, then merge once 100% coverage is achieved."
-          echo "## ❌ LLM Cache: ${HIT_RATE}% coverage" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**$TOTAL_HITS** hits, **$TOTAL_MISSES** misses" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "_Re-run CI to populate cache, then merge once 100% coverage is achieved._" >> $GITHUB_STEP_SUMMARY
-          exit 1
+        if [[ "$result" == "skipped" ]]; then
+          echo "::error::Tests did not run for this commit, so the release gate"
+          echo "::error::cannot pass."
         fi
-
-        echo "✅ 100% cache coverage"
-        echo "## ✅ LLM Cache: 100% coverage" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**$TOTAL_HITS** cache hits, **0** misses" >> $GITHUB_STEP_SUMMARY
+        exit 1
