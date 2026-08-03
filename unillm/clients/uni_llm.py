@@ -37,9 +37,8 @@ from ..limit_hooks import (
 _LOGGER = logging.getLogger("unillm")
 
 _OPENROUTER_MODEL_PREFIX = "openrouter/"
-_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX = "openai/responses/"
 _OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX = "openrouter/responses/"
-_OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS = ("parallel_tool_calls", "tool_choice")
+_RESPONSES_BRIDGE_ALLOWED_PARAMS = ("parallel_tool_calls", "tool_choice")
 _OPENAI_GPT_MINOR_VERSION_RE = re.compile(r"^gpt-5\.(?P<minor>\d+)(?:[-.].*)?$")
 
 # OpenRouter catalog id -> ordered hard-enforcement hosts (tool_choice +
@@ -295,8 +294,6 @@ def _openai_public_model_name(model: str) -> str:
         name = name[len(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX) :]
     elif name.startswith(_OPENROUTER_MODEL_PREFIX):
         name = name[len(_OPENROUTER_MODEL_PREFIX) :]
-    if name.startswith(_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX):
-        name = name[len(_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX) :]
     if name.startswith("openai/"):
         name = name[len("openai/") :]
     if name.startswith("responses/"):
@@ -308,8 +305,7 @@ def _is_openai_gpt_responses_tool_model(model: str) -> bool:
     """Return whether an OpenAI GPT model needs Responses for tools with reasoning.
 
     GPT-5.2+ on OpenRouter Chat Completions drops or ignores tool calls when
-    reasoning is enabled; the Responses path restores them. GPT-5.4+ also
-    required Responses on the native OpenAI backend.
+    reasoning is enabled; the Responses path restores them.
     """
     match = _OPENAI_GPT_MINOR_VERSION_RE.match(_openai_public_model_name(model))
     return bool(match and int(match.group("minor")) >= 2)
@@ -340,7 +336,7 @@ def _copy_tools_for_responses_bridge(tools: Iterable[Any] | None) -> list[Any] |
 
 def _allow_responses_bridge_params(kw: dict) -> None:
     """Preserve chat tool controls that LiteLLM otherwise drops before bridging."""
-    _allow_openai_params(kw, _OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS)
+    _allow_openai_params(kw, _RESPONSES_BRIDGE_ALLOWED_PARAMS)
 
 
 def _route_openai_tool_reasoning_via_responses(
@@ -349,11 +345,10 @@ def _route_openai_tool_reasoning_via_responses(
     provider: str,
     stream: bool,
 ) -> None:
-    """Route GPT-5.2+ tool+reasoning calls through the Responses API.
+    """Route GPT-5.2+ tool+reasoning calls through OpenRouter's Responses path.
 
-    Native ``*@openai`` transports use LiteLLM's ``openai/responses/`` bridge.
-    OpenRouter-hosted OpenAI catalog models (``openai/...@openrouter``) use
-    OpenRouter's ``openrouter/responses/`` path.
+    OpenRouter Chat Completions drops or ignores tool calls for these models
+    when reasoning is enabled; ``openrouter/responses/`` restores them.
     """
     model = str(kw.get("model") or "")
     tools = kw.get("tools")
@@ -368,15 +363,11 @@ def _route_openai_tool_reasoning_via_responses(
     is_openrouter_transport = model.startswith(
         _OPENROUTER_MODEL_PREFIX,
     ) or model.startswith(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX)
-
-    public = _openai_public_model_name(model)
-    if provider == "openai" and not is_openrouter_transport:
-        kw["model"] = f"{_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX}{public}"
-    elif provider == "openrouter" or is_openrouter_transport:
-        kw["model"] = f"{_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX}openai/{public}"
-    else:
+    if provider != "openrouter" and not is_openrouter_transport:
         return
 
+    public = _openai_public_model_name(model)
+    kw["model"] = f"{_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX}openai/{public}"
     kw["tools"] = _copy_tools_for_responses_bridge(tools)
     _allow_responses_bridge_params(kw)
 
@@ -632,6 +623,10 @@ def _request_kw_for_transport(kw: dict, transport_model: str) -> dict:
         key: value for key, value in kw.items() if not key.startswith("_unillm_")
     }
     request_kw["model"] = transport_model
+    # LiteLLM inspects tools for MCP definitions by importing its proxy stack,
+    # which is an optional extra; the import fails before the request is even
+    # sent. Tools reach unillm already resolved, so skip that handler.
+    request_kw["_skip_mcp_handler"] = True
     return request_kw
 
 
@@ -1926,7 +1921,7 @@ class AsyncUnify(_UniClient):
     # Providers whose litellm handler expects an OpenAI SDK client (AsyncOpenAI)
     # as the ``client`` kwarg.  We must NOT pass an AsyncHTTPHandler for these.
     _OPENAI_SDK_PROVIDERS = frozenset(
-        {"openai", "azure", "azure_ai", "openrouter", "xiaomi-mimo"},
+        {"azure", "azure_ai", "openrouter", "xiaomi-mimo"},
     )
 
     _async_http_client: Optional[AsyncHTTPHandler] = None

@@ -151,8 +151,6 @@ def openrouter_model(model_id: str) -> str:
 
 
 def _public_model_alias(provider: str, model: str, alias: str) -> str:
-    if provider == "openai":
-        return model
     if provider == "openrouter":
         # Public/accounting id is the OpenRouter transport id so pricing and
         # LiteLLM metadata resolve without a second lookup.

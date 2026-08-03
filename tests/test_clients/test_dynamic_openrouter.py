@@ -56,8 +56,8 @@ def test_compute_cost_from_response_prefers_openrouter_usage_cost() -> None:
     assert compute_cost_from_response("openrouter/openai/gpt-5.5", response) == 0.042
 
 
-def test_compute_cost_from_response_ignores_usage_cost_for_native_openai() -> None:
-    """Native OpenAI must not treat a stray usage.cost as authoritative."""
+def test_compute_cost_from_response_ignores_usage_cost_off_openrouter() -> None:
+    """Only OpenRouter reports an authoritative usage.cost; others price tokens."""
     response = SimpleNamespace(
         usage=SimpleNamespace(
             prompt_tokens=1000,
@@ -65,7 +65,7 @@ def test_compute_cost_from_response_ignores_usage_cost_for_native_openai() -> No
             cost=999.0,
         ),
     )
-    cost = compute_cost_from_response("gpt-5.5@openai", response)
+    cost = compute_cost_from_response("claude-opus-5@anthropic", response)
     assert cost is not None
     assert cost != 999.0
     assert cost > 0

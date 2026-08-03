@@ -10,7 +10,8 @@ def _normalize_model_name(model: str) -> str:
     """
     Normalize model name for LiteLLM lookup.
 
-    Strips the @provider suffix used by unify/unillm (e.g., 'gpt-5.2@openai' -> 'gpt-5.2').
+    Strips the @provider suffix used by unify/unillm
+    (e.g. 'claude-opus-5@anthropic' -> 'claude-opus-5').
 
     Args:
         model: The model identifier, possibly with @provider suffix.

@@ -307,7 +307,10 @@ class TestCostEventEmissionMocked:
                         return_value=0.001,
                     ):
                         with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify("gpt-4@openai", cache=True)
+                            client = unillm.Unify(
+                                "openai/gpt-4o@openrouter",
+                                cache=True,
+                            )
                             with capture_costs() as events:
                                 client.generate(
                                     messages=[{"role": "user", "content": "Hi"}],
@@ -334,7 +337,7 @@ class TestCostEventEmissionMocked:
             return_value=mock_cached_response,
         ):
             with patch("unillm.clients.uni_llm._write_to_cache"):
-                client = unillm.Unify("gpt-4@openai", cache=True)
+                client = unillm.Unify("openai/gpt-4o@openrouter", cache=True)
                 with capture_costs() as events:
                     client.generate(messages=[{"role": "user", "content": "Hi"}])
 
@@ -368,7 +371,10 @@ class TestCostEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.002,
                     ):
-                        client = unillm.AsyncUnify("gpt-4@openai", cache=True)
+                        client = unillm.AsyncUnify(
+                            "openai/gpt-4o@openrouter",
+                            cache=True,
+                        )
                         async with acapture_costs() as events:
                             await client.generate(
                                 messages=[{"role": "user", "content": "Hi"}],
@@ -396,7 +402,7 @@ class TestCostEventEmissionMocked:
             return_value=mock_cached_response,
         ):
             with patch("unillm.clients.uni_llm._write_to_cache"):
-                client = unillm.AsyncUnify("gpt-4@openai", cache=True)
+                client = unillm.AsyncUnify("openai/gpt-4o@openrouter", cache=True)
                 async with acapture_costs() as events:
                     await client.generate(
                         messages=[{"role": "user", "content": "Hi"}],
@@ -426,7 +432,10 @@ class TestCostEventEmissionMocked:
                         return_value=0.001,
                     ):
                         with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify("gpt-4@openai", cache=True)
+                            client = unillm.Unify(
+                                "openai/gpt-4o@openrouter",
+                                cache=True,
+                            )
                             # No capture context - should not error
                             response = client.generate(
                                 messages=[{"role": "user", "content": "Hi"}],

@@ -18,7 +18,7 @@ Usage:
     set_llm_event_hook(my_hook)
 
     # Now all LLM calls will trigger the hook (once per call, after completion)
-    client = AsyncUnify("gpt-4o@openai")
+    client = AsyncUnify("openai/gpt-4o@openrouter")
     await client.generate(messages=[...])  # Hook called once with full event
 """
 
