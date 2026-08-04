@@ -40,7 +40,7 @@ async def _abandon_mid_call(deduct_patch_target: str, delay: float = 0.05):
 
     with (
         patch(
-            "unillm.clients.uni_llm._acompletion_with_empty_responses_fallback",
+            "unillm.clients.uni_llm._acompletion_with_transient_retry",
             side_effect=slow_completion,
         ),
         patch(deduct_patch_target) as deduct,
@@ -87,7 +87,7 @@ async def test_abandoned_call_reports_its_cost_to_spending_limits():
 
     with (
         patch(
-            "unillm.clients.uni_llm._acompletion_with_empty_responses_fallback",
+            "unillm.clients.uni_llm._acompletion_with_transient_retry",
             side_effect=slow_completion,
         ),
         patch("unillm.clients.uni_llm._safe_deduct_credits"),
@@ -129,7 +129,7 @@ async def test_call_denied_by_a_spending_limit_is_not_charged():
 
     with (
         patch(
-            "unillm.clients.uni_llm._acompletion_with_empty_responses_fallback",
+            "unillm.clients.uni_llm._acompletion_with_transient_retry",
             side_effect=slow_completion,
         ),
         patch("unillm.clients.uni_llm.is_limit_check_enabled", return_value=True),
