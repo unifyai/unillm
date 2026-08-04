@@ -113,6 +113,63 @@ class TestComputeCostWithProviderSuffix:
         assert cost > 0
 
 
+class TestBilledCostPrefersReportedCharge:
+    """``compute_full_cost_from_usage`` is the figure users are billed."""
+
+    USAGE = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "cost": 0.001234,
+    }
+
+    def test_openrouter_reported_cost_is_used_verbatim(self):
+        """The charge OpenRouter reports is billed as-is, not recomputed."""
+        assert (
+            compute_full_cost_from_usage("openai/gpt-5.5@openrouter", self.USAGE)
+            == 0.001234
+        )
+        assert (
+            compute_full_cost_from_usage("openrouter/openai/gpt-5.5", self.USAGE)
+            == 0.001234
+        )
+
+    def test_reported_cost_wins_over_the_price_map(self):
+        """A reported charge is authoritative even when the map disagrees."""
+        recomputed = compute_full_cost_from_usage(
+            "openai/gpt-5.5@openrouter",
+            {k: v for k, v in self.USAGE.items() if k != "cost"},
+        )
+        assert recomputed != pytest.approx(0.001234)
+        assert (
+            compute_full_cost_from_usage("openai/gpt-5.5@openrouter", self.USAGE)
+            == 0.001234
+        )
+
+    def test_reported_cost_carries_discounts_the_map_cannot_price(self):
+        """Cache savings reach the account even with no cache rate to apply.
+
+        A model whose pricing carries no cache-read rate would otherwise bill
+        cached tokens at zero, handing over more than the provider discounted.
+        """
+        usage = {
+            "prompt_tokens": 100_000,
+            "completion_tokens": 100,
+            "prompt_tokens_details": {"cached_tokens": 90_000},
+            "cost": 0.05,
+        }
+        assert compute_full_cost_from_usage("openrouter/some/unmapped", usage) == 0.05
+
+    def test_falls_back_to_the_price_map_without_a_reported_cost(self):
+        """Providers that report no cost keep the derived figure."""
+        usage = {"prompt_tokens": 1000, "completion_tokens": 500}
+        assert compute_full_cost_from_usage("openai/gpt-5.5@openrouter", usage) > 0
+
+    def test_non_openrouter_models_ignore_a_reported_cost(self):
+        """``usage.cost`` is an OpenRouter contract, so it is not read elsewhere."""
+        derived = compute_full_cost_from_usage("gpt-4o", {**self.USAGE})
+        assert derived != pytest.approx(0.001234)
+
+
 class TestComputeCost:
     """Tests for the compute_cost function."""
 

@@ -364,6 +364,15 @@ def compute_full_cost_from_usage(model: str, usage: Union[dict, object]) -> floa
     Supports both standard chat completion usage (prompt_tokens, completion_tokens)
     and Realtime API usage (input_token_details.audio_tokens, etc.).
 
+    For OpenRouter, ``usage.cost`` is what was actually charged and is preferred
+    over anything derived from the price map. This is the figure users are billed,
+    so reconstructing it leaves them paying an estimate: the map is missing cache
+    rates for some models, carries no cache-creation rate at all, and goes stale
+    whenever a provider reprices. Reading the charge instead makes every discount
+    and premium reach the account by construction rather than by our arithmetic
+    keeping up. The computation below remains the fallback, and the only path for
+    providers that do not report a cost.
+
     Args:
         model: The model identifier.
         usage: The usage object/dict from an API response.
@@ -374,6 +383,11 @@ def compute_full_cost_from_usage(model: str, usage: Union[dict, object]) -> floa
     Raises:
         ValueError: If the model is not found in LiteLLM's pricing data.
     """
+    if _is_openrouter_model(model):
+        reported = extract_openrouter_usage_cost(usage)
+        if reported is not None:
+            return reported
+
     model_info = _get_model_info(model)
 
     # Get pricing info
