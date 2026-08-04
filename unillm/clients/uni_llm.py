@@ -5,7 +5,6 @@ import copy
 import inspect
 import logging
 import os
-import re
 
 from typing import (
     Any,
@@ -37,9 +36,6 @@ from ..limit_hooks import (
 _LOGGER = logging.getLogger("unillm")
 
 _OPENROUTER_MODEL_PREFIX = "openrouter/"
-_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX = "openrouter/responses/"
-_RESPONSES_BRIDGE_ALLOWED_PARAMS = ("parallel_tool_calls", "tool_choice")
-_OPENAI_GPT_MINOR_VERSION_RE = re.compile(r"^gpt-5\.(?P<minor>\d+)(?:[-.].*)?$")
 
 # OpenRouter catalog id -> ordered hard-enforcement hosts (tool_choice +
 # json_schema under adversarial prompts). allow_fallbacks is always false.
@@ -356,187 +352,30 @@ def _canonical_model_for_accounting(model: str | None) -> str:
     return model
 
 
-def _openai_public_model_name(model: str) -> str:
-    """Strip OpenRouter / Responses transport prefixes down to the public GPT name."""
-    name = model
-    if name.startswith(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX):
-        name = name[len(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX) :]
-    elif name.startswith(_OPENROUTER_MODEL_PREFIX):
-        name = name[len(_OPENROUTER_MODEL_PREFIX) :]
-    if name.startswith("openai/"):
-        name = name[len("openai/") :]
-    if name.startswith("responses/"):
-        name = name[len("responses/") :]
-    return name
-
-
-def _is_openai_gpt_responses_tool_model(model: str) -> bool:
-    """Return whether an OpenAI GPT model needs Responses for tools with reasoning.
-
-    GPT-5.2+ on OpenRouter Chat Completions drops or ignores tool calls when
-    reasoning is enabled; the Responses path restores them.
-    """
-    match = _OPENAI_GPT_MINOR_VERSION_RE.match(_openai_public_model_name(model))
-    return bool(match and int(match.group("minor")) >= 2)
-
-
-def _copy_tool_for_responses_bridge(tool: Any) -> Any:
-    """Copy a chat tool while placing strictness where LiteLLM's bridge reads it."""
-    if not isinstance(tool, dict):
-        return tool
-
-    tool_copy = dict(tool)
-    function = tool_copy.get("function")
-    if tool_copy.get("type") == "function" and isinstance(function, dict):
-        function_copy = dict(function)
-        if "strict" in tool_copy and "strict" not in function_copy:
-            function_copy["strict"] = tool_copy["strict"]
-        tool_copy["function"] = function_copy
-        tool_copy.pop("strict", None)
-    return tool_copy
-
-
-def _copy_tools_for_responses_bridge(tools: Iterable[Any] | None) -> list[Any] | None:
-    """Return response-bridge-compatible tool definitions without mutating callers."""
-    if tools is None:
-        return None
-    return [_copy_tool_for_responses_bridge(tool) for tool in tools]
-
-
-def _allow_responses_bridge_params(kw: dict) -> None:
-    """Preserve chat tool controls that LiteLLM otherwise drops before bridging."""
-    _allow_openai_params(kw, _RESPONSES_BRIDGE_ALLOWED_PARAMS)
-
-
-def _route_openai_tool_reasoning_via_responses(
-    kw: dict,
-    *,
-    provider: str,
-    stream: bool,
-) -> None:
-    """Route GPT-5.2+ tool+reasoning calls through OpenRouter's Responses path.
-
-    OpenRouter Chat Completions drops or ignores tool calls for these models
-    when reasoning is enabled; ``openrouter/responses/`` restores them.
-    """
-    model = str(kw.get("model") or "")
-    tools = kw.get("tools")
-    if (
-        stream
-        or not tools
-        or kw.get("reasoning_effort") is None
-        or not _is_openai_gpt_responses_tool_model(model)
-    ):
-        return
-
-    is_openrouter_transport = model.startswith(
-        _OPENROUTER_MODEL_PREFIX,
-    ) or model.startswith(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX)
-    if provider != "openrouter" and not is_openrouter_transport:
-        return
-
-    public = _openai_public_model_name(model)
-    kw["model"] = f"{_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX}openai/{public}"
-    kw["tools"] = _copy_tools_for_responses_bridge(tools)
-    _allow_responses_bridge_params(kw)
-
-
-def _openrouter_chat_fallback_kw(kw: dict) -> dict | None:
-    """Map ``openrouter/responses/...`` → ``openrouter/...`` for empty-output fallback."""
-    model = str(kw.get("model") or "")
-    if not model.startswith(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX):
-        return None
-    fallback = dict(kw)
-    fallback["model"] = (
-        f"{_OPENROUTER_MODEL_PREFIX}"
-        f"{model[len(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX) :]}"
-    )
-    return fallback
-
-
-def _is_empty_responses_output_error(exc: BaseException) -> bool:
-    return "unknown items in responses api response" in str(exc).lower()
-
-
-def _strip_encrypted_reasoning_in_kw(kw: dict, exc: BaseException) -> bool:
-    """Mutate ``kw['messages']`` to drop poison encrypted reasoning; return changed."""
-    from .encrypted_reasoning_retry import strip_encrypted_reasoning_for_error
-
-    messages = kw.get("messages")
-    if not messages:
-        return False
-    return strip_encrypted_reasoning_for_error(messages, exc)
-
-
-_RESPONSES_RECOVERY_EXCEPTIONS = (
-    litellm.APIConnectionError,
-    litellm.BadRequestError,
-    litellm.exceptions.APIError,
-)
-
-
-async def _acompletion_with_empty_responses_fallback(
+async def _acompletion_with_transient_retry(
     *,
     shared_session: Any,
     client: Any,
     **kw: Any,
 ) -> Any:
-    """Call ``litellm.acompletion`` with Responses-path recoveries.
-
-    1. Transient retries (via ``retry_transient_400_async``).
-    2. On ``invalid_encrypted_content`` / encrypted ``invalid_prompt``: drop the
-       offending (or all encrypted) ``reasoning_items`` from ``messages`` in
-       place and retry once. Encrypted reasoning is optional continuity; the
-       visible transcript is enough to continue.
-    3. On empty OpenRouter Responses ``output``: fall back to OpenRouter chat
-       completions once.
-    """
+    """Call ``litellm.acompletion`` with UniLLM's transient retry policy."""
     from ..helpers import retry_transient_400_async
-    from .encrypted_reasoning_retry import is_invalid_encrypted_content_error
 
-    async def _call(current_kw: dict) -> Any:
+    async def _call() -> Any:
         return await litellm.acompletion(
             shared_session=shared_session,
             client=client,
-            **current_kw,
+            **kw,
         )
 
-    try:
-        return await retry_transient_400_async(lambda: _call(kw))
-    except _RESPONSES_RECOVERY_EXCEPTIONS as e:
-        if is_invalid_encrypted_content_error(e):
-            if _strip_encrypted_reasoning_in_kw(kw, e):
-                return await retry_transient_400_async(lambda: _call(kw))
-            raise
-        if not _is_empty_responses_output_error(e):
-            raise
-        fallback_kw = _openrouter_chat_fallback_kw(kw)
-        if fallback_kw is None:
-            raise
-        return await retry_transient_400_async(lambda: _call(fallback_kw))
+    return await retry_transient_400_async(_call)
 
 
-def _completion_with_empty_responses_fallback(**kw: Any) -> Any:
-    """Sync counterpart of ``_acompletion_with_empty_responses_fallback``."""
+def _completion_with_transient_retry(**kw: Any) -> Any:
+    """Call ``litellm.completion`` with UniLLM's transient retry policy."""
     from ..helpers import retry_transient_400_sync
-    from .encrypted_reasoning_retry import is_invalid_encrypted_content_error
 
-    def _call(current_kw: dict) -> Any:
-        return litellm.completion(**current_kw)
-
-    try:
-        return retry_transient_400_sync(lambda: _call(kw))
-    except _RESPONSES_RECOVERY_EXCEPTIONS as e:
-        if is_invalid_encrypted_content_error(e):
-            if _strip_encrypted_reasoning_in_kw(kw, e):
-                return retry_transient_400_sync(lambda: _call(kw))
-            raise
-        if not _is_empty_responses_output_error(e):
-            raise
-        fallback_kw = _openrouter_chat_fallback_kw(kw)
-        if fallback_kw is None:
-            raise
-        return retry_transient_400_sync(lambda: _call(fallback_kw))
+    return retry_transient_400_sync(lambda: litellm.completion(**kw))
 
 
 def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
@@ -636,9 +475,6 @@ def _prepare_provider_request_kw(
         and not model.startswith(_OPENROUTER_MODEL_PREFIX)
     ):
         kw["api_base"] = "https://api.minimax.io/v1"
-
-    _route_openai_tool_reasoning_via_responses(kw, provider=provider, stream=stream)
-    model = str(kw.get("model") or model)
 
     _apply_openrouter_hard_provider_pin(kw, model)
 
@@ -1602,7 +1438,7 @@ class Unify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ):
-                completion = _completion_with_empty_responses_fallback(
+                completion = _completion_with_transient_retry(
                     **transport_kw,
                 )
                 _normalize_assistant_message_content(completion)
@@ -1750,7 +1586,7 @@ class Unify(_UniClient):
                     in_cache = True if chat_completion is not None else False
                 if chat_completion is None:
                     try:
-                        chat_completion = _completion_with_empty_responses_fallback(
+                        chat_completion = _completion_with_transient_retry(
                             **transport_kw,
                         )
                         _normalize_assistant_message_content(chat_completion)
@@ -2202,7 +2038,7 @@ class AsyncUnify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ):
-                completion = await _acompletion_with_empty_responses_fallback(
+                completion = await _acompletion_with_transient_retry(
                     shared_session=get_shared_session(),
                     client=self._get_async_http_client(),
                     **transport_kw,
@@ -2362,7 +2198,7 @@ class AsyncUnify(_UniClient):
                 if chat_completion is None:
                     # Start LLM call immediately (don't wait for limit check)
                     llm_task = asyncio.create_task(
-                        _acompletion_with_empty_responses_fallback(
+                        _acompletion_with_transient_retry(
                             shared_session=get_shared_session(),
                             client=self._get_async_http_client(),
                             **transport_kw,
