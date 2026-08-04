@@ -60,10 +60,11 @@ import unillm
 
 ### API Keys
 
-Set credentials for whichever providers you want to use:
+Set credentials for whichever providers you want to use. OpenAI models are
+available through OpenRouter; UniLLM has no native OpenAI chat transport.
 
 ```bash
-export OPENAI_API_KEY=<your-key>
+export OPENROUTER_API_KEY=<your-key>
 export ANTHROPIC_API_KEY=<your-key>
 # ... other provider keys
 ```
@@ -95,7 +96,7 @@ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 import unillm
 
 # Sync client
-client = unillm.Unify("gpt-4o@openai")
+client = unillm.Unify("openai/gpt-4o@openrouter")
 response = client.generate(
     messages=[{"role": "user", "content": "Hello!"}]
 )
@@ -114,7 +115,7 @@ response = await async_client.generate(
 All models use a consistent `model@provider` format:
 
 ```python
-client = unillm.Unify("gpt-4o@openai")
+client = unillm.Unify("openai/gpt-4o@openrouter")
 client = unillm.Unify("claude-sonnet-4-20250514@anthropic")
 client = unillm.Unify("gemini-2.0-flash@vertexai")
 ```
@@ -133,7 +134,7 @@ after consolidating or hand-editing `.cache.ndjson`, delete any `*.ndjson.idx`
 so the next process rebuilds cleanly.
 
 ```python
-client = unillm.Unify("gpt-4o@openai", cache=True)
+client = unillm.Unify("openai/gpt-4o@openrouter", cache=True)
 
 # Cache modes
 client.generate(..., cache="read")       # Read from cache only if available
@@ -158,7 +159,7 @@ print(events[0]["cache_status"])  # "hit" or "miss"
 ### Streaming
 
 ```python
-client = unillm.Unify("gpt-4o@openai", stream=True)
+client = unillm.Unify("openai/gpt-4o@openrouter", stream=True)
 for chunk in client.generate(messages=[...]):
     print(chunk, end="")
 ```
@@ -166,7 +167,7 @@ for chunk in client.generate(messages=[...]):
 ### Stateful Conversations
 
 ```python
-client = unillm.Unify("gpt-4o@openai", stateful=True)
+client = unillm.Unify("openai/gpt-4o@openrouter", stateful=True)
 client.generate(user_message="What is 2+2?")
 client.generate(user_message="And what is that times 3?")  # Maintains history
 ```
@@ -307,7 +308,10 @@ uv sync
 
 ### Running Tests
 
-Tests require at minimum an `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` set in your environment (or a `.env` file). With a populated `.cache.ndjson`, cached LLM responses are replayed — so tests run fast and deterministically without making real LLM calls.
+Live tests require at minimum an `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY`
+in your environment (or a `.env` file). With a populated `.cache.ndjson`,
+cached LLM responses are replayed, so tests run quickly and deterministically
+without making real LLM calls.
 
 ```bash
 uv run pytest tests/ -v

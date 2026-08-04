@@ -17,7 +17,7 @@ UniLLM is a lightweight wrapper that normalizes LLM interactions across multiple
 
 ## Core Features
 
-- **Unified Endpoint Format**: `model@provider` (e.g., `gpt-4o@openai`, `claude-sonnet-4-20250514@anthropic`)
+- **Unified Endpoint Format**: `model@provider` (e.g., `openai/gpt-4o@openrouter`, `claude-sonnet-4-20250514@anthropic`)
 - **Provider Preprocessing**: Automatic handling of provider quirks (message format normalization, parameter translation)
 - **Response Caching**: Read/write/both modes with cache hit/miss tracking—critical for test determinism
 - **Stateful Conversations**: Automatic history management

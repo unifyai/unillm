@@ -38,12 +38,6 @@ lint = [
     "autoflake>=2.3.1",
 ]
 dev = [
-    # LiteLLM's Responses handler imports its proxy stack, which lives behind
-    # the ``proxy`` extra. Only the ``openrouter/responses/`` bridge needs it,
-    # and only on a live call — cached replays never reach the import. Required
-    # locally and for cache refresh so bridge responses can be recorded.
-    "fastapi>=0.136.3",
-    "orjson>=3.10.0",
     "pytest>=8.4.2",
     "pytest-asyncio>=0.24.0",
     "pytest-timeout>=2.3.1",
