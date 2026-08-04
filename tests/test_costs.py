@@ -113,7 +113,7 @@ class TestComputeCostWithProviderSuffix:
         assert cost > 0
 
 
-class TestBilledCostPrefersReportedCharge:
+class TestCostPrefersReportedCharge:
     """``compute_full_cost_from_usage`` is the figure users are billed."""
 
     USAGE = {

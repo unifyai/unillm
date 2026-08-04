@@ -23,7 +23,6 @@ class TestCostEventDataclass:
         event = CostEvent(model="gpt-4")
         assert event.model == "gpt-4"
         assert event.provider_cost == 0.0
-        assert event.billed_cost == 0.0
         assert event.prompt_tokens == 0
         assert event.completion_tokens == 0
         assert event.cache_status == "disabled"
@@ -32,13 +31,11 @@ class TestCostEventDataclass:
         event = CostEvent(
             model="gpt-4",
             provider_cost=0.001,
-            billed_cost=0.005,
             prompt_tokens=100,
             completion_tokens=50,
             cache_status="miss",
         )
         assert event.provider_cost == 0.001
-        assert event.billed_cost == 0.005
         assert event.prompt_tokens == 100
         assert event.completion_tokens == 50
         assert event.cache_status == "miss"
@@ -47,11 +44,9 @@ class TestCostEventDataclass:
         event = CostEvent(
             model="gpt-4",
             provider_cost=0.0,
-            billed_cost=0.0,
             cache_status="hit",
         )
         assert event.provider_cost == 0.0
-        assert event.billed_cost == 0.0
         assert event.cache_status == "hit"
 
 
@@ -74,13 +69,11 @@ class TestCostEventFromCompletion:
         event = CostEvent.from_completion(
             model="gpt-4",
             provider_cost=0.001,
-            billed_cost=0.005,
             completion=completion,
             cache_status="miss",
         )
         assert event.model == "gpt-4"
         assert event.provider_cost == 0.001
-        assert event.billed_cost == 0.005
         assert event.prompt_tokens == 100
         assert event.completion_tokens == 50
         assert event.cache_status == "miss"
@@ -94,7 +87,6 @@ class TestCostEventFromCompletion:
         event = CostEvent.from_completion(
             model="gpt-4o",
             provider_cost=0.002,
-            billed_cost=0.01,
             completion=usage,
             cache_status="disabled",
         )
@@ -106,7 +98,6 @@ class TestCostEventFromCompletion:
         event = CostEvent.from_completion(
             model="gpt-4",
             provider_cost=0.001,
-            billed_cost=0.005,
             completion=None,
             cache_status="miss",
         )
@@ -115,16 +106,14 @@ class TestCostEventFromCompletion:
         assert event.provider_cost == 0.001
 
     def test_none_costs_treated_as_zero(self):
-        """None provider_cost and billed_cost become 0.0."""
+        """A None provider_cost becomes 0.0."""
         event = CostEvent.from_completion(
             model="gpt-4",
             provider_cost=None,
-            billed_cost=None,
             completion=None,
             cache_status="hit",
         )
         assert event.provider_cost == 0.0
-        assert event.billed_cost == 0.0
 
     def test_completion_with_none_usage(self):
         """Completion object where .usage is None yields zero tokens."""
@@ -134,7 +123,6 @@ class TestCostEventFromCompletion:
         event = CostEvent.from_completion(
             model="gpt-4",
             provider_cost=0.001,
-            billed_cost=0.005,
             completion=completion,
             cache_status="miss",
         )
@@ -153,7 +141,6 @@ class TestCostEventFromCompletion:
         event = CostEvent.from_completion(
             model="gpt-4",
             provider_cost=0.001,
-            billed_cost=0.005,
             completion=completion,
             cache_status="miss",
         )
@@ -180,7 +167,6 @@ class TestCaptureCostsContextManager:
                 CostEvent(
                     model="gpt-4",
                     provider_cost=0.001,
-                    billed_cost=0.005,
                     prompt_tokens=10,
                     completion_tokens=5,
                     cache_status="miss",
@@ -252,7 +238,6 @@ class TestAsyncCaptureCostsContextManager:
                 CostEvent(
                     model="gpt-4",
                     provider_cost=0.002,
-                    billed_cost=0.01,
                     cache_status="miss",
                 ),
             )
@@ -320,7 +305,6 @@ class TestCostEventEmissionMocked:
         event = events[0]
         assert event.cache_status == "miss"
         assert event.provider_cost == 0.001
-        assert event.billed_cost == pytest.approx(0.001)
         assert event.prompt_tokens == 10
         assert event.completion_tokens == 5
 
@@ -346,7 +330,6 @@ class TestCostEventEmissionMocked:
         assert event.cache_status == "hit"
         # Cache hits are free
         assert event.provider_cost == 0.0
-        assert event.billed_cost == 0.0
 
     @pytest.mark.asyncio
     async def test_async_client_emits_cost_event_on_cache_miss(self):
@@ -384,7 +367,6 @@ class TestCostEventEmissionMocked:
         event = events[0]
         assert event.cache_status == "miss"
         assert event.provider_cost == 0.002
-        assert event.billed_cost == pytest.approx(0.002)
         assert event.prompt_tokens == 20
         assert event.completion_tokens == 10
 
@@ -412,7 +394,6 @@ class TestCostEventEmissionMocked:
         event = events[0]
         assert event.cache_status == "hit"
         assert event.provider_cost == 0.0
-        assert event.billed_cost == 0.0
 
     def test_no_capture_context_means_events_dropped(self):
         """Events emitted without a capture context should be silently dropped."""
@@ -467,7 +448,6 @@ class TestCostEventEmissionIntegration:
         # If it was a cache miss, there should be a cost
         if event.cache_status == "miss":
             assert event.provider_cost > 0
-            assert event.billed_cost > 0
 
     @pytest.mark.asyncio
     async def test_real_async_client_emits_cost_event(self):

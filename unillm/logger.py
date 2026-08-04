@@ -565,7 +565,7 @@ def log_usage(
         label: Label for the log entry (e.g. 'gpt-4o-realtime-preview').
 
     Returns:
-        The billed cost that was deducted, in USD.
+        The cost that was deducted, in USD.
     """
     from .costs import compute_full_cost_from_usage
 
@@ -579,19 +579,17 @@ def log_usage(
 
     # Build the response body (usage stats + cost)
     provider_cost = compute_full_cost_from_usage(model, usage)
-    billed_cost = provider_cost
 
     response_body = {
         "usage": usage,
         "provider_cost": provider_cost,
-        "billed_cost": billed_cost,
     }
 
     if _TERMINAL_LOG_ENABLED:
         _LOGGER.debug(
             f"🔄 {label_prefix}usage log\n"
             f"  usage: {json.dumps(usage, default=str)}\n"
-            f"  provider_cost: ${provider_cost:.6f}, billed: ${billed_cost:.6f}",
+            f"  provider_cost: ${provider_cost:.6f}",
         )
 
     # File log (write a complete file in one shot — no pending phase)
@@ -619,7 +617,7 @@ def log_usage(
             pass
 
     # Deduct credits with full attribution
-    if billed_cost > 0:
+    if provider_cost > 0:
         try:
             from .billing_context import get_billing_context
 
@@ -629,14 +627,12 @@ def log_usage(
                 detail["prompt_tokens"] = usage["input_tokens"]
             if usage.get("output_tokens") is not None:
                 detail["completion_tokens"] = usage["output_tokens"]
-            if provider_cost:
-                detail["provider_cost"] = provider_cost
             if ctx.source:
                 detail["source"] = ctx.source
             if ctx.label:
                 detail["label"] = ctx.label
             unisdk.deduct_credits(
-                billed_cost,
+                provider_cost,
                 category="llm",
                 assistant_id=ctx.assistant_id,
                 user_id=ctx.user_id,
@@ -645,7 +641,7 @@ def log_usage(
                 detail=detail,
             )
         except Exception:
-            _LOGGER.warning(f"Failed to deduct credits: ${billed_cost:.6f}")
+            _LOGGER.warning(f"Failed to deduct credits: ${provider_cost:.6f}")
 
     # Emit LLM event so downstream hooks (e.g. cumulative spend tracking) fire
     from .llm_events import LLMEvent, _emit_llm_event
@@ -655,11 +651,10 @@ def log_usage(
             request=request_body,
             response=response_body,
             provider_cost=provider_cost,
-            billed_cost=billed_cost,
         ),
     )
 
-    return billed_cost
+    return provider_cost
 
 
 def write_request_pending(

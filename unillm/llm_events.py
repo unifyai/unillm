@@ -41,10 +41,8 @@ class LLMEvent:
         request: The full request dict sent to the LLM (model, messages, tools, etc.).
         response: The full response dict from the LLM (serialized ChatCompletion).
             None for streaming requests or errors.
-        provider_cost: The raw cost charged by the LLM provider (in USD).
-            None for cache hits, streaming, or errors.
-        billed_cost: The cost charged to the user (in USD).
-            None for cache hits, streaming, or errors.
+        provider_cost: What the call cost, as charged by the LLM provider
+            (in USD). None for cache hits, streaming, or errors.
         origin: Optional user-supplied tag identifying the call origin
             (e.g. ``"ConversationManager.decide"``). ``None`` when not set.
     """
@@ -52,7 +50,6 @@ class LLMEvent:
     request: dict[str, Any]
     response: Optional[dict[str, Any]] = None
     provider_cost: Optional[float] = None
-    billed_cost: Optional[float] = None
     origin: Optional[str] = None
 
 
@@ -118,7 +115,7 @@ def set_llm_event_hook(hook: Callable[[LLMEvent], None] | None) -> None:
     Example:
         def my_logger(event: LLMEvent) -> None:
             model = event.request.get("model", "unknown")
-            print(f"LLM call to {model}, cost: ${event.billed_cost or 0:.4f}")
+            print(f"LLM call to {model}, cost: ${event.provider_cost or 0:.4f}")
 
         set_llm_event_hook(my_logger)
     """
