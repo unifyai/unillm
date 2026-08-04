@@ -109,6 +109,5 @@ def test_sync_openrouter_generate_bills_usage_cost() -> None:
 
     assert len(events) == 1
     assert events[0].provider_cost == 0.0015
-    assert events[0].billed_cost == 0.0015
     deduct.assert_called_once()
     assert deduct.call_args.args[0] == 0.0015

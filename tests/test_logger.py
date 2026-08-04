@@ -812,15 +812,15 @@ class TestLogUsage:
         ]
 
         with patch("unillm.logger.unisdk.deduct_credits"):
-            billed_cost = log_usage(
+            cost = log_usage(
                 "gpt-4o-realtime-preview",
                 usage,
                 transcript=transcript,
                 label="gpt-4o-realtime-preview",
             )
 
-        # Should return a positive billed cost
-        assert billed_cost > 0
+        # Should return a positive cost
+        assert cost > 0
 
         # Should have created exactly one log file with _usage suffix
         log_files = list(tmp_path.glob("*_usage.txt"))
@@ -839,10 +839,9 @@ class TestLogUsage:
         assert "[usage]" in content
         assert "audio_tokens" in content
         assert "provider_cost" in content
-        assert "billed_cost" in content
 
     def test_deducts_credits(self, tmp_path, monkeypatch):
-        """log_usage deducts the billed cost via unisdk.deduct_credits with full attribution."""
+        """log_usage deducts the cost via unisdk.deduct_credits with full attribution."""
         from unittest.mock import patch, MagicMock
         from unillm import settings
         from unillm import logger
@@ -878,11 +877,11 @@ class TestLogUsage:
 
         mock_deduct = MagicMock()
         with patch("unillm.logger.unisdk.deduct_credits", mock_deduct):
-            billed_cost = log_usage("gpt-4o-realtime-preview", usage)
+            cost = log_usage("gpt-4o-realtime-preview", usage)
 
         mock_deduct.assert_called_once()
         deducted_amount = mock_deduct.call_args[0][0]
-        assert deducted_amount == billed_cost
+        assert deducted_amount == cost
         assert deducted_amount > 0
 
         kwargs = mock_deduct.call_args[1]
@@ -913,9 +912,9 @@ class TestLogUsage:
         usage = {"input_tokens": 50, "output_tokens": 30}
 
         with patch("unillm.logger.unisdk.deduct_credits"):
-            billed_cost = log_usage("gpt-4o-realtime-preview", usage)
+            cost = log_usage("gpt-4o-realtime-preview", usage)
 
-        assert billed_cost > 0
+        assert cost > 0
 
         log_files = list(tmp_path.glob("*_usage.txt"))
         assert len(log_files) == 1
@@ -951,10 +950,10 @@ class TestLogUsage:
             side_effect=ConnectionError("no connection"),
         ):
             # Should not raise
-            billed_cost = log_usage("gpt-4o-realtime-preview", usage)
+            cost = log_usage("gpt-4o-realtime-preview", usage)
 
         # Cost should still be computed
-        assert billed_cost > 0
+        assert cost > 0
 
         # Log file should still exist
         log_files = list(tmp_path.glob("*_usage.txt"))
@@ -1002,7 +1001,6 @@ class TestLogUsage:
         assert isinstance(event, LLMEvent)
         assert event.request["model"] == "gpt-4o-realtime-preview"
         assert event.provider_cost > 0
-        assert event.billed_cost > 0
         assert event.response["usage"] == usage
 
 

@@ -28,7 +28,6 @@ class TestLLMEventDataclass:
         assert event.request["model"] == "openai/gpt-4o@openrouter"
         assert event.response is None
         assert event.provider_cost is None
-        assert event.billed_cost is None
 
     def test_create_event_with_response(self):
         event = LLMEvent(
@@ -42,15 +41,12 @@ class TestLLMEventDataclass:
         event = LLMEvent(
             request={"model": "openai/gpt-4o@openrouter"},
             provider_cost=0.001,
-            billed_cost=0.005,
         )
         assert event.provider_cost == 0.001
-        assert event.billed_cost == 0.005
 
     def test_event_costs_default_to_none(self):
         event = LLMEvent(request={"model": "openai/gpt-4o@openrouter"})
         assert event.provider_cost is None
-        assert event.billed_cost is None
 
 
 class TestSetLLMEventHook:
@@ -345,7 +341,6 @@ class TestLLMEventEmissionMocked:
         assert len(captured) == 1
         # Cache hits don't compute costs
         assert captured[0].provider_cost is None
-        assert captured[0].billed_cost is None
 
     def test_sync_client_captures_error_with_no_response(self):
         captured = []
@@ -373,7 +368,6 @@ class TestLLMEventEmissionMocked:
         assert event.response is None
         # No costs on error
         assert event.provider_cost is None
-        assert event.billed_cost is None
 
     @pytest.mark.asyncio
     async def test_async_client_emits_event(self):
@@ -597,7 +591,7 @@ class TestLLMEventCosts:
         set_llm_event_hook(None)
 
     def test_sync_client_includes_costs_in_event(self):
-        """Non-streaming events should include provider_cost and billed_cost."""
+        """Non-streaming events should include the call's cost."""
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Hello"
@@ -637,8 +631,6 @@ class TestLLMEventCosts:
         # Provider cost should be set
         assert event.provider_cost == 0.001
 
-        assert event.billed_cost == pytest.approx(0.001)
-
     def test_cache_hit_has_no_costs(self):
         """Cache hits should not incur costs."""
         mock_cached_response = MagicMock()
@@ -664,7 +656,6 @@ class TestLLMEventCosts:
         event = captured[0]
         # Cache hits are free - no costs
         assert event.provider_cost is None
-        assert event.billed_cost is None
 
     def test_error_has_no_costs(self):
         """Errors should not have costs (nothing was computed)."""
@@ -689,7 +680,6 @@ class TestLLMEventCosts:
         event = captured[0]
         # No costs on error
         assert event.provider_cost is None
-        assert event.billed_cost is None
 
     @pytest.mark.asyncio
     async def test_async_client_includes_costs_in_event(self):
@@ -733,7 +723,6 @@ class TestLLMEventCosts:
         event = captured[0]
 
         assert event.provider_cost == 0.002
-        assert event.billed_cost == pytest.approx(0.002)
 
 
 # ---------------------------------------------------------------------------

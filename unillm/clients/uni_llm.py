@@ -207,7 +207,6 @@ def _safe_deduct_credits(
     model: str | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
-    provider_cost: float | None = None,
 ) -> None:
     """Deduct credits with ledger metadata from billing context."""
     from ..billing_context import get_billing_context
@@ -220,8 +219,6 @@ def _safe_deduct_credits(
         detail["prompt_tokens"] = prompt_tokens
     if completion_tokens is not None:
         detail["completion_tokens"] = completion_tokens
-    if provider_cost is not None:
-        detail["provider_cost"] = provider_cost
     if ctx.source:
         detail["source"] = ctx.source
     if ctx.label:
@@ -1439,7 +1436,6 @@ class Unify(_UniClient):
         usage_info = None
         llm_error: BaseException | None = None
         provider_cost: float | None = None
-        billed_cost: float | None = None
 
         try:
             chat_completion = retry_transient_400_sync(
@@ -1469,14 +1465,12 @@ class Unify(_UniClient):
                     _provider_cost_from_stream_usage(accounting_model, usage_info)
                 )
                 if provider_cost is not None and provider_cost > 0:
-                    billed_cost = provider_cost
                     _safe_deduct_credits(
-                        billed_cost,
+                        provider_cost,
                         api_key=self._api_key,
                         model=accounting_model,
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
-                        provider_cost=provider_cost,
                     )
 
             # Emit LLM event (after streaming completes)
@@ -1485,7 +1479,6 @@ class Unify(_UniClient):
                     request=_request_kw_for_event(transport_kw, accounting_model),
                     response=None,  # No single response for streams
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     origin=origin,
                 ),
             )
@@ -1494,7 +1487,6 @@ class Unify(_UniClient):
                 CostEvent.from_completion(
                     model=accounting_model,
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     completion=usage_info,
                     cache_status="disabled",  # Streaming bypasses cache
                 ),
@@ -1564,19 +1556,16 @@ class Unify(_UniClient):
             accounting_model = _canonical_model_for_accounting(retry_kw.get("model"))
             cost = compute_cost_from_response(accounting_model, completion)
             if cost is not None and cost > 0:
-                billed = cost
                 _safe_deduct_credits(
-                    billed,
+                    cost,
                     api_key=self._api_key,
                     model=accounting_model,
-                    provider_cost=cost,
                 )
 
                 _emit_cost_event(
                     CostEvent.from_completion(
                         model=accounting_model,
                         provider_cost=cost,
-                        billed_cost=billed,
                         completion=completion,
                         cache_status="miss",
                     ),
@@ -1661,7 +1650,6 @@ class Unify(_UniClient):
         in_cache = False
         llm_error: BaseException | None = None
         provider_cost: float | None = None
-        billed_cost: float | None = None
 
         # Wrap in OTel span with try/finally to guarantee log finalization
         try:
@@ -1755,8 +1743,6 @@ class Unify(_UniClient):
                     accounting_model,
                     chat_completion,
                 )
-                if provider_cost is not None and provider_cost > 0:
-                    billed_cost = provider_cost
 
             # Emit LLM event (after LLM call, always runs)
             # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
@@ -1765,7 +1751,6 @@ class Unify(_UniClient):
                     request=_request_kw_for_event(transport_kw, accounting_model),
                     response=resp_body,
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     origin=origin,
                 ),
             )
@@ -1774,7 +1759,6 @@ class Unify(_UniClient):
                 CostEvent.from_completion(
                     model=accounting_model,
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     completion=chat_completion,
                     cache_status=cache_status,
                 ),
@@ -1814,13 +1798,12 @@ class Unify(_UniClient):
                     backend=cache_backend,
                 )
 
-        # Deduct credits for cache misses (use already-computed billed_cost).
-        if billed_cost is not None and billed_cost > 0:
+        # Deduct credits for cache misses (use the already-computed cost).
+        if provider_cost is not None and provider_cost > 0:
             _safe_deduct_credits(
-                billed_cost,
+                provider_cost,
                 api_key=self._api_key,
                 model=accounting_model,
-                provider_cost=provider_cost,
             )
 
         # Always return full completion; _apply_stateful_logic handles extraction
@@ -2001,7 +1984,6 @@ class AsyncUnify(_UniClient):
         usage_info = None
         llm_error: BaseException | None = None
         provider_cost: float | None = None
-        billed_cost: float | None = None
         async_stream = None
         collected_content: list[str] = []
 
@@ -2079,16 +2061,14 @@ class AsyncUnify(_UniClient):
                     _provider_cost_from_stream_usage(accounting_model, usage_info)
                 )
                 if provider_cost is not None and provider_cost > 0:
-                    billed_cost = provider_cost
                     asyncio.create_task(
                         asyncio.to_thread(
                             _safe_deduct_credits,
-                            billed_cost,
+                            provider_cost,
                             api_key=self._api_key,
                             model=accounting_model,
                             prompt_tokens=prompt_tokens,
                             completion_tokens=completion_tokens,
-                            provider_cost=provider_cost,
                         ),
                         name="unillm_deduct_credits_stream",
                     )
@@ -2099,7 +2079,6 @@ class AsyncUnify(_UniClient):
                     request=_request_kw_for_event(transport_kw, accounting_model),
                     response=None,  # No single response for streams
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     origin=origin,
                 ),
             )
@@ -2108,7 +2087,6 @@ class AsyncUnify(_UniClient):
                 CostEvent.from_completion(
                     model=accounting_model,
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     completion=usage_info,
                     cache_status="disabled",  # Streaming bypasses cache
                 ),
@@ -2180,14 +2158,12 @@ class AsyncUnify(_UniClient):
             accounting_model = _canonical_model_for_accounting(retry_kw.get("model"))
             cost = compute_cost_from_response(accounting_model, completion)
             if cost is not None and cost > 0:
-                billed = cost
                 asyncio.create_task(
                     asyncio.to_thread(
                         _safe_deduct_credits,
-                        billed,
+                        cost,
                         api_key=self._api_key,
                         model=accounting_model,
-                        provider_cost=cost,
                     ),
                     name=f"unillm_deduct_credits_{label_suffix}",
                 )
@@ -2196,7 +2172,6 @@ class AsyncUnify(_UniClient):
                     CostEvent.from_completion(
                         model=accounting_model,
                         provider_cost=cost,
-                        billed_cost=billed,
                         completion=completion,
                         cache_status="miss",
                     ),
@@ -2281,7 +2256,6 @@ class AsyncUnify(_UniClient):
         in_cache = False
         llm_error: BaseException | None = None
         provider_cost: float | None = None
-        billed_cost: float | None = None
 
         # Task tracking for cleanup
         limit_task: asyncio.Task | None = None
@@ -2414,8 +2388,6 @@ class AsyncUnify(_UniClient):
                     accounting_model,
                     chat_completion,
                 )
-                if provider_cost is not None and provider_cost > 0:
-                    billed_cost = provider_cost
 
             # Emit LLM event (after LLM call, always runs)
             # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
@@ -2424,7 +2396,6 @@ class AsyncUnify(_UniClient):
                     request=_request_kw_for_event(transport_kw, accounting_model),
                     response=resp_body,
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     origin=origin,
                 ),
             )
@@ -2433,21 +2404,19 @@ class AsyncUnify(_UniClient):
                 CostEvent.from_completion(
                     model=accounting_model,
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     completion=chat_completion,
                     cache_status=cache_status,
                 ),
             )
 
-        # Deduct credits for cache misses (use already-computed billed_cost)
-        if billed_cost is not None and billed_cost > 0:
+        # Deduct credits for cache misses (use the already-computed cost)
+        if provider_cost is not None and provider_cost > 0:
             asyncio.create_task(
                 asyncio.to_thread(
                     _safe_deduct_credits,
-                    billed_cost,
+                    provider_cost,
                     api_key=self._api_key,
                     model=accounting_model,
-                    provider_cost=provider_cost,
                 ),
                 name="unillm_deduct_credits",
             )
