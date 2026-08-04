@@ -200,6 +200,73 @@ def _cancel_inflight_task(task: asyncio.Task) -> None:
     task.add_done_callback(consume_result)
 
 
+def _bill_abandoned_call(
+    llm_task: asyncio.Task,
+    *,
+    api_key: str | None,
+    accounting_model: str,
+    request_kw: dict,
+    origin: str | None,
+) -> None:
+    """Charge for a dispatched call whose caller stopped waiting for it.
+
+    The provider generates and bills the moment the request lands, so an
+    abandoned call is real money spent on behalf of a real account. The
+    amount comes from the response rather than from the prompt: pricing
+    ``prompt_tokens`` at list rate ignores cached input and misprices by
+    more than 2x, so the request is left to finish in the background and
+    the charge it reports is what gets deducted.
+
+    Emitting the LLM event here is what lets spending limits see the
+    money. A limit only counts what reached the ledger, so before this an
+    account could out-spend its cap through calls nobody ever read.
+    """
+
+    def bill(completed_task: asyncio.Task) -> None:
+        try:
+            completion = completed_task.result()
+        except (asyncio.CancelledError, Exception):
+            # No generation came back, so the provider charged nothing.
+            return
+
+        cost = compute_cost_from_response(accounting_model, completion)
+        if cost is None or cost <= 0:
+            return
+
+        asyncio.create_task(
+            asyncio.to_thread(
+                _safe_deduct_credits,
+                cost,
+                api_key=api_key,
+                model=accounting_model,
+                abandoned=True,
+            ),
+            name="unillm_deduct_credits_abandoned",
+        )
+        _emit_llm_event(
+            LLMEvent(
+                request=_request_kw_for_event(request_kw, accounting_model),
+                response=(
+                    completion.model_dump(warnings=False)
+                    if hasattr(completion, "model_dump")
+                    else completion
+                ),
+                provider_cost=cost,
+                origin=origin,
+            ),
+        )
+        _emit_cost_event(
+            CostEvent.from_completion(
+                model=accounting_model,
+                provider_cost=cost,
+                completion=completion,
+                cache_status="miss",
+            ),
+        )
+
+    llm_task.add_done_callback(bill)
+
+
 def _safe_deduct_credits(
     amount: float,
     *,
@@ -207,6 +274,7 @@ def _safe_deduct_credits(
     model: str | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
+    abandoned: bool = False,
 ) -> None:
     """Deduct credits with ledger metadata from billing context."""
     from ..billing_context import get_billing_context
@@ -219,6 +287,10 @@ def _safe_deduct_credits(
         detail["prompt_tokens"] = prompt_tokens
     if completion_tokens is not None:
         detail["completion_tokens"] = completion_tokens
+    if abandoned:
+        # The caller walked away before reading the answer. Marked so a
+        # customer asking "what was this line?" gets a real answer.
+        detail["abandoned"] = True
     if ctx.source:
         detail["source"] = ctx.source
     if ctx.label:
@@ -2308,8 +2380,13 @@ class AsyncUnify(_UniClient):
                                 llm_task = None
                                 raise SpendingLimitExceededError(limit_result)
 
-                        # Limit check passed (or disabled), wait for LLM result
-                        chat_completion = await llm_task
+                        # Limit check passed (or disabled), wait for LLM result.
+                        # Shielded so a caller that gives up mid-call doesn't
+                        # take the request with it: the provider is already
+                        # generating and charging, and the response is the only
+                        # thing that says how much. ``finally`` hands the
+                        # surviving task to the biller.
+                        chat_completion = await asyncio.shield(llm_task)
                         _normalize_assistant_message_content(chat_completion)
                         llm_task = None  # Mark as consumed
                     except litellm.exceptions.APIError as e:
@@ -2345,14 +2422,27 @@ class AsyncUnify(_UniClient):
                 cache_status = "error"
             raise
         finally:
-            # Cancel any unconsumed tasks (e.g., cache hit or error)
-            for task in [limit_task, llm_task]:
-                if task is not None and not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except (asyncio.CancelledError, Exception):
-                        pass
+            # The limit check is ours and costs nothing to drop.
+            if limit_task is not None and not limit_task.done():
+                limit_task.cancel()
+                try:
+                    await limit_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            # An unconsumed LLM task means the caller stopped waiting (a
+            # limit denial cancels the call itself and clears the handle,
+            # so it never lands here). The request is already with the
+            # provider, so charge for it once the response arrives instead
+            # of cancelling and losing both the answer and the amount.
+            if llm_task is not None:
+                _bill_abandoned_call(
+                    llm_task,
+                    api_key=self._api_key,
+                    accounting_model=accounting_model,
+                    request_kw=transport_kw,
+                    origin=origin,
+                )
 
             # Finalize log file with response and cache status (always runs)
             try:
