@@ -6,28 +6,44 @@ Provides a hook mechanism for external integrations to receive LLM completion
 events. This allows downstream consumers to capture and
 log all LLM activity without coupling unillm to specific logging implementations.
 
-The pattern mirrors cache_events.py - using a ContextVar for thread-safety and
-async-safety, with a simple callback interface.
+There are two ways to receive events, and they compose:
+
+- **Listeners** (``add_llm_event_listener``) are the supported way to meter a
+  process. Registration is *additive* — every listener receives every event,
+  from every thread and every event loop — so one consumer can never displace
+  another, and installation order does not matter.
+- **Scoped hooks** (``set_llm_event_hook`` / ``llm_event_hook_scope``) are a
+  ContextVar-based capture for a single call path, useful in tests. A scoped
+  hook receives events *in addition to* the registered listeners; it does not
+  suppress them.
 
 Usage:
-    from unillm import set_llm_event_hook, LLMEvent
+    from unillm import add_llm_event_listener, LLMEvent
 
     def my_hook(event: LLMEvent) -> None:
         print(f"LLM call: {event.request.get('model')}")
 
-    set_llm_event_hook(my_hook)
+    listener = add_llm_event_listener(my_hook)
 
     # Now all LLM calls will trigger the hook (once per call, after completion)
     client = AsyncUnify("openai/gpt-4o@openrouter")
     await client.generate(messages=[...])  # Hook called once with full event
+
+    # A consumer that reports totals must check it actually received them,
+    # because a listener that raises is isolated, not fatal:
+    assert listener.healthy, listener.last_error
 """
 
 from __future__ import annotations
 
+import logging
+import threading
 from contextlib import contextmanager, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Callable, Generator, AsyncGenerator, Optional
+
+_LOGGER = logging.getLogger("unillm")
 
 
 @dataclass
@@ -53,61 +69,171 @@ class LLMEvent:
     origin: Optional[str] = None
 
 
-# Context variable for the current event hook (context-local, for scoped captures)
+class LLMEventListener:
+    """A registered recipient of LLM events, carrying its own delivery health.
+
+    A listener's callback runs inside the LLM client, so it must never be able
+    to fail a call — an exception from one listener is isolated and the
+    remaining listeners still receive the event. That isolation is also a trap
+    for anything that *counts* events: a callback which raises on every event
+    records nothing, and a zero total reads as "nothing happened" rather than
+    "measurement broke". ``failed``/``last_error`` exist so a consumer can tell
+    those two apart, and every failure is logged at ERROR as well.
+    """
+
+    def __init__(self, callback: Callable[[LLMEvent], None]) -> None:
+        self._callback = callback
+        self._lock = threading.Lock()
+        self._delivered = 0
+        self._failed = 0
+        self._last_error: BaseException | None = None
+
+    @property
+    def callback(self) -> Callable[[LLMEvent], None]:
+        return self._callback
+
+    @property
+    def delivered(self) -> int:
+        """Events the callback accepted without raising."""
+        with self._lock:
+            return self._delivered
+
+    @property
+    def failed(self) -> int:
+        """Events the callback raised on, and therefore did not record."""
+        with self._lock:
+            return self._failed
+
+    @property
+    def last_error(self) -> BaseException | None:
+        with self._lock:
+            return self._last_error
+
+    @property
+    def healthy(self) -> bool:
+        """True when the callback has never raised.
+
+        Check this before trusting any total derived from the events, so a
+        broken callback surfaces as an error instead of a zero.
+        """
+        with self._lock:
+            return self._failed == 0
+
+    def remove(self) -> None:
+        """Deregister this listener. Idempotent."""
+        remove_llm_event_listener(self)
+
+    def _deliver(self, event: LLMEvent) -> None:
+        try:
+            self._callback(event)
+        except Exception as exc:
+            with self._lock:
+                self._failed += 1
+                self._last_error = exc
+                failed = self._failed
+            _LOGGER.error(
+                "LLM event listener %s raised; %d event(s) have now been lost "
+                "to it. Totals derived from this listener are incomplete.",
+                _describe(self._callback),
+                failed,
+                exc_info=True,
+            )
+        else:
+            with self._lock:
+                self._delivered += 1
+
+    def __repr__(self) -> str:
+        return (
+            f"LLMEventListener({_describe(self._callback)}, "
+            f"delivered={self.delivered}, failed={self.failed})"
+        )
+
+
+def _describe(callback: Callable[[LLMEvent], None]) -> str:
+    return getattr(callback, "__qualname__", None) or repr(callback)
+
+
+# Registered listeners, in registration order. A plain module-level list, so it
+# is genuinely process-global: shared across threads, event loops and contexts.
+_listeners: list[LLMEventListener] = []
+_listeners_lock = threading.Lock()
+
+# Context variable for a scoped hook, layered on top of the listeners above.
 _llm_event_hook: ContextVar[Callable[[LLMEvent], None] | None] = ContextVar(
     "llm_event_hook",
     default=None,
 )
 
-# Module-level global hook (process-wide fallback when no context-specific hook is set)
-_global_llm_event_hook: Callable[[LLMEvent], None] | None = None
 
+def add_llm_event_listener(
+    callback: Callable[[LLMEvent], None],
+) -> LLMEventListener:
+    """Register a callback to receive every LLM event in this process.
 
-def set_global_llm_event_hook(hook: Callable[[LLMEvent], None] | None) -> None:
-    """Set a process-global hook that applies to all threads and async contexts.
+    This is the supported way to meter LLM activity. Registration is additive
+    and process-global: the callback is invoked for every completed LLM call
+    regardless of which thread, task or event loop made it, and registering a
+    second listener does not displace the first. Installation order therefore
+    does not matter, and no caller has to chain to a predecessor.
 
-    Unlike set_llm_event_hook() which uses a ContextVar (context-local), this
-    sets a module-level global that will be used as a fallback when no
-    context-specific hook is set.
-
-    This is the preferred way to install a hook at application startup that
-    should capture all LLM calls across all threads. The hook will be called
-    for any LLM call where no context-specific hook has been set.
-
-    If both a context-specific hook (via set_llm_event_hook or llm_event_hook_scope)
-    and a global hook are set, the context-specific hook takes precedence.
+    The callback runs synchronously inside the LLM client, from the calling
+    thread, so it should be cheap and must not block. If it raises, the
+    exception is logged and counted on the returned handle rather than
+    propagating into the LLM call.
 
     Args:
-        hook: A callable that receives an LLMEvent. Pass None to clear the hook.
-
-    Example:
-        def my_logger(event: LLMEvent) -> None:
-            print(f"LLM call to {event.request.get('model')}")
-
-        # Install once at startup - works across all threads
-        set_global_llm_event_hook(my_logger)
-    """
-    global _global_llm_event_hook
-    _global_llm_event_hook = hook
-
-
-def get_global_llm_event_hook() -> Callable[[LLMEvent], None] | None:
-    """Get the currently active global LLM event hook, if any.
+        callback: A callable that receives an LLMEvent.
 
     Returns:
-        The current global hook callable, or None if no global hook is set.
+        A handle used to deregister the listener and to check its delivery
+        health (``delivered`` / ``failed`` / ``last_error`` / ``healthy``).
+
+    Example:
+        listener = add_llm_event_listener(my_logger)
+        ...
+        if not listener.healthy:
+            raise RuntimeError(f"metering broke: {listener.last_error!r}")
+        listener.remove()
     """
-    return _global_llm_event_hook
+    listener = LLMEventListener(callback)
+    with _listeners_lock:
+        _listeners.append(listener)
+    return listener
+
+
+def remove_llm_event_listener(listener: LLMEventListener) -> None:
+    """Deregister a listener previously added by add_llm_event_listener.
+
+    Idempotent: removing an already-removed listener is a no-op.
+    """
+    with _listeners_lock:
+        if listener in _listeners:
+            _listeners.remove(listener)
+
+
+def llm_event_listeners() -> tuple[LLMEventListener, ...]:
+    """The currently registered listeners, in registration order."""
+    with _listeners_lock:
+        return tuple(_listeners)
+
+
+def clear_llm_event_listeners() -> None:
+    """Deregister every listener. Intended for test teardown."""
+    with _listeners_lock:
+        _listeners.clear()
 
 
 def set_llm_event_hook(hook: Callable[[LLMEvent], None] | None) -> None:
-    """Set a hook to receive LLM completion events.
+    """Set a context-local hook to receive LLM completion events.
 
     The hook will be called once per LLM call, after the request completes.
     The event contains the full request and response dicts, plus cost info.
 
-    The hook is stored in a ContextVar, so it's automatically inherited by
-    child tasks/threads but isolated from unrelated code paths.
+    The hook is stored in a ContextVar, so it is inherited by child
+    tasks/threads but isolated from unrelated call paths. It is delivered to
+    *in addition to* any registered listeners — setting it never suppresses
+    process-wide metering. To meter a whole process, use
+    ``add_llm_event_listener`` instead.
 
     Args:
         hook: A callable that receives an LLMEvent. Pass None to clear the hook.
@@ -123,7 +249,7 @@ def set_llm_event_hook(hook: Callable[[LLMEvent], None] | None) -> None:
 
 
 def get_llm_event_hook() -> Callable[[LLMEvent], None] | None:
-    """Get the currently active LLM event hook, if any.
+    """Get the currently active context-local LLM event hook, if any.
 
     Returns:
         The current hook callable, or None if no hook is set.
@@ -135,10 +261,11 @@ def get_llm_event_hook() -> Callable[[LLMEvent], None] | None:
 def llm_event_hook_scope(
     hook: Callable[[LLMEvent], None],
 ) -> Generator[None, None, None]:
-    """Context manager to temporarily set an LLM event hook.
+    """Context manager to temporarily set a context-local LLM event hook.
 
     The hook is active only within the context manager scope and is
-    automatically restored to the previous value on exit.
+    automatically restored to the previous value on exit. Registered listeners
+    keep receiving events throughout.
 
     Args:
         hook: The hook to use within the scope.
@@ -165,10 +292,11 @@ def llm_event_hook_scope(
 async def allm_event_hook_scope(
     hook: Callable[[LLMEvent], None],
 ) -> AsyncGenerator[None, None]:
-    """Async context manager to temporarily set an LLM event hook.
+    """Async context manager to temporarily set a context-local LLM event hook.
 
     The hook is active only within the context manager scope and is
-    automatically restored to the previous value on exit.
+    automatically restored to the previous value on exit. Registered listeners
+    keep receiving events throughout.
 
     Args:
         hook: The hook to use within the scope.
@@ -192,32 +320,29 @@ async def allm_event_hook_scope(
 
 
 def _emit_llm_event(event: LLMEvent) -> None:
-    """Emit an LLM event to the current hook, if any.
+    """Emit an LLM event to the scoped hook and to every registered listener.
 
-    This is an internal function called by the LLM clients. If no hook is
-    set, the event is silently dropped.
+    This is an internal function called by the LLM clients. Delivery is
+    additive: the context-local hook (if set) and all registered listeners
+    each receive the event, so no recipient can displace another.
 
-    The hook resolution order is:
-    1. Context-specific hook (set via set_llm_event_hook or llm_event_hook_scope)
-    2. Global hook (set via set_global_llm_event_hook)
-
-    This ensures scoped captures in tests take precedence, while the global
-    hook catches all other LLM calls across threads.
-
-    The hook is called synchronously but wrapped in a try/except to ensure
-    hook failures never break LLM calls.
+    Each recipient is called synchronously and independently. A recipient that
+    raises is logged and skipped, so neither the LLM call nor the other
+    recipients are affected.
 
     Args:
         event: The LLM event to emit.
     """
-    # First try context-specific hook (for scoped captures in tests)
     hook = _llm_event_hook.get()
-    # Fall back to global hook if no context-specific hook
-    if hook is None:
-        hook = _global_llm_event_hook
     if hook is not None:
         try:
             hook(event)
         except Exception:
-            # Never let hook failures break LLM calls
-            pass
+            _LOGGER.error(
+                "Scoped LLM event hook %s raised; the event was not delivered "
+                "to it.",
+                _describe(hook),
+                exc_info=True,
+            )
+    for listener in llm_event_listeners():
+        listener._deliver(event)
