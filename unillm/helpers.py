@@ -1,11 +1,14 @@
 import asyncio
+import logging
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
-import litellm
+import openai
 
 from .settings import SETTINGS
 
 T = TypeVar("T")
+
+_LOGGER = logging.getLogger("unillm.retry")
 
 
 class _UnsetSentinel:
@@ -41,25 +44,32 @@ def get_seed() -> Optional[int]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Transient Error Retry Logic
 # ─────────────────────────────────────────────────────────────────────────────
-# LLM provider APIs are subject to transient failures that should be retried:
+# This is the only layer that retries an LLM call. OpenRouter retries among its
+# own upstreams but cannot retry its own reply to us; LiteLLM retries only when
+# passed ``num_retries``/``max_retries``, which we never do; and the OpenAI SDK
+# is not in the transport path for provider calls routed through LiteLLM's HTTP
+# handler. So whatever this layer declines is never attempted again — the
+# caller's whole trajectory ends on it.
 #
-# 1. **Transient 400s** — OpenAI occasionally returns HTTP 400 BadRequest for
-#    valid requests (e.g. "something went wrong reading your request"). Neither
-#    the OpenAI SDK (retries only 5xx) nor LiteLLM (treats 400 as permanent)
-#    will retry these.
+# That makes the default the important decision, and the default is to retry.
+# Classification is by *fault*, read off the response status:
 #
-# 2. **503 ServiceUnavailableError** — Upstream overload or connection resets
-#    (e.g. Anthropic "upstream connect error … reset reason: overflow").
+# - **4xx** — we sent something wrong, so a retry repeats the mistake. Declined,
+#   except for the handful of providers that report their own faults with a
+#   client status (see ``_PROVIDER_FAULT_PATTERNS``), and except 408/429, which
+#   describe timing rather than request content.
+# - **Everything else** — 5xx, and 2xx carrying a body we could not read: the
+#   provider's side of the exchange failed. Retried.
+# - **No status at all** — a semantic error raised without a response (length or
+#   content-filter finish reasons, bad client configuration). A settled fact, not
+#   a blip. Declined.
 #
-# 3. **500 InternalServerError** — Transient server-side failures.
-#
-# 4. **429 RateLimitError** — Temporary rate limiting from providers.
-#
-# 5. **Unparseable response bodies** — A provider answers 200 with a body that
-#    is not JSON (in practice: whitespace, from a connection held open while
-#    the upstream queued and then closed without writing the completion).
-#    LiteLLM raises this as an APIError carrying the response status, so
-#    neither the status nor the type marks it transient.
+# The asymmetry is what settles the default: a wrong "transient" verdict costs
+# seconds of latency and no provider charge (4xx are not billed), while a wrong
+# "permanent" verdict costs the caller's entire run. Recognising failures by name
+# gets that backwards — an OpenRouter 200 whose body is whitespace maps to
+# APIError and matches no message pattern, so a name-based policy declines it
+# without a single attempt.
 #
 # References:
 # - LiteLLM GitHub issue #12503: 400 errors don't trigger channel fallback
@@ -69,151 +79,122 @@ def get_seed() -> Optional[int]:
 # - LiteLLM exception mapping: https://docs.litellm.ai/docs/exception_mapping
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Error message substrings that indicate transient server-side issues
-# despite being returned as HTTP 400 BadRequest.
-_TRANSIENT_400_ERROR_PATTERNS = (
+# Message substrings that identify a provider-side fault reported with a client
+# error status. "unable to get json response" is LiteLLM's wording when a
+# response body could not be parsed as JSON at all — every provider
+# transformation raises it with that prefix, so one entry covers OpenRouter,
+# OpenAI, Anthropic, Fireworks, Vertex and Databricks alike.
+_PROVIDER_FAULT_PATTERNS = (
     "something went wrong reading your request",
     "service temporarily unavailable",
     "temporarily unavailable, please try again",
+    "unable to get json response",
 )
 
-# LiteLLM's message when a response body could not be parsed as JSON at all.
-# Every provider transformation raises it with this same prefix, so matching it
-# covers OpenRouter, OpenAI, Anthropic, Fireworks, Vertex and Databricks alike.
-# The body is typically whitespace: the connection was held open while the
-# upstream queued, then closed without a completion ever being written. No
-# usable response reached the caller either way, so the only way forward is to
-# ask again.
-_UNPARSEABLE_BODY_PATTERN = "unable to get json response"
+# Client-error statuses that describe timing rather than request content, so
+# the same request can succeed unchanged: 408 request timeout, 429 rate limit.
+_TRANSIENT_CLIENT_STATUSES = frozenset({408, 429})
 
-# Exception types that are inherently transient (server-side) and always
-# worth retrying regardless of the error message.
-_TRANSIENT_SERVER_EXCEPTIONS = (
-    litellm.ServiceUnavailableError,
-    litellm.InternalServerError,
-    litellm.RateLimitError,
-    litellm.APIConnectionError,
-)
-
-# Base backoff delay in seconds for transient server errors (doubles each attempt).
-# With UNILLM_TRANSIENT_RETRY_COUNT=6 this yields 1/2/4/8/16/32s between attempts.
+# Base backoff delay in seconds (doubles each attempt). With
+# UNILLM_TRANSIENT_RETRY_COUNT=6 this yields 1/2/4/8/16/32s between attempts.
 _BACKOFF_BASE_SECONDS = 1.0
 
+# Root of every error LiteLLM's exception mapping produces for a provider call.
+# Catching the root rather than a list of subclasses is what lets an unfamiliar
+# failure reach the classifier at all.
+_PROVIDER_EXCEPTIONS = (openai.OpenAIError,)
 
-def _is_transient_400_error(exc: BaseException) -> bool:
-    """
-    Check if an exception is a known transient error masquerading as a 400.
 
-    These are server-side processing failures that upstream providers
-    incorrectly return as HTTP 400 BadRequest instead of 5xx.
-    """
+def _is_provider_fault_message(exc: BaseException) -> bool:
+    """Check whether a client-status error is really the provider's own fault."""
     msg = str(exc).lower()
-    return any(pattern in msg for pattern in _TRANSIENT_400_ERROR_PATTERNS)
-
-
-def _is_unparseable_body_error(exc: BaseException) -> bool:
-    """
-    Check if an exception reports a response body that was not JSON.
-
-    Providers surface this as a 200 carrying junk rather than an error status,
-    so neither the status code nor the exception type marks it as transient.
-    """
-    return _UNPARSEABLE_BODY_PATTERN in str(exc).lower()
-
-
-def _should_backoff(exc: BaseException) -> bool:
-    """Whether *exc* warrants a delay before the next attempt.
-
-    An unparseable body points at an upstream that was still queueing when the
-    connection dropped, so an immediate retry walks into the same wait.
-    """
-    return isinstance(exc, _TRANSIENT_SERVER_EXCEPTIONS) or _is_unparseable_body_error(
-        exc,
-    )
+    return any(pattern in msg for pattern in _PROVIDER_FAULT_PATTERNS)
 
 
 def _is_retryable(exc: BaseException) -> bool:
-    """Return True if the exception represents a transient failure worth retrying."""
-    if isinstance(exc, _TRANSIENT_SERVER_EXCEPTIONS):
-        return True
-    if isinstance(exc, (litellm.BadRequestError, litellm.exceptions.APIError)):
-        return _is_transient_400_error(exc) or _is_unparseable_body_error(exc)
-    return False
+    """Return True if the exception leaves room for the same request to succeed."""
+    status = getattr(exc, "status_code", None)
+    if not isinstance(status, int):
+        return False
+    if 400 <= status < 500 and status not in _TRANSIENT_CLIENT_STATUSES:
+        return _is_provider_fault_message(exc)
+    return True
 
 
-def retry_transient_400_sync(fn: Callable[[], T]) -> T:
+def _describe(exc: BaseException) -> str:
+    """One-line identity of a failure, for the retry log lines.
+
+    Whitespace is collapsed because the bodies that provoke these lines are
+    often whitespace themselves, and a log entry has to stay one entry.
     """
-    Execute a sync function with retry logic for transient LLM errors.
+    status = getattr(exc, "status_code", None)
+    detail = " ".join(str(exc).split())[:200]
+    return f"{type(exc).__name__}(status={status}): {detail}"
 
-    Retries up to UNILLM_TRANSIENT_RETRY_COUNT times when encountering:
-    - BadRequestError / APIError with known transient message patterns (400)
-    - APIError reporting a response body that was not JSON
-    - ServiceUnavailableError (503)
-    - InternalServerError (500)
-    - RateLimitError (429)
 
-    Uses exponential backoff for server-side errors (503/500/429) and for
-    unparseable bodies, doubling from ``_BACKOFF_BASE_SECONDS`` (default
-    schedule 1/2/4/8/16/32s).
+def retry_transient_llm_sync(fn: Callable[[], T]) -> T:
+    """
+    Execute a sync provider call, retrying failures that may yet succeed.
+
+    Retries up to UNILLM_TRANSIENT_RETRY_COUNT times with exponential backoff
+    doubling from ``_BACKOFF_BASE_SECONDS`` (default schedule 1/2/4/8/16/32s).
+    See the module comment above for which failures are retried and why.
+
+    Every terminal outcome is logged, so a failure that reaches the caller
+    always says whether it was retried and how often.
     """
     import time
 
     max_retries = SETTINGS.UNILLM_TRANSIENT_RETRY_COUNT
-    last_exc: BaseException | None = None
 
     for attempt in range(max_retries + 1):
         try:
             return fn()
-        except (
-            litellm.BadRequestError,
-            litellm.exceptions.APIError,
-            *_TRANSIENT_SERVER_EXCEPTIONS,
-        ) as e:
-            if _is_retryable(e) and attempt < max_retries:
-                last_exc = e
-                if _should_backoff(e):
-                    time.sleep(_BACKOFF_BASE_SECONDS * (2**attempt))
-                continue
-            raise
+        except _PROVIDER_EXCEPTIONS as e:
+            if not _is_retryable(e):
+                _LOGGER.warning(f"not retried, treated as permanent: {_describe(e)}")
+                raise
+            if attempt >= max_retries:
+                _LOGGER.warning(
+                    f"retries exhausted after {attempt + 1} attempts: {_describe(e)}",
+                )
+                raise
+            _LOGGER.debug(
+                f"retrying (attempt {attempt + 1}/{max_retries + 1}): {_describe(e)}",
+            )
+            time.sleep(_BACKOFF_BASE_SECONDS * (2**attempt))
 
-    # Should never reach here, but satisfies type checker
-    assert last_exc is not None
-    raise last_exc
+    raise AssertionError("unreachable: the loop either returns or raises")
 
 
-async def retry_transient_400_async(fn: Callable[[], Awaitable[T]]) -> T:
+async def retry_transient_llm_async(fn: Callable[[], Awaitable[T]]) -> T:
     """
-    Execute an async function with retry logic for transient LLM errors.
+    Execute an async provider call, retrying failures that may yet succeed.
 
-    Retries up to UNILLM_TRANSIENT_RETRY_COUNT times when encountering:
-    - BadRequestError / APIError with known transient message patterns (400)
-    - APIError reporting a response body that was not JSON
-    - ServiceUnavailableError (503)
-    - InternalServerError (500)
-    - RateLimitError (429)
+    Retries up to UNILLM_TRANSIENT_RETRY_COUNT times with exponential backoff
+    doubling from ``_BACKOFF_BASE_SECONDS`` (default schedule 1/2/4/8/16/32s).
+    See the module comment above for which failures are retried and why.
 
-    Uses exponential backoff for server-side errors (503/500/429) and for
-    unparseable bodies, doubling from ``_BACKOFF_BASE_SECONDS`` (default
-    schedule 1/2/4/8/16/32s).
+    Every terminal outcome is logged, so a failure that reaches the caller
+    always says whether it was retried and how often.
     """
     max_retries = SETTINGS.UNILLM_TRANSIENT_RETRY_COUNT
-    last_exc: BaseException | None = None
 
     for attempt in range(max_retries + 1):
         try:
             return await fn()
-        except (
-            litellm.BadRequestError,
-            litellm.exceptions.APIError,
-            *_TRANSIENT_SERVER_EXCEPTIONS,
-        ) as e:
-            if _is_retryable(e) and attempt < max_retries:
-                last_exc = e
-                if _should_backoff(e):
-                    await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2**attempt))
-                continue
-            raise
+        except _PROVIDER_EXCEPTIONS as e:
+            if not _is_retryable(e):
+                _LOGGER.warning(f"not retried, treated as permanent: {_describe(e)}")
+                raise
+            if attempt >= max_retries:
+                _LOGGER.warning(
+                    f"retries exhausted after {attempt + 1} attempts: {_describe(e)}",
+                )
+                raise
+            _LOGGER.debug(
+                f"retrying (attempt {attempt + 1}/{max_retries + 1}): {_describe(e)}",
+            )
+            await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2**attempt))
 
-    # Should never reach here, but satisfies type checker
-    assert last_exc is not None
-    raise last_exc
+    raise AssertionError("unreachable: the loop either returns or raises")

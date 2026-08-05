@@ -359,7 +359,7 @@ async def _acompletion_with_transient_retry(
     **kw: Any,
 ) -> Any:
     """Call ``litellm.acompletion`` with UniLLM's transient retry policy."""
-    from ..helpers import retry_transient_400_async
+    from ..helpers import retry_transient_llm_async
 
     async def _call() -> Any:
         return await litellm.acompletion(
@@ -368,14 +368,14 @@ async def _acompletion_with_transient_retry(
             **kw,
         )
 
-    return await retry_transient_400_async(_call)
+    return await retry_transient_llm_async(_call)
 
 
 def _completion_with_transient_retry(**kw: Any) -> Any:
     """Call ``litellm.completion`` with UniLLM's transient retry policy."""
-    from ..helpers import retry_transient_400_sync
+    from ..helpers import retry_transient_llm_sync
 
-    return retry_transient_400_sync(lambda: litellm.completion(**kw))
+    return retry_transient_llm_sync(lambda: litellm.completion(**kw))
 
 
 def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
@@ -571,8 +571,8 @@ from ..llm_events import _emit_llm_event, LLMEvent
 from ..helpers import (
     _default,
     get_seed,
-    retry_transient_400_async,
-    retry_transient_400_sync,
+    retry_transient_llm_async,
+    retry_transient_llm_sync,
     UNSET,
 )
 from ..clients.base import _Client
@@ -1346,7 +1346,7 @@ class Unify(_UniClient):
         provider_cost: float | None = None
 
         try:
-            chat_completion = retry_transient_400_sync(
+            chat_completion = retry_transient_llm_sync(
                 lambda: litellm.completion(**transport_kw),
             )
             for chunk in chat_completion:
@@ -1898,7 +1898,7 @@ class AsyncUnify(_UniClient):
         try:
             # Start stream connection (this initiates the LLM call)
             stream_task = asyncio.create_task(
-                retry_transient_400_async(
+                retry_transient_llm_async(
                     lambda: litellm.acompletion(
                         shared_session=get_shared_session(),
                         client=self._get_async_http_client(),
