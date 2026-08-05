@@ -35,7 +35,7 @@ class CacheEvent(TypedDict):
     Attributes:
         cache_status: Whether the request was a cache "hit", "miss", or
             "disabled" (cache reading was not attempted, e.g. cache=False).
-        endpoint: The endpoint string (e.g., "gpt-4o@openai").
+        endpoint: The endpoint string (e.g., "openai/gpt-4o@openrouter").
         request_kw: The full request kwargs sent to the LLM (model, messages, etc.).
     """
 

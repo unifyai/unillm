@@ -9,7 +9,7 @@ class TestGetMaxInputTokens:
     """Tests for the get_max_input_tokens function."""
 
     def test_returns_positive_int_gpt(self):
-        result = get_max_input_tokens("gpt-5.2@openai")
+        result = get_max_input_tokens("openai/gpt-5.5@openrouter")
         assert isinstance(result, int)
         assert result > 0
 
@@ -23,8 +23,8 @@ class TestGetMaxInputTokens:
         assert result == 1_000_000
 
     def test_with_provider_suffix(self):
-        with_suffix = get_max_input_tokens("gpt-5.2@openai")
-        without_suffix = get_max_input_tokens("gpt-5.2")
+        with_suffix = get_max_input_tokens("openai/gpt-5.5@openrouter")
+        without_suffix = get_max_input_tokens("openrouter/openai/gpt-5.5")
         assert with_suffix == without_suffix
 
     def test_unknown_model_raises(self):
@@ -102,8 +102,8 @@ class TestCountTokens:
 
     def test_with_provider_suffix(self):
         messages = [{"role": "user", "content": "Hello"}]
-        with_suffix = count_tokens("gpt-5.2@openai", messages=messages)
-        without_suffix = count_tokens("gpt-5.2", messages=messages)
+        with_suffix = count_tokens("openai/gpt-5.5@openrouter", messages=messages)
+        without_suffix = count_tokens("openrouter/openai/gpt-5.5", messages=messages)
         assert with_suffix == without_suffix
 
 

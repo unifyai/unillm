@@ -9,7 +9,7 @@ from .endpoints.utils import get_model_info
 
 
 def _normalize_model_name(endpoint: str) -> str:
-    """Strip the ``@provider`` suffix (e.g. ``"gpt-4o@openai"`` -> ``"gpt-4o"``)."""
+    """Strip the ``@provider`` suffix (e.g. ``"gpt-4o@openrouter"`` -> ``"gpt-4o"``)."""
     if "@" in endpoint:
         return endpoint.split("@")[0]
     return endpoint
@@ -20,7 +20,7 @@ def get_max_input_tokens(endpoint: str) -> int:
 
     Args:
         endpoint: Model identifier, optionally with @provider suffix
-                  (e.g. ``"gpt-4o"`` or ``"gpt-4o@openai"``).
+                  (e.g. ``"gpt-4o"`` or ``"openai/gpt-4o@openrouter"``).
 
     Returns:
         Maximum number of input tokens the model accepts.

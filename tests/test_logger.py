@@ -549,16 +549,20 @@ class TestLlmSpan:
 
         exporter = reset_otel["exporter"]
 
-        with llm_span("gpt-4@openai", "gpt-4", provider="openai") as span:
+        with llm_span(
+            "openai/gpt-4o@openrouter",
+            "openrouter/openai/gpt-4o",
+            provider="openrouter",
+        ) as span:
             assert span is not None
             span.set_attribute("test", "value")
 
         spans = exporter.get_finished_spans()
         assert len(spans) == 1
-        assert spans[0].name == "LLM gpt-4@openai"
-        assert spans[0].attributes.get("llm.endpoint") == "gpt-4@openai"
-        assert spans[0].attributes.get("llm.model") == "gpt-4"
-        assert spans[0].attributes.get("llm.provider") == "openai"
+        assert spans[0].name == "LLM openai/gpt-4o@openrouter"
+        assert spans[0].attributes.get("llm.endpoint") == "openai/gpt-4o@openrouter"
+        assert spans[0].attributes.get("llm.model") == "openrouter/openai/gpt-4o"
+        assert spans[0].attributes.get("llm.provider") == "openrouter"
 
     def test_span_none_when_otel_disabled(self, monkeypatch):
         """llm_span yields None when OTel is disabled."""
@@ -567,7 +571,7 @@ class TestLlmSpan:
         monkeypatch.setattr(logger, "_OTEL_ENABLED", False)
         monkeypatch.setattr(logger, "_TRACER", None)
 
-        with llm_span("gpt-4@openai", "gpt-4") as span:
+        with llm_span("openai/gpt-4o@openrouter", "openrouter/openai/gpt-4o") as span:
             assert span is None
 
     def test_span_records_error_on_exception(self, reset_otel, monkeypatch):
@@ -581,7 +585,10 @@ class TestLlmSpan:
         exporter = reset_otel["exporter"]
 
         with pytest.raises(ValueError, match="test error"):
-            with llm_span("gpt-4@openai", "gpt-4") as span:
+            with llm_span(
+                "openai/gpt-4o@openrouter",
+                "openrouter/openai/gpt-4o",
+            ) as span:
                 raise ValueError("test error")
 
         spans = exporter.get_finished_spans()
@@ -603,7 +610,7 @@ class TestSetSpanResponse:
 
         exporter = reset_otel["exporter"]
 
-        with llm_span("gpt-4@openai", "gpt-4") as span:
+        with llm_span("openai/gpt-4o@openrouter", "openrouter/openai/gpt-4o") as span:
             set_span_response(span, "hit")
 
         spans = exporter.get_finished_spans()
@@ -626,7 +633,7 @@ class TestSetSpanResponse:
         mock_response.usage.total_tokens = 30
         mock_response.model = "gpt-4-turbo"
 
-        with llm_span("gpt-4@openai", "gpt-4") as span:
+        with llm_span("openai/gpt-4o@openrouter", "openrouter/openai/gpt-4o") as span:
             set_span_response(span, "miss", mock_response)
 
         spans = exporter.get_finished_spans()
@@ -699,7 +706,10 @@ class TestTraceHierarchy:
             parent_ctx = parent.get_span_context()
 
             # Now unillm creates a child span
-            with llm_span("gpt-4@openai", "gpt-4") as child:
+            with llm_span(
+                "openai/gpt-4o@openrouter",
+                "openrouter/openai/gpt-4o",
+            ) as child:
                 child_ctx = child.get_span_context()
                 # Same trace ID
                 assert child_ctx.trace_id == parent_ctx.trace_id
@@ -730,7 +740,10 @@ class TestTraceHierarchy:
 
         # Simulate: Unify -> Unillm -> Unify HTTP call
         with parent_tracer.start_as_current_span("unity.conductor.ask") as unity_span:
-            with llm_span("gpt-4@openai", "gpt-4") as unillm_span:
+            with llm_span(
+                "openai/gpt-4o@openrouter",
+                "openrouter/openai/gpt-4o",
+            ) as unillm_span:
                 # Simulate unify HTTP span (which would be created by unify/utils/http.py)
                 with unify_tracer.start_as_current_span("GET projects") as unify_span:
                     pass
@@ -799,15 +812,15 @@ class TestLogUsage:
         ]
 
         with patch("unillm.logger.unisdk.deduct_credits"):
-            billed_cost = log_usage(
+            cost = log_usage(
                 "gpt-4o-realtime-preview",
                 usage,
                 transcript=transcript,
                 label="gpt-4o-realtime-preview",
             )
 
-        # Should return a positive billed cost
-        assert billed_cost > 0
+        # Should return a positive cost
+        assert cost > 0
 
         # Should have created exactly one log file with _usage suffix
         log_files = list(tmp_path.glob("*_usage.txt"))
@@ -826,10 +839,9 @@ class TestLogUsage:
         assert "[usage]" in content
         assert "audio_tokens" in content
         assert "provider_cost" in content
-        assert "billed_cost" in content
 
     def test_deducts_credits(self, tmp_path, monkeypatch):
-        """log_usage deducts the billed cost via unisdk.deduct_credits with full attribution."""
+        """log_usage deducts the cost via unisdk.deduct_credits with full attribution."""
         from unittest.mock import patch, MagicMock
         from unillm import settings
         from unillm import logger
@@ -865,11 +877,11 @@ class TestLogUsage:
 
         mock_deduct = MagicMock()
         with patch("unillm.logger.unisdk.deduct_credits", mock_deduct):
-            billed_cost = log_usage("gpt-4o-realtime-preview", usage)
+            cost = log_usage("gpt-4o-realtime-preview", usage)
 
         mock_deduct.assert_called_once()
         deducted_amount = mock_deduct.call_args[0][0]
-        assert deducted_amount == billed_cost
+        assert deducted_amount == cost
         assert deducted_amount > 0
 
         kwargs = mock_deduct.call_args[1]
@@ -900,9 +912,9 @@ class TestLogUsage:
         usage = {"input_tokens": 50, "output_tokens": 30}
 
         with patch("unillm.logger.unisdk.deduct_credits"):
-            billed_cost = log_usage("gpt-4o-realtime-preview", usage)
+            cost = log_usage("gpt-4o-realtime-preview", usage)
 
-        assert billed_cost > 0
+        assert cost > 0
 
         log_files = list(tmp_path.glob("*_usage.txt"))
         assert len(log_files) == 1
@@ -938,10 +950,10 @@ class TestLogUsage:
             side_effect=ConnectionError("no connection"),
         ):
             # Should not raise
-            billed_cost = log_usage("gpt-4o-realtime-preview", usage)
+            cost = log_usage("gpt-4o-realtime-preview", usage)
 
         # Cost should still be computed
-        assert billed_cost > 0
+        assert cost > 0
 
         # Log file should still exist
         log_files = list(tmp_path.glob("*_usage.txt"))
@@ -989,7 +1001,6 @@ class TestLogUsage:
         assert isinstance(event, LLMEvent)
         assert event.request["model"] == "gpt-4o-realtime-preview"
         assert event.provider_cost > 0
-        assert event.billed_cost > 0
         assert event.response["usage"] == usage
 
 
@@ -1040,7 +1051,7 @@ class TestStreamingFileLogging:
             "unillm.clients.uni_llm.litellm.acompletion",
             side_effect=mock_acompletion,
         ):
-            client = unillm.AsyncUnify("gpt-4@openai", stream=True)
+            client = unillm.AsyncUnify("openai/gpt-4o@openrouter", stream=True)
             gen = await client.generate(
                 messages=[{"role": "user", "content": "Hi"}],
             )
@@ -1101,7 +1112,7 @@ class TestOnLogFilePendingCallback:
                 return_value=None,
             ),
         ):
-            client = unillm.AsyncUnify("gpt-4@openai", cache=False)
+            client = unillm.AsyncUnify("openai/gpt-4o@openrouter", cache=False)
             client.set_on_log_file_pending(lambda p: pending_paths.append(p))
             client.set_on_log_file(lambda p: final_paths.append(p))
             await client.generate(messages=[{"role": "user", "content": "Hi"}])
@@ -1149,7 +1160,11 @@ class TestOnLogFilePendingCallback:
             "unillm.clients.uni_llm.litellm.acompletion",
             side_effect=mock_acompletion,
         ):
-            client = unillm.AsyncUnify("gpt-4@openai", stream=True, cache=False)
+            client = unillm.AsyncUnify(
+                "openai/gpt-4o@openrouter",
+                stream=True,
+                cache=False,
+            )
             client.set_on_log_file_pending(lambda p: pending_paths.append(p))
             client.set_on_log_file(lambda p: final_paths.append(p))
             gen = await client.generate(
@@ -1200,7 +1215,7 @@ class TestOnLogFilePendingCallback:
                 return_value=None,
             ),
         ):
-            client = unillm.AsyncUnify("gpt-4@openai", cache=False)
+            client = unillm.AsyncUnify("openai/gpt-4o@openrouter", cache=False)
             client.set_on_log_file_pending(lambda p: pending_paths.append(p))
             await client.generate(messages=[{"role": "user", "content": "Hi"}])
 
