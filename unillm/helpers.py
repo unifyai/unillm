@@ -55,6 +55,12 @@ def get_seed() -> Optional[int]:
 #
 # 4. **429 RateLimitError** — Temporary rate limiting from providers.
 #
+# 5. **Unparseable response bodies** — A provider answers 200 with a body that
+#    is not JSON (in practice: whitespace, from a connection held open while
+#    the upstream queued and then closed without writing the completion).
+#    LiteLLM raises this as an APIError carrying the response status, so
+#    neither the status nor the type marks it transient.
+#
 # References:
 # - LiteLLM GitHub issue #12503: 400 errors don't trigger channel fallback
 #   https://github.com/BerriAI/litellm/issues/12503
@@ -70,6 +76,15 @@ _TRANSIENT_400_ERROR_PATTERNS = (
     "service temporarily unavailable",
     "temporarily unavailable, please try again",
 )
+
+# LiteLLM's message when a response body could not be parsed as JSON at all.
+# Every provider transformation raises it with this same prefix, so matching it
+# covers OpenRouter, OpenAI, Anthropic, Fireworks, Vertex and Databricks alike.
+# The body is typically whitespace: the connection was held open while the
+# upstream queued, then closed without a completion ever being written. No
+# usable response reached the caller either way, so the only way forward is to
+# ask again.
+_UNPARSEABLE_BODY_PATTERN = "unable to get json response"
 
 # Exception types that are inherently transient (server-side) and always
 # worth retrying regardless of the error message.
@@ -96,12 +111,33 @@ def _is_transient_400_error(exc: BaseException) -> bool:
     return any(pattern in msg for pattern in _TRANSIENT_400_ERROR_PATTERNS)
 
 
+def _is_unparseable_body_error(exc: BaseException) -> bool:
+    """
+    Check if an exception reports a response body that was not JSON.
+
+    Providers surface this as a 200 carrying junk rather than an error status,
+    so neither the status code nor the exception type marks it as transient.
+    """
+    return _UNPARSEABLE_BODY_PATTERN in str(exc).lower()
+
+
+def _should_backoff(exc: BaseException) -> bool:
+    """Whether *exc* warrants a delay before the next attempt.
+
+    An unparseable body points at an upstream that was still queueing when the
+    connection dropped, so an immediate retry walks into the same wait.
+    """
+    return isinstance(exc, _TRANSIENT_SERVER_EXCEPTIONS) or _is_unparseable_body_error(
+        exc,
+    )
+
+
 def _is_retryable(exc: BaseException) -> bool:
     """Return True if the exception represents a transient failure worth retrying."""
     if isinstance(exc, _TRANSIENT_SERVER_EXCEPTIONS):
         return True
     if isinstance(exc, (litellm.BadRequestError, litellm.exceptions.APIError)):
-        return _is_transient_400_error(exc)
+        return _is_transient_400_error(exc) or _is_unparseable_body_error(exc)
     return False
 
 
@@ -111,12 +147,14 @@ def retry_transient_400_sync(fn: Callable[[], T]) -> T:
 
     Retries up to UNILLM_TRANSIENT_RETRY_COUNT times when encountering:
     - BadRequestError / APIError with known transient message patterns (400)
+    - APIError reporting a response body that was not JSON
     - ServiceUnavailableError (503)
     - InternalServerError (500)
     - RateLimitError (429)
 
-    Uses exponential backoff for server-side errors (503/500/429),
-    doubling from ``_BACKOFF_BASE_SECONDS`` (default schedule 1/2/4/8/16/32s).
+    Uses exponential backoff for server-side errors (503/500/429) and for
+    unparseable bodies, doubling from ``_BACKOFF_BASE_SECONDS`` (default
+    schedule 1/2/4/8/16/32s).
     """
     import time
 
@@ -133,7 +171,7 @@ def retry_transient_400_sync(fn: Callable[[], T]) -> T:
         ) as e:
             if _is_retryable(e) and attempt < max_retries:
                 last_exc = e
-                if isinstance(e, _TRANSIENT_SERVER_EXCEPTIONS):
+                if _should_backoff(e):
                     time.sleep(_BACKOFF_BASE_SECONDS * (2**attempt))
                 continue
             raise
@@ -149,12 +187,14 @@ async def retry_transient_400_async(fn: Callable[[], Awaitable[T]]) -> T:
 
     Retries up to UNILLM_TRANSIENT_RETRY_COUNT times when encountering:
     - BadRequestError / APIError with known transient message patterns (400)
+    - APIError reporting a response body that was not JSON
     - ServiceUnavailableError (503)
     - InternalServerError (500)
     - RateLimitError (429)
 
-    Uses exponential backoff for server-side errors (503/500/429),
-    doubling from ``_BACKOFF_BASE_SECONDS`` (default schedule 1/2/4/8/16/32s).
+    Uses exponential backoff for server-side errors (503/500/429) and for
+    unparseable bodies, doubling from ``_BACKOFF_BASE_SECONDS`` (default
+    schedule 1/2/4/8/16/32s).
     """
     max_retries = SETTINGS.UNILLM_TRANSIENT_RETRY_COUNT
     last_exc: BaseException | None = None
@@ -169,7 +209,7 @@ async def retry_transient_400_async(fn: Callable[[], Awaitable[T]]) -> T:
         ) as e:
             if _is_retryable(e) and attempt < max_retries:
                 last_exc = e
-                if isinstance(e, _TRANSIENT_SERVER_EXCEPTIONS):
+                if _should_backoff(e):
                     await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2**attempt))
                 continue
             raise
