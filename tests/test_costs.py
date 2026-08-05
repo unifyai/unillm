@@ -16,7 +16,7 @@ from unillm.endpoints import (
     deepseek,
     minimax,
     moonshotai,
-    openai,
+    openrouter,
     xiaomi_mimo,
     zai,
 )
@@ -27,8 +27,8 @@ class TestNormalizeModelName:
 
     def test_strips_provider_suffix(self):
         """Test that @provider suffix is stripped."""
-        assert _normalize_model_name("gpt-5.2@openai") == "gpt-5.2"
-        assert _normalize_model_name("gpt-4o@openai") == "gpt-4o"
+        assert _normalize_model_name("openai/gpt-5.5@openrouter") == "openai/gpt-5.5"
+        assert _normalize_model_name("openai/gpt-4o@openrouter") == "openai/gpt-4o"
         assert (
             _normalize_model_name("claude-3-5-sonnet@anthropic") == "claude-3-5-sonnet"
         )
@@ -57,15 +57,15 @@ class TestNormalizeModelName:
 class TestComputeCostWithProviderSuffix:
     """Tests for cost computation with @provider suffix (unify/unillm format)."""
 
-    def test_compute_cost_with_openai_suffix(self):
-        """Test that gpt-5.2@openai works like gpt-5.2."""
+    def test_compute_cost_with_openrouter_suffix(self):
+        """The @openrouter suffix costs the same as its transport model."""
         cost_with_suffix = compute_cost(
-            "gpt-5.2@openai",
+            "openai/gpt-5.5@openrouter",
             prompt_tokens=1000,
             completion_tokens=500,
         )
         cost_without_suffix = compute_cost(
-            "gpt-5.2",
+            "openrouter/openai/gpt-5.5",
             prompt_tokens=1000,
             completion_tokens=500,
         )
@@ -97,7 +97,7 @@ class TestComputeCostWithProviderSuffix:
                 "completion_tokens": 500,
             },
         }
-        cost = compute_cost_from_response("gpt-5.2@openai", response)
+        cost = compute_cost_from_response("openai/gpt-5.5@openrouter", response)
 
         assert cost is not None
         assert cost > 0
@@ -108,9 +108,66 @@ class TestComputeCostWithProviderSuffix:
             "prompt_tokens": 1000,
             "completion_tokens": 500,
         }
-        cost = compute_full_cost_from_usage("gpt-5.2@openai", usage)
+        cost = compute_full_cost_from_usage("openai/gpt-5.5@openrouter", usage)
 
         assert cost > 0
+
+
+class TestCostPrefersReportedCharge:
+    """``compute_full_cost_from_usage`` is the figure users are billed."""
+
+    USAGE = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "cost": 0.001234,
+    }
+
+    def test_openrouter_reported_cost_is_used_verbatim(self):
+        """The charge OpenRouter reports is billed as-is, not recomputed."""
+        assert (
+            compute_full_cost_from_usage("openai/gpt-5.5@openrouter", self.USAGE)
+            == 0.001234
+        )
+        assert (
+            compute_full_cost_from_usage("openrouter/openai/gpt-5.5", self.USAGE)
+            == 0.001234
+        )
+
+    def test_reported_cost_wins_over_the_price_map(self):
+        """A reported charge is authoritative even when the map disagrees."""
+        recomputed = compute_full_cost_from_usage(
+            "openai/gpt-5.5@openrouter",
+            {k: v for k, v in self.USAGE.items() if k != "cost"},
+        )
+        assert recomputed != pytest.approx(0.001234)
+        assert (
+            compute_full_cost_from_usage("openai/gpt-5.5@openrouter", self.USAGE)
+            == 0.001234
+        )
+
+    def test_reported_cost_carries_discounts_the_map_cannot_price(self):
+        """Cache savings reach the account even with no cache rate to apply.
+
+        A model whose pricing carries no cache-read rate would otherwise bill
+        cached tokens at zero, handing over more than the provider discounted.
+        """
+        usage = {
+            "prompt_tokens": 100_000,
+            "completion_tokens": 100,
+            "prompt_tokens_details": {"cached_tokens": 90_000},
+            "cost": 0.05,
+        }
+        assert compute_full_cost_from_usage("openrouter/some/unmapped", usage) == 0.05
+
+    def test_falls_back_to_the_price_map_without_a_reported_cost(self):
+        """Providers that report no cost keep the derived figure."""
+        usage = {"prompt_tokens": 1000, "completion_tokens": 500}
+        assert compute_full_cost_from_usage("openai/gpt-5.5@openrouter", usage) > 0
+
+    def test_non_openrouter_models_ignore_a_reported_cost(self):
+        """``usage.cost`` is an OpenRouter contract, so it is not read elsewhere."""
+        derived = compute_full_cost_from_usage("gpt-4o", {**self.USAGE})
+        assert derived != pytest.approx(0.001234)
 
 
 class TestComputeCost:
@@ -219,7 +276,7 @@ class TestComputeCostFromResponse:
                 "completion_tokens": 500,
             },
         }
-        cost = compute_cost_from_response("non-existent-model@openai", response)
+        cost = compute_cost_from_response("non-existent-model@anthropic", response)
         assert cost is None
 
     def test_from_response_uses_cached_prompt_token_pricing(self):
@@ -247,11 +304,11 @@ class TestSupportedModelPricingCoverage:
     """Supported endpoint aliases should resolve to priced LiteLLM model entries."""
 
     PROVIDERS = {
-        "openai": openai.models,
         "anthropic": anthropic.models,
         "deepseek": deepseek.models,
         "minimax": minimax.models,
         "moonshotai": moonshotai.models,
+        "openrouter": openrouter.models,
         "xiaomi-mimo": xiaomi_mimo.models,
         "zai": zai.models,
     }

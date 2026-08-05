@@ -30,9 +30,6 @@ class Settings(BaseSettings):
     # completion keys cannot register BYOK.
     OPENROUTER_MANAGEMENT_API_KEY: SecretStr = SecretStr("")
 
-    # OpenAI — used for native ``*@openai`` endpoints (not OpenRouter).
-    OPENAI_API_KEY: SecretStr = SecretStr("")
-
     # Together AI — used as OpenRouter BYOK for Together-pinned open-weight
     # models (e.g. MiniMax-M3). Register on the OpenRouter workspace with
     # scripts/register_openrouter_together_byok.py or the Integrations UI.

@@ -40,10 +40,8 @@ class CostEvent:
 
     Attributes:
         model: The model identifier used for the request (e.g., "gpt-4o").
-        provider_cost: The raw cost charged by the LLM provider (in USD).
-            0.0 for cache hits or when cost cannot be determined.
-        billed_cost: The cost charged to the user (in USD).
-            0.0 for cache hits or when cost cannot be determined.
+        provider_cost: What the call cost, as charged by the LLM provider
+            (in USD). 0.0 for cache hits or when cost cannot be determined.
         prompt_tokens: Number of input/prompt tokens used. 0 for cache hits.
         completion_tokens: Number of output/completion tokens used. 0 for cache hits.
         cache_status: Whether the request was a cache "hit", "miss", or "disabled".
@@ -51,7 +49,6 @@ class CostEvent:
 
     model: str
     provider_cost: float = 0.0
-    billed_cost: float = 0.0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cache_status: str = "disabled"
@@ -61,7 +58,6 @@ class CostEvent:
         cls,
         model: str,
         provider_cost: Optional[float],
-        billed_cost: Optional[float],
         completion: Any,
         cache_status: str,
     ) -> CostEvent:
@@ -74,7 +70,6 @@ class CostEvent:
         Args:
             model: The model identifier.
             provider_cost: Provider cost in USD (None treated as 0.0).
-            billed_cost: Billed cost in USD (None treated as 0.0).
             completion: A ChatCompletion, a usage object, or None.
             cache_status: Cache status string ("hit", "miss", or "disabled").
         """
@@ -92,7 +87,6 @@ class CostEvent:
         return cls(
             model=model,
             provider_cost=provider_cost or 0.0,
-            billed_cost=billed_cost or 0.0,
             prompt_tokens=pt,
             completion_tokens=ct,
             cache_status=cache_status,

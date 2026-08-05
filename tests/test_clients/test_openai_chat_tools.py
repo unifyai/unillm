@@ -1,8 +1,4 @@
-"""Regression tests for OpenAI Responses bridge routing.
-
-Native ``*@openai`` uses LiteLLM's ``openai/responses/`` bridge.
-``openai/...@openrouter`` uses OpenRouter's ``openrouter/responses/`` path.
-"""
+"""Regression tests for OpenAI tool calls through OpenRouter chat completions."""
 
 from __future__ import annotations
 
@@ -18,8 +14,7 @@ import unillm.logger as unillm_logger
 from unillm.caching.local_cache import LocalCache
 from unillm.llm_events import allm_event_hook_scope
 
-OPENAI_RESPONSES_GPT_55 = "openai/responses/gpt-5.5"
-OPENROUTER_RESPONSES_GPT_55 = "openrouter/responses/openai/gpt-5.5"
+OPENROUTER_CHAT_GPT_55 = "openrouter/openai/gpt-5.5"
 
 
 def _tool_response(*, content: str | None = None, tool_call: bool = False):
@@ -39,11 +34,11 @@ def _tool_response(*, content: str | None = None, tool_call: bool = False):
         )
         finish_reason = "tool_calls"
     else:
-        message = Message(content=content or "Bridge response")
+        message = Message(content=content or "Chat response")
         finish_reason = "stop"
 
     response = ModelResponse(
-        id="chatcmpl_bridge_test",
+        id="chatcmpl_openrouter_test",
         choices=[Choices(message=message, finish_reason=finish_reason, index=0)],
     )
     response.model = "gpt-5.5"
@@ -53,7 +48,6 @@ def _tool_response(*, content: str | None = None, tool_call: bool = False):
 
 GPT_55_TOOL = {
     "type": "function",
-    "strict": True,
     "function": {
         "name": "filter_contacts",
         "description": "Filter contacts by query.",
@@ -63,54 +57,12 @@ GPT_55_TOOL = {
             "required": ["query"],
             "additionalProperties": False,
         },
+        "strict": True,
     },
 }
 
 
-def test_sync_openai_tool_reasoning_call_uses_responses_bridge() -> None:
-    """Sync GPT-5.5 tool calls with reasoning use the native OpenAI Responses bridge."""
-    captured: dict = {}
-    prompt = f"Find Alice. request={uuid4()}"
-
-    def fake_completion(**kwargs):
-        captured.update(kwargs)
-        return _tool_response(tool_call=True)
-
-    with (
-        patch("unillm.clients.uni_llm.litellm.completion", side_effect=fake_completion),
-        patch("unillm.clients.uni_llm.compute_cost_from_response", return_value=None),
-    ):
-        client = unillm.Unify(
-            "gpt-5.5@openai",
-            reasoning_effort="low",
-            api_key="test-key",
-            cache=False,
-        )
-        response = client.generate(
-            messages=[{"role": "user", "content": prompt}],
-            tools=[GPT_55_TOOL],
-            tool_choice="required",
-            parallel_tool_calls=False,
-            return_full_completion=True,
-        )
-
-    assert captured["model"] == OPENAI_RESPONSES_GPT_55
-    assert captured["reasoning_effort"] == "low"
-    assert captured["tool_choice"] == "required"
-    assert captured["parallel_tool_calls"] is False  # explicit False is preserved
-    assert set(captured["allowed_openai_params"]) >= {
-        "parallel_tool_calls",
-        "tool_choice",
-    }
-    assert captured["tools"][0]["function"]["strict"] is True
-    assert "strict" not in captured["tools"][0]
-    assert GPT_55_TOOL["strict"] is True
-    assert "strict" not in GPT_55_TOOL["function"]
-    assert response.choices[0].message.tool_calls[0].function.name == "filter_contacts"
-
-
-def test_sync_openrouter_openai_tool_reasoning_uses_openrouter_responses() -> None:
-    """OpenRouter-hosted GPT-5.5 uses OpenRouter's Responses bridge."""
+def test_sync_openrouter_openai_tool_reasoning_stays_on_chat() -> None:
     captured: dict = {}
     prompt = f"Find Alice. request={uuid4()}"
 
@@ -128,19 +80,25 @@ def test_sync_openrouter_openai_tool_reasoning_uses_openrouter_responses() -> No
             api_key="test-key",
             cache=False,
         )
-        client.generate(
+        response = client.generate(
             messages=[{"role": "user", "content": prompt}],
             tools=[GPT_55_TOOL],
             tool_choice="required",
+            parallel_tool_calls=False,
             return_full_completion=True,
         )
 
-    assert captured["model"] == OPENROUTER_RESPONSES_GPT_55
+    assert captured["model"] == OPENROUTER_CHAT_GPT_55
+    assert captured["reasoning_effort"] == "low"
+    assert captured["tool_choice"] == "required"
+    assert captured["parallel_tool_calls"] is False
+    assert captured["tools"] == [GPT_55_TOOL]
+    assert captured["_skip_mcp_handler"] is True
+    assert response.choices[0].message.tool_calls[0].function.name == "filter_contacts"
 
 
 @pytest.mark.asyncio
-async def test_async_openai_responses_bridge_preserves_stateful_tool_history() -> None:
-    """Async bridged tool calls still store ChatCompletion-shaped history."""
+async def test_async_openrouter_openai_tool_history_stays_chat_shaped() -> None:
     captured: dict = {}
     prompt = f"Find Alice. request={uuid4()}"
 
@@ -156,7 +114,7 @@ async def test_async_openai_responses_bridge_preserves_stateful_tool_history() -
         patch("unillm.clients.uni_llm.compute_cost_from_response", return_value=None),
     ):
         client = unillm.AsyncUnify(
-            "gpt-5.5@openai",
+            "openai/gpt-5.5@openrouter",
             reasoning_effort="low",
             stateful=True,
             api_key="test-key",
@@ -169,15 +127,13 @@ async def test_async_openai_responses_bridge_preserves_stateful_tool_history() -
             return_full_completion=True,
         )
 
-    assert captured["model"] == OPENAI_RESPONSES_GPT_55
-    assert captured["tool_choice"] == "required"
+    assert captured["model"] == OPENROUTER_CHAT_GPT_55
     assert client.messages[-1]["role"] == "assistant"
     assert client.messages[-1]["tool_calls"][0]["function"]["name"] == "filter_contacts"
 
 
 @pytest.mark.asyncio
-async def test_openai_responses_bridge_cost_events_use_canonical_model() -> None:
-    """Billing and cost events use the provider model, not the bridge prefix."""
+async def test_openrouter_openai_cost_events_use_chat_model() -> None:
     captured: dict = {}
     prompt = f"Say done. request={uuid4()}"
 
@@ -197,7 +153,7 @@ async def test_openai_responses_bridge_cost_events_use_canonical_model() -> None
         patch("unillm.clients.uni_llm._safe_deduct_credits"),
     ):
         client = unillm.AsyncUnify(
-            "gpt-5.5@openai",
+            "openai/gpt-5.5@openrouter",
             reasoning_effort="low",
             api_key="test-key",
             cache=False,
@@ -212,21 +168,20 @@ async def test_openai_responses_bridge_cost_events_use_canonical_model() -> None
                     return_full_completion=True,
                 )
 
-    assert captured["model"] == OPENAI_RESPONSES_GPT_55
-    assert compute_cost.call_args.args[0] == "gpt-5.5"
+    assert captured["model"] == OPENROUTER_CHAT_GPT_55
+    assert compute_cost.call_args.args[0] == OPENROUTER_CHAT_GPT_55
     assert len(events) == 1
-    assert events[0].model == "gpt-5.5"
+    assert events[0].model == OPENROUTER_CHAT_GPT_55
     assert events[0].provider_cost == 0.02
-    assert llm_events[0].request["model"] == "gpt-5.5"
-    assert llm_events[0].request["transport_model"] == OPENAI_RESPONSES_GPT_55
+    assert llm_events[0].request["model"] == OPENROUTER_CHAT_GPT_55
+    assert "transport_model" not in llm_events[0].request
 
 
 @pytest.mark.asyncio
-async def test_openai_responses_bridge_cache_and_logging_round_trip(
+async def test_openrouter_openai_chat_cache_and_logging_round_trip(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """Bridge responses serialize through cache and finalize request logs."""
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
     monkeypatch.setattr(LocalCache, "_cache_dir", str(cache_dir))
@@ -240,7 +195,7 @@ async def test_openai_responses_bridge_cache_and_logging_round_trip(
 
     async def fake_acompletion(**kwargs):
         calls.append(kwargs)
-        return _tool_response(content="Cached bridge response.")
+        return _tool_response(content="Cached chat response.")
 
     with (
         patch(
@@ -250,7 +205,7 @@ async def test_openai_responses_bridge_cache_and_logging_round_trip(
         patch("unillm.clients.uni_llm.compute_cost_from_response", return_value=None),
     ):
         client = unillm.AsyncUnify(
-            "gpt-5.5@openai",
+            "openai/gpt-5.5@openrouter",
             reasoning_effort="low",
             cache=True,
             api_key="test-key",
@@ -269,7 +224,7 @@ async def test_openai_responses_bridge_cache_and_logging_round_trip(
         )
 
     assert len(calls) == 1
-    assert calls[0]["model"] == OPENAI_RESPONSES_GPT_55
+    assert calls[0]["model"] == OPENROUTER_CHAT_GPT_55
     assert first.choices[0].message.content == second.choices[0].message.content
 
     log_text = "\n".join(path.read_text() for path in (tmp_path / "logs").glob("*.txt"))

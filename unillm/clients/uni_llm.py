@@ -5,7 +5,6 @@ import copy
 import inspect
 import logging
 import os
-import re
 
 from typing import (
     Any,
@@ -37,10 +36,6 @@ from ..limit_hooks import (
 _LOGGER = logging.getLogger("unillm")
 
 _OPENROUTER_MODEL_PREFIX = "openrouter/"
-_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX = "openai/responses/"
-_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX = "openrouter/responses/"
-_OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS = ("parallel_tool_calls", "tool_choice")
-_OPENAI_GPT_MINOR_VERSION_RE = re.compile(r"^gpt-5\.(?P<minor>\d+)(?:[-.].*)?$")
 
 # OpenRouter catalog id -> ordered hard-enforcement hosts (tool_choice +
 # json_schema under adversarial prompts). allow_fallbacks is always false.
@@ -201,6 +196,73 @@ def _cancel_inflight_task(task: asyncio.Task) -> None:
     task.add_done_callback(consume_result)
 
 
+def _bill_abandoned_call(
+    llm_task: asyncio.Task,
+    *,
+    api_key: str | None,
+    accounting_model: str,
+    request_kw: dict,
+    origin: str | None,
+) -> None:
+    """Charge for a dispatched call whose caller stopped waiting for it.
+
+    The provider generates and bills the moment the request lands, so an
+    abandoned call is real money spent on behalf of a real account. The
+    amount comes from the response rather than from the prompt: pricing
+    ``prompt_tokens`` at list rate ignores cached input and misprices by
+    more than 2x, so the request is left to finish in the background and
+    the charge it reports is what gets deducted.
+
+    Emitting the LLM event here is what lets spending limits see the
+    money. A limit only counts what reached the ledger, so before this an
+    account could out-spend its cap through calls nobody ever read.
+    """
+
+    def bill(completed_task: asyncio.Task) -> None:
+        try:
+            completion = completed_task.result()
+        except (asyncio.CancelledError, Exception):
+            # No generation came back, so the provider charged nothing.
+            return
+
+        cost = compute_cost_from_response(accounting_model, completion)
+        if cost is None or cost <= 0:
+            return
+
+        asyncio.create_task(
+            asyncio.to_thread(
+                _safe_deduct_credits,
+                cost,
+                api_key=api_key,
+                model=accounting_model,
+                abandoned=True,
+            ),
+            name="unillm_deduct_credits_abandoned",
+        )
+        _emit_llm_event(
+            LLMEvent(
+                request=_request_kw_for_event(request_kw, accounting_model),
+                response=(
+                    completion.model_dump(warnings=False)
+                    if hasattr(completion, "model_dump")
+                    else completion
+                ),
+                provider_cost=cost,
+                origin=origin,
+            ),
+        )
+        _emit_cost_event(
+            CostEvent.from_completion(
+                model=accounting_model,
+                provider_cost=cost,
+                completion=completion,
+                cache_status="miss",
+            ),
+        )
+
+    llm_task.add_done_callback(bill)
+
+
 def _safe_deduct_credits(
     amount: float,
     *,
@@ -208,7 +270,7 @@ def _safe_deduct_credits(
     model: str | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
-    provider_cost: float | None = None,
+    abandoned: bool = False,
 ) -> None:
     """Deduct credits with ledger metadata from billing context."""
     from ..billing_context import get_billing_context
@@ -221,8 +283,10 @@ def _safe_deduct_credits(
         detail["prompt_tokens"] = prompt_tokens
     if completion_tokens is not None:
         detail["completion_tokens"] = completion_tokens
-    if provider_cost is not None:
-        detail["provider_cost"] = provider_cost
+    if abandoned:
+        # The caller walked away before reading the answer. Marked so a
+        # customer asking "what was this line?" gets a real answer.
+        detail["abandoned"] = True
     if ctx.source:
         detail["source"] = ctx.source
     if ctx.label:
@@ -288,195 +352,30 @@ def _canonical_model_for_accounting(model: str | None) -> str:
     return model
 
 
-def _openai_public_model_name(model: str) -> str:
-    """Strip OpenRouter / Responses transport prefixes down to the public GPT name."""
-    name = model
-    if name.startswith(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX):
-        name = name[len(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX) :]
-    elif name.startswith(_OPENROUTER_MODEL_PREFIX):
-        name = name[len(_OPENROUTER_MODEL_PREFIX) :]
-    if name.startswith(_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX):
-        name = name[len(_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX) :]
-    if name.startswith("openai/"):
-        name = name[len("openai/") :]
-    if name.startswith("responses/"):
-        name = name[len("responses/") :]
-    return name
-
-
-def _is_openai_gpt_responses_tool_model(model: str) -> bool:
-    """Return whether an OpenAI GPT model needs Responses for tools with reasoning.
-
-    GPT-5.2+ on OpenRouter Chat Completions drops or ignores tool calls when
-    reasoning is enabled; the Responses path restores them. GPT-5.4+ also
-    required Responses on the native OpenAI backend.
-    """
-    match = _OPENAI_GPT_MINOR_VERSION_RE.match(_openai_public_model_name(model))
-    return bool(match and int(match.group("minor")) >= 2)
-
-
-def _copy_tool_for_responses_bridge(tool: Any) -> Any:
-    """Copy a chat tool while placing strictness where LiteLLM's bridge reads it."""
-    if not isinstance(tool, dict):
-        return tool
-
-    tool_copy = dict(tool)
-    function = tool_copy.get("function")
-    if tool_copy.get("type") == "function" and isinstance(function, dict):
-        function_copy = dict(function)
-        if "strict" in tool_copy and "strict" not in function_copy:
-            function_copy["strict"] = tool_copy["strict"]
-        tool_copy["function"] = function_copy
-        tool_copy.pop("strict", None)
-    return tool_copy
-
-
-def _copy_tools_for_responses_bridge(tools: Iterable[Any] | None) -> list[Any] | None:
-    """Return response-bridge-compatible tool definitions without mutating callers."""
-    if tools is None:
-        return None
-    return [_copy_tool_for_responses_bridge(tool) for tool in tools]
-
-
-def _allow_responses_bridge_params(kw: dict) -> None:
-    """Preserve chat tool controls that LiteLLM otherwise drops before bridging."""
-    _allow_openai_params(kw, _OPENAI_RESPONSES_BRIDGE_ALLOWED_PARAMS)
-
-
-def _route_openai_tool_reasoning_via_responses(
-    kw: dict,
-    *,
-    provider: str,
-    stream: bool,
-) -> None:
-    """Route GPT-5.2+ tool+reasoning calls through the Responses API.
-
-    Native ``*@openai`` transports use LiteLLM's ``openai/responses/`` bridge.
-    OpenRouter-hosted OpenAI catalog models (``openai/...@openrouter``) use
-    OpenRouter's ``openrouter/responses/`` path.
-    """
-    model = str(kw.get("model") or "")
-    tools = kw.get("tools")
-    if (
-        stream
-        or not tools
-        or kw.get("reasoning_effort") is None
-        or not _is_openai_gpt_responses_tool_model(model)
-    ):
-        return
-
-    is_openrouter_transport = model.startswith(
-        _OPENROUTER_MODEL_PREFIX,
-    ) or model.startswith(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX)
-
-    public = _openai_public_model_name(model)
-    if provider == "openai" and not is_openrouter_transport:
-        kw["model"] = f"{_OPENAI_RESPONSES_BRIDGE_MODEL_PREFIX}{public}"
-    elif provider == "openrouter" or is_openrouter_transport:
-        kw["model"] = f"{_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX}openai/{public}"
-    else:
-        return
-
-    kw["tools"] = _copy_tools_for_responses_bridge(tools)
-    _allow_responses_bridge_params(kw)
-
-
-def _openrouter_chat_fallback_kw(kw: dict) -> dict | None:
-    """Map ``openrouter/responses/...`` → ``openrouter/...`` for empty-output fallback."""
-    model = str(kw.get("model") or "")
-    if not model.startswith(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX):
-        return None
-    fallback = dict(kw)
-    fallback["model"] = (
-        f"{_OPENROUTER_MODEL_PREFIX}"
-        f"{model[len(_OPENROUTER_RESPONSES_BRIDGE_MODEL_PREFIX) :]}"
-    )
-    return fallback
-
-
-def _is_empty_responses_output_error(exc: BaseException) -> bool:
-    return "unknown items in responses api response" in str(exc).lower()
-
-
-def _strip_encrypted_reasoning_in_kw(kw: dict, exc: BaseException) -> bool:
-    """Mutate ``kw['messages']`` to drop poison encrypted reasoning; return changed."""
-    from .encrypted_reasoning_retry import strip_encrypted_reasoning_for_error
-
-    messages = kw.get("messages")
-    if not messages:
-        return False
-    return strip_encrypted_reasoning_for_error(messages, exc)
-
-
-_RESPONSES_RECOVERY_EXCEPTIONS = (
-    litellm.APIConnectionError,
-    litellm.BadRequestError,
-    litellm.exceptions.APIError,
-)
-
-
-async def _acompletion_with_empty_responses_fallback(
+async def _acompletion_with_transient_retry(
     *,
     shared_session: Any,
     client: Any,
     **kw: Any,
 ) -> Any:
-    """Call ``litellm.acompletion`` with Responses-path recoveries.
+    """Call ``litellm.acompletion`` with UniLLM's transient retry policy."""
+    from ..helpers import retry_transient_llm_async
 
-    1. Transient retries (via ``retry_transient_400_async``).
-    2. On ``invalid_encrypted_content`` / encrypted ``invalid_prompt``: drop the
-       offending (or all encrypted) ``reasoning_items`` from ``messages`` in
-       place and retry once. Encrypted reasoning is optional continuity; the
-       visible transcript is enough to continue.
-    3. On empty OpenRouter Responses ``output``: fall back to OpenRouter chat
-       completions once.
-    """
-    from ..helpers import retry_transient_400_async
-    from .encrypted_reasoning_retry import is_invalid_encrypted_content_error
-
-    async def _call(current_kw: dict) -> Any:
+    async def _call() -> Any:
         return await litellm.acompletion(
             shared_session=shared_session,
             client=client,
-            **current_kw,
+            **kw,
         )
 
-    try:
-        return await retry_transient_400_async(lambda: _call(kw))
-    except _RESPONSES_RECOVERY_EXCEPTIONS as e:
-        if is_invalid_encrypted_content_error(e):
-            if _strip_encrypted_reasoning_in_kw(kw, e):
-                return await retry_transient_400_async(lambda: _call(kw))
-            raise
-        if not _is_empty_responses_output_error(e):
-            raise
-        fallback_kw = _openrouter_chat_fallback_kw(kw)
-        if fallback_kw is None:
-            raise
-        return await retry_transient_400_async(lambda: _call(fallback_kw))
+    return await retry_transient_llm_async(_call)
 
 
-def _completion_with_empty_responses_fallback(**kw: Any) -> Any:
-    """Sync counterpart of ``_acompletion_with_empty_responses_fallback``."""
-    from ..helpers import retry_transient_400_sync
-    from .encrypted_reasoning_retry import is_invalid_encrypted_content_error
+def _completion_with_transient_retry(**kw: Any) -> Any:
+    """Call ``litellm.completion`` with UniLLM's transient retry policy."""
+    from ..helpers import retry_transient_llm_sync
 
-    def _call(current_kw: dict) -> Any:
-        return litellm.completion(**current_kw)
-
-    try:
-        return retry_transient_400_sync(lambda: _call(kw))
-    except _RESPONSES_RECOVERY_EXCEPTIONS as e:
-        if is_invalid_encrypted_content_error(e):
-            if _strip_encrypted_reasoning_in_kw(kw, e):
-                return retry_transient_400_sync(lambda: _call(kw))
-            raise
-        if not _is_empty_responses_output_error(e):
-            raise
-        fallback_kw = _openrouter_chat_fallback_kw(kw)
-        if fallback_kw is None:
-            raise
-        return retry_transient_400_sync(lambda: _call(fallback_kw))
+    return retry_transient_llm_sync(lambda: litellm.completion(**kw))
 
 
 def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
@@ -577,9 +476,6 @@ def _prepare_provider_request_kw(
     ):
         kw["api_base"] = "https://api.minimax.io/v1"
 
-    _route_openai_tool_reasoning_via_responses(kw, provider=provider, stream=stream)
-    model = str(kw.get("model") or model)
-
     _apply_openrouter_hard_provider_pin(kw, model)
 
     if provider == "xiaomi-mimo" and kw.get("api_base") is None:
@@ -632,6 +528,10 @@ def _request_kw_for_transport(kw: dict, transport_model: str) -> dict:
         key: value for key, value in kw.items() if not key.startswith("_unillm_")
     }
     request_kw["model"] = transport_model
+    # LiteLLM inspects tools for MCP definitions by importing its proxy stack,
+    # which is an optional extra; the import fails before the request is even
+    # sent. Tools reach unillm already resolved, so skip that handler.
+    request_kw["_skip_mcp_handler"] = True
     return request_kw
 
 
@@ -671,8 +571,8 @@ from ..llm_events import _emit_llm_event, LLMEvent
 from ..helpers import (
     _default,
     get_seed,
-    retry_transient_400_async,
-    retry_transient_400_sync,
+    retry_transient_llm_async,
+    retry_transient_llm_sync,
     UNSET,
 )
 from ..clients.base import _Client
@@ -1444,10 +1344,9 @@ class Unify(_UniClient):
         usage_info = None
         llm_error: BaseException | None = None
         provider_cost: float | None = None
-        billed_cost: float | None = None
 
         try:
-            chat_completion = retry_transient_400_sync(
+            chat_completion = retry_transient_llm_sync(
                 lambda: litellm.completion(**transport_kw),
             )
             for chunk in chat_completion:
@@ -1474,14 +1373,12 @@ class Unify(_UniClient):
                     _provider_cost_from_stream_usage(accounting_model, usage_info)
                 )
                 if provider_cost is not None and provider_cost > 0:
-                    billed_cost = provider_cost
                     _safe_deduct_credits(
-                        billed_cost,
+                        provider_cost,
                         api_key=self._api_key,
                         model=accounting_model,
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
-                        provider_cost=provider_cost,
                     )
 
             # Emit LLM event (after streaming completes)
@@ -1490,7 +1387,6 @@ class Unify(_UniClient):
                     request=_request_kw_for_event(transport_kw, accounting_model),
                     response=None,  # No single response for streams
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     origin=origin,
                 ),
             )
@@ -1499,7 +1395,6 @@ class Unify(_UniClient):
                 CostEvent.from_completion(
                     model=accounting_model,
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     completion=usage_info,
                     cache_status="disabled",  # Streaming bypasses cache
                 ),
@@ -1543,7 +1438,7 @@ class Unify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ):
-                completion = _completion_with_empty_responses_fallback(
+                completion = _completion_with_transient_retry(
                     **transport_kw,
                 )
                 _normalize_assistant_message_content(completion)
@@ -1569,19 +1464,16 @@ class Unify(_UniClient):
             accounting_model = _canonical_model_for_accounting(retry_kw.get("model"))
             cost = compute_cost_from_response(accounting_model, completion)
             if cost is not None and cost > 0:
-                billed = cost
                 _safe_deduct_credits(
-                    billed,
+                    cost,
                     api_key=self._api_key,
                     model=accounting_model,
-                    provider_cost=cost,
                 )
 
                 _emit_cost_event(
                     CostEvent.from_completion(
                         model=accounting_model,
                         provider_cost=cost,
-                        billed_cost=billed,
                         completion=completion,
                         cache_status="miss",
                     ),
@@ -1666,7 +1558,6 @@ class Unify(_UniClient):
         in_cache = False
         llm_error: BaseException | None = None
         provider_cost: float | None = None
-        billed_cost: float | None = None
 
         # Wrap in OTel span with try/finally to guarantee log finalization
         try:
@@ -1695,7 +1586,7 @@ class Unify(_UniClient):
                     in_cache = True if chat_completion is not None else False
                 if chat_completion is None:
                     try:
-                        chat_completion = _completion_with_empty_responses_fallback(
+                        chat_completion = _completion_with_transient_retry(
                             **transport_kw,
                         )
                         _normalize_assistant_message_content(chat_completion)
@@ -1760,8 +1651,6 @@ class Unify(_UniClient):
                     accounting_model,
                     chat_completion,
                 )
-                if provider_cost is not None and provider_cost > 0:
-                    billed_cost = provider_cost
 
             # Emit LLM event (after LLM call, always runs)
             # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
@@ -1770,7 +1659,6 @@ class Unify(_UniClient):
                     request=_request_kw_for_event(transport_kw, accounting_model),
                     response=resp_body,
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     origin=origin,
                 ),
             )
@@ -1779,7 +1667,6 @@ class Unify(_UniClient):
                 CostEvent.from_completion(
                     model=accounting_model,
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     completion=chat_completion,
                     cache_status=cache_status,
                 ),
@@ -1819,13 +1706,12 @@ class Unify(_UniClient):
                     backend=cache_backend,
                 )
 
-        # Deduct credits for cache misses (use already-computed billed_cost).
-        if billed_cost is not None and billed_cost > 0:
+        # Deduct credits for cache misses (use the already-computed cost).
+        if provider_cost is not None and provider_cost > 0:
             _safe_deduct_credits(
-                billed_cost,
+                provider_cost,
                 api_key=self._api_key,
                 model=accounting_model,
-                provider_cost=provider_cost,
             )
 
         # Always return full completion; _apply_stateful_logic handles extraction
@@ -1926,7 +1812,7 @@ class AsyncUnify(_UniClient):
     # Providers whose litellm handler expects an OpenAI SDK client (AsyncOpenAI)
     # as the ``client`` kwarg.  We must NOT pass an AsyncHTTPHandler for these.
     _OPENAI_SDK_PROVIDERS = frozenset(
-        {"openai", "azure", "azure_ai", "openrouter", "xiaomi-mimo"},
+        {"azure", "azure_ai", "openrouter", "xiaomi-mimo"},
     )
 
     _async_http_client: Optional[AsyncHTTPHandler] = None
@@ -2006,14 +1892,13 @@ class AsyncUnify(_UniClient):
         usage_info = None
         llm_error: BaseException | None = None
         provider_cost: float | None = None
-        billed_cost: float | None = None
         async_stream = None
         collected_content: list[str] = []
 
         try:
             # Start stream connection (this initiates the LLM call)
             stream_task = asyncio.create_task(
-                retry_transient_400_async(
+                retry_transient_llm_async(
                     lambda: litellm.acompletion(
                         shared_session=get_shared_session(),
                         client=self._get_async_http_client(),
@@ -2084,16 +1969,14 @@ class AsyncUnify(_UniClient):
                     _provider_cost_from_stream_usage(accounting_model, usage_info)
                 )
                 if provider_cost is not None and provider_cost > 0:
-                    billed_cost = provider_cost
                     asyncio.create_task(
                         asyncio.to_thread(
                             _safe_deduct_credits,
-                            billed_cost,
+                            provider_cost,
                             api_key=self._api_key,
                             model=accounting_model,
                             prompt_tokens=prompt_tokens,
                             completion_tokens=completion_tokens,
-                            provider_cost=provider_cost,
                         ),
                         name="unillm_deduct_credits_stream",
                     )
@@ -2104,7 +1987,6 @@ class AsyncUnify(_UniClient):
                     request=_request_kw_for_event(transport_kw, accounting_model),
                     response=None,  # No single response for streams
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     origin=origin,
                 ),
             )
@@ -2113,7 +1995,6 @@ class AsyncUnify(_UniClient):
                 CostEvent.from_completion(
                     model=accounting_model,
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     completion=usage_info,
                     cache_status="disabled",  # Streaming bypasses cache
                 ),
@@ -2157,7 +2038,7 @@ class AsyncUnify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ):
-                completion = await _acompletion_with_empty_responses_fallback(
+                completion = await _acompletion_with_transient_retry(
                     shared_session=get_shared_session(),
                     client=self._get_async_http_client(),
                     **transport_kw,
@@ -2185,14 +2066,12 @@ class AsyncUnify(_UniClient):
             accounting_model = _canonical_model_for_accounting(retry_kw.get("model"))
             cost = compute_cost_from_response(accounting_model, completion)
             if cost is not None and cost > 0:
-                billed = cost
                 asyncio.create_task(
                     asyncio.to_thread(
                         _safe_deduct_credits,
-                        billed,
+                        cost,
                         api_key=self._api_key,
                         model=accounting_model,
-                        provider_cost=cost,
                     ),
                     name=f"unillm_deduct_credits_{label_suffix}",
                 )
@@ -2201,7 +2080,6 @@ class AsyncUnify(_UniClient):
                     CostEvent.from_completion(
                         model=accounting_model,
                         provider_cost=cost,
-                        billed_cost=billed,
                         completion=completion,
                         cache_status="miss",
                     ),
@@ -2286,7 +2164,6 @@ class AsyncUnify(_UniClient):
         in_cache = False
         llm_error: BaseException | None = None
         provider_cost: float | None = None
-        billed_cost: float | None = None
 
         # Task tracking for cleanup
         limit_task: asyncio.Task | None = None
@@ -2321,7 +2198,7 @@ class AsyncUnify(_UniClient):
                 if chat_completion is None:
                     # Start LLM call immediately (don't wait for limit check)
                     llm_task = asyncio.create_task(
-                        _acompletion_with_empty_responses_fallback(
+                        _acompletion_with_transient_retry(
                             shared_session=get_shared_session(),
                             client=self._get_async_http_client(),
                             **transport_kw,
@@ -2339,8 +2216,13 @@ class AsyncUnify(_UniClient):
                                 llm_task = None
                                 raise SpendingLimitExceededError(limit_result)
 
-                        # Limit check passed (or disabled), wait for LLM result
-                        chat_completion = await llm_task
+                        # Limit check passed (or disabled), wait for LLM result.
+                        # Shielded so a caller that gives up mid-call doesn't
+                        # take the request with it: the provider is already
+                        # generating and charging, and the response is the only
+                        # thing that says how much. ``finally`` hands the
+                        # surviving task to the biller.
+                        chat_completion = await asyncio.shield(llm_task)
                         _normalize_assistant_message_content(chat_completion)
                         llm_task = None  # Mark as consumed
                     except litellm.exceptions.APIError as e:
@@ -2376,14 +2258,27 @@ class AsyncUnify(_UniClient):
                 cache_status = "error"
             raise
         finally:
-            # Cancel any unconsumed tasks (e.g., cache hit or error)
-            for task in [limit_task, llm_task]:
-                if task is not None and not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except (asyncio.CancelledError, Exception):
-                        pass
+            # The limit check is ours and costs nothing to drop.
+            if limit_task is not None and not limit_task.done():
+                limit_task.cancel()
+                try:
+                    await limit_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            # An unconsumed LLM task means the caller stopped waiting (a
+            # limit denial cancels the call itself and clears the handle,
+            # so it never lands here). The request is already with the
+            # provider, so charge for it once the response arrives instead
+            # of cancelling and losing both the answer and the amount.
+            if llm_task is not None:
+                _bill_abandoned_call(
+                    llm_task,
+                    api_key=self._api_key,
+                    accounting_model=accounting_model,
+                    request_kw=transport_kw,
+                    origin=origin,
+                )
 
             # Finalize log file with response and cache status (always runs)
             try:
@@ -2419,8 +2314,6 @@ class AsyncUnify(_UniClient):
                     accounting_model,
                     chat_completion,
                 )
-                if provider_cost is not None and provider_cost > 0:
-                    billed_cost = provider_cost
 
             # Emit LLM event (after LLM call, always runs)
             # Use unwrapped resp_body for LLM event (not the error-wrapped log_body)
@@ -2429,7 +2322,6 @@ class AsyncUnify(_UniClient):
                     request=_request_kw_for_event(transport_kw, accounting_model),
                     response=resp_body,
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     origin=origin,
                 ),
             )
@@ -2438,21 +2330,19 @@ class AsyncUnify(_UniClient):
                 CostEvent.from_completion(
                     model=accounting_model,
                     provider_cost=provider_cost,
-                    billed_cost=billed_cost,
                     completion=chat_completion,
                     cache_status=cache_status,
                 ),
             )
 
-        # Deduct credits for cache misses (use already-computed billed_cost)
-        if billed_cost is not None and billed_cost > 0:
+        # Deduct credits for cache misses (use the already-computed cost)
+        if provider_cost is not None and provider_cost > 0:
             asyncio.create_task(
                 asyncio.to_thread(
                     _safe_deduct_credits,
-                    billed_cost,
+                    provider_cost,
                     api_key=self._api_key,
                     model=accounting_model,
-                    provider_cost=provider_cost,
                 ),
                 name="unillm_deduct_credits",
             )

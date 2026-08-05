@@ -9,6 +9,7 @@ _MODEL_INFO_MAP: Dict[str, Dict[str, Any]] = {}
 _ENDPOINTS_IMPORTED = False
 _OPENROUTER_PREFIX = "openrouter/"
 _OPENROUTER_PROVIDER = "openrouter"
+_OPENROUTER_REGISTERED: set[str] = set()
 
 
 def _split_endpoint(endpoint: str) -> tuple[str, str]:
@@ -26,7 +27,7 @@ def _split_endpoint(endpoint: str) -> tuple[str, str]:
     return model, provider
 
 
-def _is_dynamic_openrouter_endpoint(endpoint: str) -> bool:
+def _is_openrouter_endpoint(endpoint: str) -> bool:
     try:
         _, provider = _split_endpoint(endpoint)
     except ValueError:
@@ -34,12 +35,45 @@ def _is_dynamic_openrouter_endpoint(endpoint: str) -> bool:
     return provider == _OPENROUTER_PROVIDER
 
 
-def _dynamic_openrouter_aliases(endpoint: str) -> tuple[str, str]:
+def _ensure_openrouter_model_registered(model_id: str) -> None:
+    """Register catalog metadata for OpenRouter ids the pinned LiteLLM lacks.
+
+    LiteLLM runs with ``drop_params=True``, which strips ``reasoning_effort``
+    unless the model entry advertises ``supports_reasoning``. An id the pinned
+    release has never heard of therefore loses effort control silently, with a
+    successful response at default effort rather than an error. The catalog
+    snapshot already carries capability flags and pricing for every listed
+    model, so registering from it keeps newly released OpenRouter models fully
+    usable without a hand-written override.
+
+    Attempts are memoised per id, so an id absent from the catalog costs one
+    lookup per process rather than a forced catalog refresh on every call.
+    """
+
+    if model_id in _OPENROUTER_REGISTERED:
+        return
+    _OPENROUTER_REGISTERED.add(model_id)
+    try:
+        if litellm.get_model_info(openrouter_model(model_id)):
+            return
+    except Exception:
+        # Unknown to LiteLLM, which is precisely the case worth filling in.
+        pass
+
+    from unillm.openrouter_catalog import catalog_pricing_as_litellm_info
+
+    info = catalog_pricing_as_litellm_info(model_id)
+    if info is not None:
+        register_openrouter_model_info({model_id: info})
+
+
+def _openrouter_aliases(endpoint: str) -> tuple[str, str]:
     """Return (public_alias, transport_alias) for ``*@openrouter``."""
 
     model_id, provider = _split_endpoint(endpoint)
     if provider != _OPENROUTER_PROVIDER:
         raise ValueError(f"Model {endpoint} not found")
+    _ensure_openrouter_model_registered(model_id)
     transport = openrouter_model(model_id)
     return transport, transport
 
@@ -117,8 +151,6 @@ def openrouter_model(model_id: str) -> str:
 
 
 def _public_model_alias(provider: str, model: str, alias: str) -> str:
-    if provider == "openai":
-        return model
     if provider == "openrouter":
         # Public/accounting id is the OpenRouter transport id so pricing and
         # LiteLLM metadata resolve without a second lookup.
@@ -167,12 +199,12 @@ def get_model_alias(endpoint: str) -> str:
         LiteLLM model name for the model.
     """
     ensure_endpoints_imported()
+    if _is_openrouter_endpoint(endpoint):
+        public, _transport = _openrouter_aliases(endpoint)
+        return public
     alias = _MODEL_ALIAS_MAP.get(endpoint)
     if alias is not None:
         return alias
-    if _is_dynamic_openrouter_endpoint(endpoint):
-        public, _transport = _dynamic_openrouter_aliases(endpoint)
-        return public
     raise ValueError(f"Model {endpoint} not found")
 
 
@@ -185,17 +217,19 @@ def get_transport_model_alias(endpoint: str) -> str:
     """
 
     ensure_endpoints_imported()
+    if _is_openrouter_endpoint(endpoint):
+        _public, transport = _openrouter_aliases(endpoint)
+        return transport
     alias = _MODEL_TRANSPORT_ALIAS_MAP.get(endpoint)
     if alias is not None:
         return alias
-    if _is_dynamic_openrouter_endpoint(endpoint):
-        _public, transport = _dynamic_openrouter_aliases(endpoint)
-        return transport
     return get_model_alias(endpoint)
 
 
 def list_models(
-    provider: str, *, include_openrouter_catalog: bool = False
+    provider: str,
+    *,
+    include_openrouter_catalog: bool = False,
 ) -> list[str]:
     ensure_endpoints_imported()
     suffix = f"@{provider}"
