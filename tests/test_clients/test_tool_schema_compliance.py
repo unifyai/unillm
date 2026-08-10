@@ -915,7 +915,12 @@ _TRUNCATED_ARGS = (
 )
 
 
-def _tool_call_response(arguments, *, finish_reason="tool_calls", name="execute_function"):
+def _tool_call_response(
+    arguments,
+    *,
+    finish_reason="tool_calls",
+    name="execute_function",
+):
     mock_tool_call = MagicMock()
     mock_tool_call.function.name = name
     mock_tool_call.function.arguments = arguments
@@ -999,4 +1004,6 @@ def test_malformed_retry_nudges_without_replaying_the_broken_turn():
     }
     # The original request is otherwise untouched.
     assert retry_kw["messages"][0] == kw["messages"][0]
-    assert kw["messages"] == [{"role": "user", "content": "Summarise my last five emails."}]
+    assert kw["messages"] == [
+        {"role": "user", "content": "Summarise my last five emails."},
+    ]
