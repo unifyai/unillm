@@ -4,6 +4,11 @@ Hash→offset index over NDJSON LLM cache files.
 Keeps the on-disk line format unchanged while avoiding an eager in-memory
 dict of full (often multi-MB) cache keys. Lookups use sha256(key) → byte
 offset, then seek + verify the full key on the stored line.
+
+A second, derived map addresses the same lines by canonical digest (see
+``canonical.py``), so canonical keying needs no store rewrite: raw keys on
+disk stay the ground truth and the canonical view is recomputed whenever the
+index rebuilds.
 """
 
 from __future__ import annotations
@@ -16,7 +21,9 @@ import warnings
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
-_INDEX_VERSION = 1
+from .canonical import canonical_digest_of_raw_key
+
+_INDEX_VERSION = 2
 _DEFAULT_LRU_MAX = 128
 
 
@@ -55,10 +62,13 @@ class NdjsonIndexedStore:
         self.path = path
         self.idx_path = _idx_path_for(path)
         self._offsets: Dict[str, int] = {}
+        # canonical digest → offsets in append order; several raw keys may
+        # share one digest, and the newest recording wins on lookup.
+        self._canon: Dict[str, List[int]] = {}
         self._fingerprint: Optional[Tuple[int, int]] = None
         self._keys_cache: Optional[List[str]] = None
         self._lru_max = lru_max
-        self._lru: OrderedDict[str, Tuple[Any, Any]] = OrderedDict()
+        self._lru: OrderedDict[str, Tuple[Any, ...]] = OrderedDict()
 
     def open_or_create(self) -> None:
         """Ensure the NDJSON file exists and load or rebuild the index."""
@@ -107,6 +117,31 @@ class NdjsonIndexedStore:
         self._lru_put(digest, (deserialized, res_types))
         return deserialized, res_types
 
+    def get_canonical(self, digest: str) -> Optional[Tuple[Any, Any, str]]:
+        """
+        Return (deserialized_value, res_types, stored_raw_key) or None.
+
+        The stored raw key travels with the hit so callers can promote or
+        diff against the exact request that produced the recording.
+        """
+        self._ensure_fresh()
+        cached = self._lru_get(digest)
+        if cached is not None:
+            return cached
+
+        for offset in reversed(self._canon.get(digest, [])):
+            line = self._read_line_at(offset)
+            if line is None:
+                continue
+            key, value_str, res_types = line
+            # Confirm the line still matches (collision / stale offset).
+            if canonical_digest_of_raw_key(key) != digest:
+                continue
+            entry = (json.loads(value_str), res_types, key)
+            self._lru_put(digest, entry)
+            return entry
+        return None
+
     def append(
         self,
         key: str,
@@ -131,6 +166,9 @@ class NdjsonIndexedStore:
             f.write(payload)
         digest = _key_hash(key)
         self._offsets[digest] = offset
+        canon_digest = canonical_digest_of_raw_key(key)
+        if canon_digest is not None:
+            self._canon.setdefault(canon_digest, []).append(offset)
         self._keys_cache = None
         # store_entry passes value as a JSON string from serialize_object
         if isinstance(value, str):
@@ -227,6 +265,7 @@ class NdjsonIndexedStore:
         fp = self._file_fingerprint()
         if fp is None:
             self._offsets = {}
+            self._canon = {}
             self._fingerprint = None
             self._keys_cache = None
             return
@@ -250,6 +289,7 @@ class NdjsonIndexedStore:
         fp = self._file_fingerprint()
         if fp is None:
             self._offsets = {}
+            self._canon = {}
             self._fingerprint = None
             return True
         if not os.path.exists(self.idx_path):
@@ -272,13 +312,25 @@ class NdjsonIndexedStore:
             if not isinstance(k, str) or not isinstance(v, int):
                 return False
             parsed[k] = v
+        canon = data.get("canon")
+        if not isinstance(canon, dict):
+            return False
+        parsed_canon: Dict[str, List[int]] = {}
+        for k, v in canon.items():
+            if not isinstance(k, str) or not isinstance(v, list):
+                return False
+            if not all(isinstance(o, int) for o in v):
+                return False
+            parsed_canon[k] = v
         self._offsets = parsed
+        self._canon = parsed_canon
         self._fingerprint = fp
         self._keys_cache = None
         return True
 
     def _rebuild_index(self, *, write_sidecar: bool) -> None:
         offsets: Dict[str, int] = {}
+        canon: Dict[str, List[int]] = {}
         if not os.path.exists(self.path):
             with open(self.path, "wb"):
                 pass
@@ -316,7 +368,11 @@ class NdjsonIndexedStore:
                 if not isinstance(key, str):
                     continue
                 offsets[_key_hash(key)] = offset
+                canon_digest = canonical_digest_of_raw_key(key)
+                if canon_digest is not None:
+                    canon.setdefault(canon_digest, []).append(offset)
         self._offsets = offsets
+        self._canon = canon
         self._fingerprint = self._file_fingerprint()
         self._keys_cache = None
         self._lru.clear()
@@ -332,6 +388,7 @@ class NdjsonIndexedStore:
             "mtime_ns": fp[0],
             "size": fp[1],
             "offsets": self._offsets,
+            "canon": self._canon,
         }
         # Unique temp path per writer: parallel pytest workers previously
         # shared `{idx}.tmp`, so one process's os.replace could delete the
@@ -360,6 +417,16 @@ class NdjsonIndexedStore:
         *,
         expected_key: str,
     ) -> Optional[Tuple[str, Any]]:
+        line = self._read_line_at(offset)
+        if line is None:
+            return None
+        key, value, res_types = line
+        if key != expected_key:
+            return None
+        return value, res_types
+
+    def _read_line_at(self, offset: int) -> Optional[Tuple[str, str, Any]]:
+        """Read one entry as (key, value_str, res_types), or None if invalid."""
         try:
             with open(self.path, "rb") as f:
                 f.seek(offset)
@@ -376,13 +443,13 @@ class NdjsonIndexedStore:
             return None
         if not all(k in item for k in ("key", "value", "res_types")):
             return None
-        if item["key"] != expected_key:
+        if not isinstance(item["key"], str):
             return None
         value = item["value"]
         if not isinstance(value, str):
             # Defensive: normalize non-string values to JSON string form.
             value = json.dumps(value)
-        return value, item["res_types"]
+        return item["key"], value, item["res_types"]
 
     def _lru_get(self, digest: str) -> Optional[Tuple[Any, Any]]:
         if digest not in self._lru:

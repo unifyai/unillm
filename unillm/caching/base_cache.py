@@ -124,6 +124,19 @@ class BaseCache(ABC):
 
     @classmethod
     @abstractmethod
+    def retrieve_canonical(
+        cls,
+        digest: str,
+    ) -> tuple[Optional[Any], Optional[Dict[str, Any]]]:
+        """
+        Retrieve a value by canonical digest (see ``canonical.py``).
+
+        Returns:
+            Tuple of (value, res_types) or (None, None) if not found
+        """
+
+    @classmethod
+    @abstractmethod
     def has_key(cls, key: str) -> bool:
         """Check if a key exists in the cache."""
 

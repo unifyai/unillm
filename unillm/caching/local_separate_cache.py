@@ -11,6 +11,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from .base_cache import BaseCache
+from .canonical import canonical_digest_of_raw_key
 from .ndjson_index import NdjsonIndexedStore
 from .ndsjson_cache_utils import _write_to_ndjson_cache
 
@@ -20,6 +21,9 @@ class LocalSeparateCache(BaseCache):
 
     _read_store: Optional[NdjsonIndexedStore] = None
     _cache_write: Optional[Dict[str, Any]] = None
+    # canonical digest → raw key in the write cache, so a session's own fresh
+    # writes are canonically addressable without touching the read store.
+    _canon_write: Optional[Dict[str, str]] = None
     _cache_dir: str = os.environ.get("UNILLM_CACHE_DIR", os.getcwd())
     _cache_name_read: str = ".cache.ndjson"
     _cache_name_write: str = ".cache_write.ndjson"
@@ -32,6 +36,7 @@ class LocalSeparateCache(BaseCache):
         cls._cache_name_write = f"{name}_write"
         cls._read_store = None
         cls._cache_write = None
+        cls._canon_write = None
 
     @classmethod
     def get_cache_name(cls) -> str:
@@ -44,6 +49,7 @@ class LocalSeparateCache(BaseCache):
         cls._cache_dir = path
         cls._read_store = None
         cls._cache_write = None
+        cls._canon_write = None
 
     @classmethod
     def get_cache_dir(cls) -> str:
@@ -72,6 +78,9 @@ class LocalSeparateCache(BaseCache):
     ) -> None:
         """Store a key-value pair in the write cache."""
         cls._cache_write[key] = {"value": value, "res_types": res_types}
+        digest = canonical_digest_of_raw_key(key)
+        if digest is not None:
+            cls._canon_write[digest] = key
         with open(cls.get_cache_filepath(cls._cache_name_write), "a") as f:
             _write_to_ndjson_cache(
                 f,
@@ -85,6 +94,8 @@ class LocalSeparateCache(BaseCache):
         """Initialize both read and write caches."""
         if cls._cache_write is None:
             cls._cache_write = {}
+        if cls._canon_write is None:
+            cls._canon_write = {}
 
         if cls._read_store is None:
             read_path = cls.get_cache_filepath(cls._cache_name_read)
@@ -126,6 +137,33 @@ class LocalSeparateCache(BaseCache):
         return None, None
 
     @classmethod
+    def retrieve_canonical(
+        cls,
+        digest: str,
+    ) -> tuple[Optional[Any], Optional[Dict[str, Any]]]:
+        """Retrieve a value by canonical digest, checking write cache first."""
+        if cls._canon_write is not None:
+            raw_key = cls._canon_write.get(digest)
+            if raw_key is not None and cls._cache_write and raw_key in cls._cache_write:
+                value = cls._cache_write[raw_key]
+                return json.loads(value["value"]), value["res_types"]
+
+        if cls._read_store is not None:
+            result = cls._read_store.get_canonical(digest)
+            if result is not None:
+                deserialized_value, res_types, stored_key = result
+                # Promote under the stored raw key: the value answers to that
+                # exact request, and the canonical map picks the entry up.
+                cls.store_entry(
+                    key=stored_key,
+                    value=cls.serialize_object(deserialized_value),
+                    res_types=res_types,
+                )
+                return deserialized_value, res_types
+
+        return None, None
+
+    @classmethod
     def has_key(cls, key: str) -> bool:
         """Check if a key exists in either cache."""
         if cls._cache_write is not None and key in cls._cache_write:
@@ -138,6 +176,12 @@ class LocalSeparateCache(BaseCache):
         if cls._cache_write:
             item = cls._cache_write.pop(key, None)
             if item is not None:
+                if cls._canon_write is not None:
+                    cls._canon_write = {
+                        digest: raw_key
+                        for digest, raw_key in cls._canon_write.items()
+                        if raw_key != key
+                    }
                 with open(cls.get_cache_filepath(cls._cache_name_write), "w") as f:
                     for write_key, value in cls._cache_write.items():
                         _write_to_ndjson_cache(

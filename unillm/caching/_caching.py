@@ -14,6 +14,7 @@ from openai.types.chat import ChatCompletion, ParsedChatCompletion
 from pydantic import BaseModel
 
 from .base_cache import BaseCache
+from .canonical import canonical_digest_of_raw_key
 from .local_cache import LocalCache
 from .local_separate_cache import LocalSeparateCache
 from .cache_benchmark import record_get_cache, record_write_to_cache
@@ -97,7 +98,15 @@ def _get_cache(
     filename: str = None,
     raise_on_empty: bool = False,
     backend: Optional[str] = None,
-) -> Optional[Any]:
+    keying: Optional[str] = None,
+) -> tuple[Optional[Any], Optional[str]]:
+    """Look up a cached response.
+
+    Returns (response, hit_kind) where hit_kind is "exact", "canonical", or
+    None on a miss. Exact raw-key matches always win; "canonical" keying
+    additionally accepts entries whose canonical digest matches (see
+    ``canonical.py``), so mundane prompt churn does not orphan a recording.
+    """
     global CACHE_LOCK
 
     type_mapping = {
@@ -105,6 +114,10 @@ def _get_cache(
         "ModelResponse": ModelResponse,
         "ParsedChatCompletion": ParsedChatCompletion,
     }
+    if keying is None:
+        from unillm.settings import SETTINGS
+
+        keying = SETTINGS.UNILLM_CACHE_KEYING
     CACHE_LOCK.acquire()
     try:
         current_backend = get_cache_backend(backend)
@@ -112,28 +125,33 @@ def _get_cache(
         kw = _cache_key_kwargs(kw)
         kw_str = BaseCache.serialize_object(kw)
         cache_str = f"{fn_name}_{kw_str}"
-        if not current_backend.has_key(cache_str):
+        ret = res_types = hit_kind = None
+        if current_backend.has_key(cache_str):
+            ret, res_types = current_backend.retrieve_entry(cache_str)
+            hit_kind = "exact"
+        elif keying == "canonical":
+            digest = canonical_digest_of_raw_key(cache_str)
+            if digest is not None:
+                ret, res_types = current_backend.retrieve_canonical(digest)
+                if ret is not None:
+                    hit_kind = "canonical"
+        if hit_kind is None:
             if raise_on_empty:
-                CACHE_LOCK.release()
                 raise Exception(
                     f"Failed to get cache for function {fn_name} with kwargs "
                     f"{BaseCache.serialize_object(kw, indent=4)} "
                     f"from cache at {filename}. Key was not found in the cache.",
                 )
-            CACHE_LOCK.release()
-            return
-        ret, res_types = current_backend.retrieve_entry(cache_str)
+            return None, None
         if res_types is None:
-            CACHE_LOCK.release()
-            return ret
+            return ret, hit_kind
         for idx_str, type_str in res_types.items():
             type_str = type_str.split("[")[0]
             idx_list = json.loads(idx_str)
             if len(idx_list) == 0:
-                CACHE_LOCK.release()
                 typ = type_mapping[type_str]
                 if issubclass(typ, BaseModel):
-                    return typ(**ret)
+                    return typ(**ret), hit_kind
                 raise Exception(f"Cache indexing found for unsupported type: {typ}")
             item = ret
             for i, idx in enumerate(idx_list):
@@ -147,15 +165,14 @@ def _get_cache(
                         )
                     break
                 item = item[idx]
-        CACHE_LOCK.release()
-        return ret
+        return ret, hit_kind
     except Exception as e:
-        if CACHE_LOCK.locked():
-            CACHE_LOCK.release()
         raise Exception(
             f"Failed to get cache for function {fn_name} with kwargs {kw} "
             f"from cache at {filename}",
         ) from e
+    finally:
+        CACHE_LOCK.release()
 
 
 @record_write_to_cache
