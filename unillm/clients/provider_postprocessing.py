@@ -116,6 +116,16 @@ class ModelRefusalError(Exception):
 # Retry reason constants
 RETRY_REASON_TOOL_CHOICE_REQUIRED = "tool_choice_required"
 RETRY_REASON_INVALID_TOOL_NAME = "invalid_tool_name"
+RETRY_REASON_MALFORMED_TOOL_ARGUMENTS = "malformed_tool_arguments"
+
+MALFORMED_TOOL_ARGUMENTS_RETRY_NUDGE = (
+    "Your previous turn FAILED: the arguments you emitted for a tool call were "
+    "not valid JSON, so the call was discarded and had ZERO effect — nothing "
+    "was executed. This usually means the arguments were cut off part-way "
+    "through. Re-issue the call now, emitting the complete arguments object in "
+    "one go. Keep every value in the type the tool declares — numbers and "
+    "booleans unquoted — and close every brace and bracket."
+)
 
 # Base nudge for retrying when model ignores tool_choice="required" instruction.
 # The rejected plain-text attempt is never appended as an assistant turn — that
@@ -156,6 +166,44 @@ _VALID_TOOL_NOT_EXECUTED_MSG = (
 
 def _finish_reason(response: "ChatCompletion") -> Optional[str]:
     return response.choices[0].finish_reason if response.choices else None
+
+
+def check_malformed_tool_arguments(response: "ChatCompletion") -> bool:
+    """Return True when a returned tool call cannot be dispatched as-is.
+
+    Providers can return a tool call whose ``arguments`` string is truncated —
+    generation degenerated and ran to the output-token cap mid-object. On the
+    OpenAI Responses bridge this arrives indistinguishable from a complete call:
+    the truncation is reported as ``status: "incomplete"`` on the raw response,
+    but the transformed choice still carries ``finish_reason: "tool_calls"``.
+    Validating the payload we were actually handed is provider-independent and
+    does not depend on any upstream truncation signal surviving.
+    """
+    if not response.choices:
+        return False
+    choice = response.choices[0]
+    tool_calls = getattr(choice.message, "tool_calls", None) or []
+    if not tool_calls:
+        return False
+
+    # A length-capped turn that still emitted tool calls was cut off mid-call.
+    if choice.finish_reason == "length":
+        return True
+
+    for call in tool_calls:
+        raw = getattr(getattr(call, "function", None), "arguments", None)
+        if not isinstance(raw, str) or not raw:
+            continue
+        try:
+            json.loads(raw)
+        except ValueError:
+            logger.warning(
+                "Tool call %s returned unparseable arguments (%d chars)",
+                getattr(getattr(call, "function", None), "name", "?"),
+                len(raw),
+            )
+            return True
+    return False
 
 
 def check_safety_refusal(
@@ -216,12 +264,19 @@ def check_needs_postprocessing(
 
     Returns a tuple of (needs_retry, retry_reason).
     If needs_retry is True, retry_reason is one of:
+        - RETRY_REASON_MALFORMED_TOOL_ARGUMENTS
         - RETRY_REASON_TOOL_CHOICE_REQUIRED
         - RETRY_REASON_INVALID_TOOL_NAME
     If needs_retry is False, retry_reason is None.
 
     This design allows the caller to handle the retry (sync or async) themselves.
     """
+    # Checked first and for every provider: a tool call whose arguments do not
+    # parse cannot be dispatched by anyone downstream, so there is nothing for
+    # the provider-specific checks below to say about it.
+    if check_malformed_tool_arguments(response):
+        return True, RETRY_REASON_MALFORMED_TOOL_ARGUMENTS
+
     if provider == "anthropic":
         return _check_anthropic_postprocessing(
             response=response,
@@ -417,7 +472,15 @@ def build_retry_kw(
     # it to None so the retry request stays valid.
     assistant_content = msg.content if msg.content and msg.content.strip() else None
 
-    if retry_reason == RETRY_REASON_INVALID_TOOL_NAME:
+    if retry_reason == RETRY_REASON_MALFORMED_TOOL_ARGUMENTS:
+        # The rejected assistant turn is not replayed: its tool_call is
+        # unresolvable, and an unanswered tool_call makes the retry request
+        # itself invalid for most providers.
+        retry_messages = list(kw.get("messages", []))
+        retry_messages.append(
+            {"role": "user", "content": MALFORMED_TOOL_ARGUMENTS_RETRY_NUDGE},
+        )
+    elif retry_reason == RETRY_REASON_INVALID_TOOL_NAME:
         retry_messages = _build_invalid_tool_name_retry_messages(
             kw=kw,
             msg=msg,
