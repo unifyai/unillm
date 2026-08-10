@@ -236,7 +236,7 @@ class TestLLMEventEmissionMocked:
             "unillm.clients.uni_llm.litellm.completion",
             return_value=mock_response,
         ):
-            with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+            with patch("unillm.clients.uni_llm._get_cache", return_value=(None, None)):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
                     with patch(
                         "unillm.clients.uni_llm.compute_cost_from_response",
@@ -293,7 +293,7 @@ class TestLLMEventEmissionMocked:
             "unillm.clients.uni_llm.litellm.completion",
             return_value=mock_response,
         ):
-            with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+            with patch("unillm.clients.uni_llm._get_cache", return_value=(None, None)):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
                     with patch(
                         "unillm.clients.uni_llm.compute_cost_from_response",
@@ -334,7 +334,7 @@ class TestLLMEventEmissionMocked:
 
         with patch(
             "unillm.clients.uni_llm._get_cache",
-            return_value=mock_cached_response,
+            return_value=(mock_cached_response, "exact"),
         ):
             with patch("unillm.clients.uni_llm._write_to_cache"):
                 client = unillm.Unify("openai/gpt-4o@openrouter", cache=True)
@@ -351,7 +351,7 @@ class TestLLMEventEmissionMocked:
         def capture_hook(event: LLMEvent) -> None:
             captured.append(event)
 
-        with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+        with patch("unillm.clients.uni_llm._get_cache", return_value=(None, None)):
             with patch(
                 "unillm.clients.uni_llm.litellm.completion",
                 side_effect=Exception("API Error"),
@@ -391,7 +391,7 @@ class TestLLMEventEmissionMocked:
             "unillm.clients.uni_llm.litellm.acompletion",
             side_effect=mock_acompletion,
         ):
-            with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+            with patch("unillm.clients.uni_llm._get_cache", return_value=(None, None)):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
                     with patch(
                         "unillm.clients.uni_llm.compute_cost_from_response",
@@ -424,7 +424,7 @@ class TestLLMEventEmissionMocked:
         async def mock_acompletion_error(*args, **kwargs):
             raise Exception("Async API Error")
 
-        with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+        with patch("unillm.clients.uni_llm._get_cache", return_value=(None, None)):
             with patch(
                 "unillm.clients.uni_llm.litellm.acompletion",
                 side_effect=mock_acompletion_error,
@@ -455,7 +455,7 @@ class TestLLMEventEmissionMocked:
             "unillm.clients.uni_llm.litellm.completion",
             return_value=mock_response,
         ):
-            with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+            with patch("unillm.clients.uni_llm._get_cache", return_value=(None, None)):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
                     with patch(
                         "unillm.clients.uni_llm.compute_cost_from_response",
@@ -612,7 +612,7 @@ class TestLLMEventCosts:
             "unillm.clients.uni_llm.litellm.completion",
             return_value=mock_response,
         ):
-            with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+            with patch("unillm.clients.uni_llm._get_cache", return_value=(None, None)):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
                     with patch(
                         "unillm.clients.uni_llm.compute_cost_from_response",
@@ -648,7 +648,7 @@ class TestLLMEventCosts:
 
         with patch(
             "unillm.clients.uni_llm._get_cache",
-            return_value=mock_cached_response,
+            return_value=(mock_cached_response, "exact"),
         ):
             with patch("unillm.clients.uni_llm._write_to_cache"):
                 client = unillm.Unify("openai/gpt-4o@openrouter", cache=True)
@@ -667,7 +667,7 @@ class TestLLMEventCosts:
         def capture_hook(event: LLMEvent) -> None:
             captured.append(event)
 
-        with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+        with patch("unillm.clients.uni_llm._get_cache", return_value=(None, None)):
             with patch(
                 "unillm.clients.uni_llm.litellm.completion",
                 side_effect=Exception("API Error"),
@@ -707,7 +707,7 @@ class TestLLMEventCosts:
             "unillm.clients.uni_llm.litellm.acompletion",
             side_effect=mock_acompletion,
         ):
-            with patch("unillm.clients.uni_llm._get_cache", return_value=None):
+            with patch("unillm.clients.uni_llm._get_cache", return_value=(None, None)):
                 with patch("unillm.clients.uni_llm._write_to_cache"):
                     with patch(
                         "unillm.clients.uni_llm.compute_cost_from_response",

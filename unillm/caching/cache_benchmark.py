@@ -7,6 +7,9 @@ from dataclasses import dataclass
 @dataclass
 class CacheStats:
     hits: int = 0
+    # Hits accepted through canonical keying rather than an exact raw-key
+    # match; a subset of `hits`. A rising share is the prompt-drift meter.
+    canonical_hits: int = 0
     misses: int = 0
     reads: int = 0
     writes: int = 0
@@ -22,11 +25,12 @@ class CacheStats:
         return self.misses / self.reads * 100
 
     def __repr__(self) -> str:
-        return f"CacheStats(hits={self.hits} ({self.get_percentage_of_cache_hits():.1f}%), misses={self.misses} ({self.get_percentage_of_cache_misses():.1f}%), reads={self.reads}, writes={self.writes})"
+        return f"CacheStats(hits={self.hits} ({self.get_percentage_of_cache_hits():.1f}%, {self.canonical_hits} canonical), misses={self.misses} ({self.get_percentage_of_cache_misses():.1f}%), reads={self.reads}, writes={self.writes})"
 
     def __add__(self, other: "CacheStats") -> "CacheStats":
         return CacheStats(
             hits=self.hits + other.hits,
+            canonical_hits=self.canonical_hits + other.canonical_hits,
             misses=self.misses + other.misses,
             reads=self.reads + other.reads,
             writes=self.writes + other.writes,
@@ -57,12 +61,14 @@ def record_get_cache(fn):
         def wrapper(*args, **kwargs):
             benchmark = get_cache_stats()
             benchmark.reads += 1
-            ret = fn(*args, **kwargs)
-            if ret is None:
+            value, hit_kind = fn(*args, **kwargs)
+            if value is None:
                 benchmark.misses += 1
             else:
                 benchmark.hits += 1
-            return ret
+                if hit_kind == "canonical":
+                    benchmark.canonical_hits += 1
+            return value, hit_kind
 
         return wrapper
 

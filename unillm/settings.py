@@ -4,7 +4,7 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import SecretStr
 
-from unillm.types.cache import CACHE_MODES, CacheParam
+from unillm.types.cache import CACHE_KEYINGS, CACHE_MODES, CacheParam
 
 
 def _parse_bool(v: Any) -> bool:
@@ -77,6 +77,14 @@ class Settings(BaseSettings):
     #   Modes: both, write, read, read-only
     UNILLM_CACHE: CacheParam = False
 
+    # How cache lookups match stored entries.
+    # - exact: byte-identical raw request keys only
+    # - canonical: also accept entries whose canonical digest matches, so
+    #   mundane prompt churn (block reordering, docstring rewording, volatile
+    #   timestamps) keeps hitting recordings made before the change. Writes
+    #   always store the exact raw key either way.
+    UNILLM_CACHE_KEYING: str = "exact"
+
     # ─────────────────────────────────────────────────────────────────────────
     # Transient Error Retry Configuration
     # ─────────────────────────────────────────────────────────────────────────
@@ -102,6 +110,20 @@ class Settings(BaseSettings):
     @classmethod
     def parse_bool_fields(cls, v: Any) -> bool:
         return _parse_bool(v)
+
+    @field_validator("UNILLM_CACHE_KEYING", mode="before")
+    @classmethod
+    def parse_cache_keying(cls, v: Any) -> str:
+        if v is None or v == "":
+            return "exact"
+        if isinstance(v, str):
+            _lower = v.lower()
+            if _lower in CACHE_KEYINGS:
+                return _lower
+        raise ValueError(
+            f"Invalid UNILLM_CACHE_KEYING value: {v!r}. "
+            f"Expected one of: {', '.join(CACHE_KEYINGS)}",
+        )
 
     @field_validator("UNILLM_CACHE", mode="before")
     @classmethod

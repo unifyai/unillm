@@ -167,11 +167,12 @@ class TestCacheHighLevel:
 
     def test_get_cache_returns_none_on_miss(self):
         with _CacheHandler():
-            result = _get_cache(
+            result, hit_kind = _get_cache(
                 fn_name="test_fn",
                 kw={"arg": "value"},
             )
             assert result is None
+            assert hit_kind is None
 
     def test_write_and_get_cache(self):
         with _CacheHandler():
@@ -183,11 +184,12 @@ class TestCacheHighLevel:
                 response={"result": "Hello!"},
             )
 
-            result = _get_cache(
+            result, hit_kind = _get_cache(
                 fn_name="completion",
                 kw=kw,
             )
             assert result == {"result": "Hello!"}
+            assert hit_kind == "exact"
 
     def test_cache_with_chat_completion(self):
         """Test caching actual ChatCompletion objects."""
@@ -210,12 +212,13 @@ class TestCacheHighLevel:
                 response=completion,
             )
 
-            result = _get_cache(
+            result, hit_kind = _get_cache(
                 fn_name="completion",
                 kw=kw,
             )
 
             # Result should be reconstructed as ChatCompletion
+            assert hit_kind == "exact"
             assert isinstance(result, ChatCompletion)
             assert result.id == "test-id"
             assert result.choices[0].message.content == "Hello"
@@ -337,7 +340,7 @@ class TestCacheDir:
                 set_cache_dir(tmp)
                 _write_to_cache("fn", {"a": 1}, "cached-response")
                 assert os.path.exists(os.path.join(tmp, ".cache.ndjson"))
-                assert _get_cache("fn", {"a": 1}) == "cached-response"
+                assert _get_cache("fn", {"a": 1})[0] == "cached-response"
         finally:
             set_cache_backend(
                 "local" if original_backend is LocalCache else "local_separate",
@@ -358,7 +361,7 @@ class TestCacheDir:
                     set_cache_dir(first)
                     _write_to_cache("fn", {"a": 1}, "first-dir-response")
                     set_cache_dir(second)
-                    assert _get_cache("fn", {"a": 1}) is None
+                    assert _get_cache("fn", {"a": 1})[0] is None
         finally:
             set_cache_backend(
                 "local" if original_backend is LocalCache else "local_separate",
@@ -433,11 +436,12 @@ class TestMalformedCacheEntries:
                 f.write('{"value": "bad"}\n')  # Missing key and res_types
 
             # Should return None (cache miss), not raise an exception
-            result = _get_cache(
+            result, hit_kind = _get_cache(
                 fn_name="test_fn",
                 kw={"arg": "value"},
             )
             assert result is None
+            assert hit_kind is None
 
 
 class TestNdjsonIndexedStore:
