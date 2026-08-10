@@ -1562,6 +1562,7 @@ class Unify(_UniClient):
         is_cache_enabled = cache in [True, "both", "read", "read-only"]
         cache_status = "pending" if is_cache_enabled else "disabled"
         in_cache = False
+        cache_hit_kind = None
         llm_error: BaseException | None = None
         provider_cost: float | None = None
 
@@ -1583,7 +1584,7 @@ class Unify(_UniClient):
                         raise SpendingLimitExceededError(limit_result)
 
                 if is_cache_enabled:
-                    chat_completion = _get_cache(
+                    chat_completion, cache_hit_kind = _get_cache(
                         fn_name="chat.completions.create",
                         kw=kw,
                         raise_on_empty=cache == "read-only",
@@ -1604,7 +1605,12 @@ class Unify(_UniClient):
 
                 # Determine cache status after resolution
                 if is_cache_enabled:
-                    cache_status = "hit" if in_cache else "miss"
+                    if in_cache:
+                        cache_status = (
+                            "hit-canonical" if cache_hit_kind == "canonical" else "hit"
+                        )
+                    else:
+                        cache_status = "miss"
 
                 # Set span response attributes
                 set_span_response(span, cache_status, chat_completion)
@@ -2168,6 +2174,7 @@ class AsyncUnify(_UniClient):
         is_cache_enabled = cache in [True, "both", "read", "read-only"]
         cache_status = "pending" if is_cache_enabled else "disabled"
         in_cache = False
+        cache_hit_kind = None
         llm_error: BaseException | None = None
         provider_cost: float | None = None
 
@@ -2194,7 +2201,7 @@ class AsyncUnify(_UniClient):
                     )
 
                 if is_cache_enabled:
-                    chat_completion = _get_cache(
+                    chat_completion, cache_hit_kind = _get_cache(
                         fn_name="chat.completions.create",
                         kw=kw,
                         raise_on_empty=cache == "read-only",
@@ -2244,7 +2251,12 @@ class AsyncUnify(_UniClient):
 
                 # Determine cache status after resolution
                 if is_cache_enabled:
-                    cache_status = "hit" if in_cache else "miss"
+                    if in_cache:
+                        cache_status = (
+                            "hit-canonical" if cache_hit_kind == "canonical" else "hit"
+                        )
+                    else:
+                        cache_status = "miss"
 
                 # Set span response attributes
                 set_span_response(span, cache_status, chat_completion)
