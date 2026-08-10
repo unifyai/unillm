@@ -273,6 +273,15 @@ def _safe_deduct_credits(
     abandoned: bool = False,
 ) -> None:
     """Deduct credits with ledger metadata from billing context."""
+    # When the LLM gateway handled this OpenRouter call it already metered and
+    # deducted server-side; charging again here would double-bill. Non-gateway
+    # providers (and gateway-off deployments) still deduct client-side.
+    if _llm_gateway_active() and (
+        (model or "").startswith(_OPENROUTER_MODEL_PREFIX)
+        or (model or "").endswith("@openrouter")
+    ):
+        return
+
     from ..billing_context import get_billing_context
 
     ctx = get_billing_context()
@@ -459,6 +468,32 @@ def _apply_deepseek_v4_reasoning_effort(kw: dict, model: str) -> None:
     kw["extra_body"] = extra_body
 
 
+# --- LLM gateway (Orchestra broker) -----------------------------------------
+# Opt-in via env so rollout is per-environment and default-off. When
+# ``UNILLM_LLM_GATEWAY_URL`` is set (and an auth key is available), OpenRouter
+# calls are routed through the gateway and billed there.
+_LLM_GATEWAY_URL_ENV = "UNILLM_LLM_GATEWAY_URL"
+_LLM_GATEWAY_KEY_ENVS = ("UNILLM_LLM_GATEWAY_KEY", "UNIFY_KEY")
+
+
+def _llm_gateway_base() -> str | None:
+    base = (os.environ.get(_LLM_GATEWAY_URL_ENV) or "").strip().rstrip("/")
+    return base or None
+
+
+def _llm_gateway_key() -> str | None:
+    for env in _LLM_GATEWAY_KEY_ENVS:
+        value = (os.environ.get(env) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _llm_gateway_active() -> bool:
+    """Gateway routing is on only when both a base URL and an auth key exist."""
+    return bool(_llm_gateway_base()) and bool(_llm_gateway_key())
+
+
 def _prepare_provider_request_kw(
     *,
     kw: dict,
@@ -468,6 +503,20 @@ def _prepare_provider_request_kw(
     """Apply provider transport adaptations and return the accounting model."""
     model = str(kw.get("model") or "")
     tools = kw.get("tools")
+
+    # LLM gateway: when configured, route OpenRouter traffic through Orchestra's
+    # server-side broker instead of calling OpenRouter directly, so the provider
+    # key never has to live in this process. The gateway is OpenAI-compatible, so
+    # LiteLLM's OpenRouter transport reaches it by overriding api_base/api_key.
+    # Billing is settled server-side by the gateway, so ``_safe_deduct_credits``
+    # skips these calls (see its guard) to avoid double-charging.
+    if (
+        _llm_gateway_active()
+        and model.startswith(_OPENROUTER_MODEL_PREFIX)
+        and kw.get("api_base") is None
+    ):
+        kw["api_base"] = _llm_gateway_base()
+        kw["api_key"] = _llm_gateway_key()
 
     if (
         provider == "minimax"
@@ -1562,6 +1611,7 @@ class Unify(_UniClient):
         is_cache_enabled = cache in [True, "both", "read", "read-only"]
         cache_status = "pending" if is_cache_enabled else "disabled"
         in_cache = False
+        cache_hit_kind = None
         llm_error: BaseException | None = None
         provider_cost: float | None = None
 
@@ -1583,7 +1633,7 @@ class Unify(_UniClient):
                         raise SpendingLimitExceededError(limit_result)
 
                 if is_cache_enabled:
-                    chat_completion = _get_cache(
+                    chat_completion, cache_hit_kind = _get_cache(
                         fn_name="chat.completions.create",
                         kw=kw,
                         raise_on_empty=cache == "read-only",
@@ -1604,7 +1654,12 @@ class Unify(_UniClient):
 
                 # Determine cache status after resolution
                 if is_cache_enabled:
-                    cache_status = "hit" if in_cache else "miss"
+                    if in_cache:
+                        cache_status = (
+                            "hit-canonical" if cache_hit_kind == "canonical" else "hit"
+                        )
+                    else:
+                        cache_status = "miss"
 
                 # Set span response attributes
                 set_span_response(span, cache_status, chat_completion)
@@ -2168,6 +2223,7 @@ class AsyncUnify(_UniClient):
         is_cache_enabled = cache in [True, "both", "read", "read-only"]
         cache_status = "pending" if is_cache_enabled else "disabled"
         in_cache = False
+        cache_hit_kind = None
         llm_error: BaseException | None = None
         provider_cost: float | None = None
 
@@ -2194,7 +2250,7 @@ class AsyncUnify(_UniClient):
                     )
 
                 if is_cache_enabled:
-                    chat_completion = _get_cache(
+                    chat_completion, cache_hit_kind = _get_cache(
                         fn_name="chat.completions.create",
                         kw=kw,
                         raise_on_empty=cache == "read-only",
@@ -2244,7 +2300,12 @@ class AsyncUnify(_UniClient):
 
                 # Determine cache status after resolution
                 if is_cache_enabled:
-                    cache_status = "hit" if in_cache else "miss"
+                    if in_cache:
+                        cache_status = (
+                            "hit-canonical" if cache_hit_kind == "canonical" else "hit"
+                        )
+                    else:
+                        cache_status = "miss"
 
                 # Set span response attributes
                 set_span_response(span, cache_status, chat_completion)

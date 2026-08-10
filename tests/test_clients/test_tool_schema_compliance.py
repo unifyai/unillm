@@ -19,7 +19,9 @@ import pytest
 import unillm
 from ..settings import SETTINGS
 from unillm.clients.provider_postprocessing import (
+    MALFORMED_TOOL_ARGUMENTS_RETRY_NUDGE,
     RETRY_REASON_INVALID_TOOL_NAME,
+    RETRY_REASON_MALFORMED_TOOL_ARGUMENTS,
     RETRY_REASON_TOOL_CHOICE_REQUIRED,
     build_retry_kw,
     build_tool_choice_required_retry_nudge,
@@ -893,3 +895,115 @@ def test_build_retry_kw_assistant_message_preserves_tool_calls():
     assert len(assistant_msg["tool_calls"]) == 1
     # Content should be preserved (non-whitespace)
     assert assistant_msg["content"] == "Let me call the tool."
+
+
+# --------------------------------------------------------------------------- #
+#  Truncated / malformed tool-call arguments                                   #
+# --------------------------------------------------------------------------- #
+#
+# Observed in production twice: generation degenerated immediately after a key
+# inside a nested free-form object and emitted whitespace until the output-token
+# cap, ~8 minutes later. The OpenAI Responses bridge reports the truncation as
+# `status: "incomplete"` on the raw response but still hands the transformed
+# choice a `finish_reason: "tool_calls"`, so the only reliable signal left is
+# that the arguments payload does not parse.
+
+# The real shape, shortened: a valid prefix, then whitespace, never closed.
+_TRUNCATED_ARGS = (
+    '{"function_name":"primitives.workspace_email.list_messages",'
+    '"call_kwargs":{"max_results":' + "\n  " * 400
+)
+
+
+def _tool_call_response(
+    arguments,
+    *,
+    finish_reason="tool_calls",
+    name="execute_function",
+):
+    mock_tool_call = MagicMock()
+    mock_tool_call.function.name = name
+    mock_tool_call.function.arguments = arguments
+
+    mock_message = MagicMock()
+    mock_message.tool_calls = [mock_tool_call]
+    mock_message.content = None
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_choice.finish_reason = finish_reason
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+    return mock_response
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "openrouter"])
+def test_truncated_tool_arguments_are_retried_for_every_provider(provider):
+    """Unparseable arguments cannot be dispatched by anyone downstream."""
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=_tool_call_response(_TRUNCATED_ARGS),
+        provider=provider,
+        original_tool_choice=None,
+        reasoning_effort=None,
+        tools=[TOOL_A],
+    )
+
+    assert needs_retry
+    assert retry_reason == RETRY_REASON_MALFORMED_TOOL_ARGUMENTS
+
+
+def test_length_capped_turn_carrying_tool_calls_is_retried():
+    """A turn cut off by the token cap was cut off mid-call, whatever it parses to."""
+
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=_tool_call_response('{"function_name":"x"}', finish_reason="length"),
+        provider="openai",
+        original_tool_choice=None,
+        reasoning_effort=None,
+        tools=[TOOL_A],
+    )
+
+    assert needs_retry
+    assert retry_reason == RETRY_REASON_MALFORMED_TOOL_ARGUMENTS
+
+
+def test_well_formed_tool_arguments_are_not_flagged_as_malformed():
+    needs_retry, retry_reason = check_needs_postprocessing(
+        response=_tool_call_response('{"query": "hello"}', name="search"),
+        provider="openai",
+        original_tool_choice=None,
+        reasoning_effort=None,
+        tools=[TOOL_SEARCH],
+    )
+
+    assert retry_reason != RETRY_REASON_MALFORMED_TOOL_ARGUMENTS
+    assert not needs_retry
+
+
+def test_malformed_retry_nudges_without_replaying_the_broken_turn():
+    """An unanswered tool_call would make the retry request itself invalid."""
+
+    kw = {
+        "model": "gpt-5.6-sol",
+        "messages": [{"role": "user", "content": "Summarise my last five emails."}],
+        "tools": [TOOL_A],
+    }
+
+    retry_kw = build_retry_kw(
+        kw=kw,
+        response=_tool_call_response(_TRUNCATED_ARGS),
+        retry_reason=RETRY_REASON_MALFORMED_TOOL_ARGUMENTS,
+    )
+
+    assert not [m for m in retry_kw["messages"] if m.get("role") == "assistant"]
+    assert retry_kw["messages"][-1] == {
+        "role": "user",
+        "content": MALFORMED_TOOL_ARGUMENTS_RETRY_NUDGE,
+    }
+    # The original request is otherwise untouched.
+    assert retry_kw["messages"][0] == kw["messages"][0]
+    assert kw["messages"] == [
+        {"role": "user", "content": "Summarise my last five emails."},
+    ]

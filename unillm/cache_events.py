@@ -33,13 +33,21 @@ class CacheEvent(TypedDict):
     """Event emitted when a cache decision is made during an LLM request.
 
     Attributes:
-        cache_status: Whether the request was a cache "hit", "miss", or
+        cache_status: Whether the request was a cache "hit" (exact raw key),
+            "hit-canonical" (matched through canonical keying), "miss", or
             "disabled" (cache reading was not attempted, e.g. cache=False).
         endpoint: The endpoint string (e.g., "openai/gpt-4o@openrouter").
         request_kw: The full request kwargs sent to the LLM (model, messages, etc.).
     """
 
-    cache_status: Literal["hit", "miss", "disabled", "pending", "error"]
+    cache_status: Literal[
+        "hit",
+        "hit-canonical",
+        "miss",
+        "disabled",
+        "pending",
+        "error",
+    ]
     endpoint: str
     request_kw: dict[str, Any]
 

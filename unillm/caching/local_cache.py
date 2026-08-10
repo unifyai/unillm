@@ -96,6 +96,20 @@ class LocalCache(BaseCache):
         return result
 
     @classmethod
+    def retrieve_canonical(
+        cls,
+        digest: str,
+    ) -> tuple[Optional[Any], Optional[Dict[str, Any]]]:
+        """Retrieve a value by canonical digest."""
+        if cls._store is None:
+            return None, None
+        result = cls._store.get_canonical(digest)
+        if result is None:
+            return None, None
+        deserialized_value, res_types, _ = result
+        return deserialized_value, res_types
+
+    @classmethod
     def has_key(cls, key: str) -> bool:
         """Check if a key exists in the cache."""
         return cls._store is not None and cls._store.has_key(key)
