@@ -838,6 +838,12 @@ class _UniClient(_Client, abc.ABC):
         stream_options,
     ):
         prompt_dict = prompt.components
+        if stream and stream_options is None:
+            # Cost is only deducted when the provider returns a usage chunk,
+            # which OpenAI-compatible APIs emit solely on request. Without
+            # this the whole stream is generated, charged by the provider,
+            # and billed to nobody.
+            stream_options = {"include_usage": True}
         kw = dict(
             model=get_model_alias(endpoint),
             **prompt_dict,
