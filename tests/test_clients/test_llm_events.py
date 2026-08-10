@@ -6,6 +6,9 @@ from unittest.mock import patch, MagicMock
 import unillm
 from unillm import (
     LLMEvent,
+    add_llm_event_listener,
+    clear_llm_event_listeners,
+    llm_event_listeners,
     set_llm_event_hook,
     get_llm_event_hook,
     llm_event_hook_scope,
@@ -726,127 +729,263 @@ class TestLLMEventCosts:
 
 
 # ---------------------------------------------------------------------------
-#  Cross-thread global hook tests
+#  Process-global listener tests
 # ---------------------------------------------------------------------------
 
 
-class TestGlobalLLMEventHook:
-    """Tests for set_global_llm_event_hook - process-wide hook that works across threads."""
+class TestLLMEventListeners:
+    """Tests for add_llm_event_listener - additive, process-wide metering."""
 
     @pytest.fixture(autouse=True)
     def clear_hooks(self):
-        """Clear both context and global hooks before and after each test."""
+        """Clear the scoped hook and every listener around each test."""
         set_llm_event_hook(None)
-        # Clear global hook (will exist after implementation)
-        try:
-            from unillm import set_global_llm_event_hook
-
-            set_global_llm_event_hook(None)
-        except ImportError:
-            pass
+        clear_llm_event_listeners()
         yield
         set_llm_event_hook(None)
-        try:
-            from unillm import set_global_llm_event_hook
+        clear_llm_event_listeners()
 
-            set_global_llm_event_hook(None)
-        except ImportError:
-            pass
+    def test_listener_receives_events(self):
+        captured = []
+        listener = add_llm_event_listener(captured.append)
 
-    def test_global_hook_called_from_different_thread(self):
-        """Global hook should be called even when LLM call happens in a different thread.
+        _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
 
-        This is the key test for the production use case: hook is installed at startup
-        in one thread, but LLM calls may happen from worker threads.
+        assert len(captured) == 1
+        assert listener.delivered == 1
+        assert listener.healthy
+
+    def test_second_listener_does_not_displace_the_first(self):
+        """Registration is additive: no last-write-wins race.
+
+        A metering consumer that installs after the runtime's own wiring used to
+        have to read the incumbent hook and chain to it, and whichever consumer
+        wrote last owned the slot. Both must now receive every event regardless
+        of registration order.
+        """
+        first, second = [], []
+        add_llm_event_listener(first.append)
+        add_llm_event_listener(second.append)
+
+        _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
+
+        assert len(first) == 1
+        assert len(second) == 1
+
+    def test_removing_one_listener_leaves_the_other(self):
+        first, second = [], []
+        handle = add_llm_event_listener(first.append)
+        add_llm_event_listener(second.append)
+
+        handle.remove()
+        _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
+
+        assert first == []
+        assert len(second) == 1
+
+    def test_remove_is_idempotent(self):
+        handle = add_llm_event_listener(lambda event: None)
+        handle.remove()
+        handle.remove()
+        assert llm_event_listeners() == ()
+
+    def test_listener_called_from_different_thread(self):
+        """A listener must see calls made from a worker thread.
+
+        The production case: the listener is registered at startup in one
+        thread, but LLM calls may happen from worker threads.
         """
         import concurrent.futures
 
-        from unillm import set_global_llm_event_hook
-
         captured = []
+        add_llm_event_listener(captured.append)
 
-        def capture_hook(event: LLMEvent) -> None:
-            captured.append(event)
-
-        # Set global hook in main thread
-        set_global_llm_event_hook(capture_hook)
-
-        # Emit event from a different thread
         def emit_in_thread():
             _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(emit_in_thread)
-            future.result()  # Wait for completion
+            executor.submit(emit_in_thread).result()
 
-        # Global hook should have caught the event
         assert len(captured) == 1
         assert captured[0].request["model"] == "test@provider"
 
-    def test_global_hook_called_from_thread_where_hook_was_not_set(self):
-        """Global hook should work when hook is set in thread A but event emitted in thread B.
+    def test_listener_registered_in_thread_where_it_was_not_emitted(self):
+        """Registering in thread A must cover events emitted in thread B.
 
         This mimics the production scenario where:
-        - unify.init() sets the hook (in a worker thread via asyncio.to_thread)
+        - unify.init() registers the listener (in a worker thread via
+          asyncio.to_thread)
         - LLM calls happen from the main async context (different thread)
         """
         import concurrent.futures
 
-        from unillm import set_global_llm_event_hook
-
         captured = []
 
-        def capture_hook(event: LLMEvent) -> None:
-            captured.append(event)
-
-        # Set hook from a worker thread (mimicking asyncio.to_thread behavior)
-        def set_hook_in_thread():
-            set_global_llm_event_hook(capture_hook)
-
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            executor.submit(set_hook_in_thread).result()
+            executor.submit(add_llm_event_listener, captured.append).result()
 
-        # Now emit event from main thread (hook was set in different thread)
         _emit_llm_event(LLMEvent(request={"model": "main-thread@provider"}))
 
         assert len(captured) == 1
         assert captured[0].request["model"] == "main-thread@provider"
 
-    def test_context_hook_takes_precedence_over_global_hook(self):
-        """Context-specific hook should take precedence over global hook.
+    def test_listener_survives_a_fresh_event_loop(self):
+        """Registration is not per-loop state.
 
-        This preserves the existing scoped capture behavior for tests.
+        Work dispatched onto a loop created after registration — a nested
+        asyncio.run, a runtime that builds its own loop per turn — must still
+        be metered.
         """
-        from unillm import set_global_llm_event_hook
+        import asyncio
 
-        global_captured = []
-        context_captured = []
+        captured = []
+        add_llm_event_listener(captured.append)
 
-        def global_hook(event: LLMEvent) -> None:
-            global_captured.append(event)
+        async def emit():
+            _emit_llm_event(LLMEvent(request={"model": "fresh-loop@provider"}))
 
-        def context_hook(event: LLMEvent) -> None:
-            context_captured.append(event)
+        asyncio.run(emit())
+        asyncio.run(emit())
 
-        set_global_llm_event_hook(global_hook)
+        assert len(captured) == 2
 
-        # Without context hook, global should catch it
-        _emit_llm_event(LLMEvent(request={"model": "global-only@provider"}))
-        assert len(global_captured) == 1
-        assert len(context_captured) == 0
+    def test_listener_registered_inside_a_loop_outlives_it(self):
+        """A listener registered inside one loop still fires under the next.
 
-        # With context hook, context should catch it (not global)
-        with llm_event_hook_scope(context_hook):
-            _emit_llm_event(LLMEvent(request={"model": "context-scoped@provider"}))
+        ContextVar-based state would be discarded with the context that set it;
+        listener registration is a plain module-level registry, so it is not.
+        """
+        import asyncio
 
-        assert len(global_captured) == 1  # Still just the first event
-        assert len(context_captured) == 1
-        assert context_captured[0].request["model"] == "context-scoped@provider"
+        captured = []
 
-        # After context exits, global should catch again
-        _emit_llm_event(LLMEvent(request={"model": "back-to-global@provider"}))
-        assert len(global_captured) == 2
-        assert global_captured[1].request["model"] == "back-to-global@provider"
+        async def register():
+            add_llm_event_listener(captured.append)
+
+        asyncio.run(register())
+        _emit_llm_event(LLMEvent(request={"model": "after-loop@provider"}))
+
+        assert len(captured) == 1
+
+    def test_scoped_hook_does_not_suppress_listeners(self):
+        """A scoped hook is additive, not an override.
+
+        A scoped capture anywhere in the call path used to displace the
+        process-wide hook entirely, so whole stretches of a run went unmetered
+        with nothing to show it. Both recipients must see the event.
+        """
+        listener_captured, scoped_captured = [], []
+        add_llm_event_listener(listener_captured.append)
+
+        _emit_llm_event(LLMEvent(request={"model": "before@provider"}))
+
+        with llm_event_hook_scope(scoped_captured.append):
+            _emit_llm_event(LLMEvent(request={"model": "inside@provider"}))
+
+        _emit_llm_event(LLMEvent(request={"model": "after@provider"}))
+
+        assert [e.request["model"] for e in listener_captured] == [
+            "before@provider",
+            "inside@provider",
+            "after@provider",
+        ]
+        assert [e.request["model"] for e in scoped_captured] == ["inside@provider"]
+
+    def test_raising_listener_does_not_break_the_llm_call(self):
+        def bad_listener(event: LLMEvent) -> None:
+            raise RuntimeError("listener failed!")
+
+        add_llm_event_listener(bad_listener)
+        # Must not raise into the caller
+        _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
+
+    def test_raising_listener_does_not_starve_the_others(self):
+        def bad_listener(event: LLMEvent) -> None:
+            raise RuntimeError("listener failed!")
+
+        before, after = [], []
+        add_llm_event_listener(before.append)
+        add_llm_event_listener(bad_listener)
+        add_llm_event_listener(after.append)
+
+        _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
+
+        assert len(before) == 1
+        assert len(after) == 1
+
+    def test_raising_listener_reports_its_own_failure(self):
+        """A listener that records nothing must not look like a quiet run.
+
+        Isolation keeps a broken listener from failing LLM calls, which also
+        means it silently records nothing — and a consumer reporting totals
+        cannot tell "$0 was spent" from "spending was never observed". The
+        handle carries that distinction.
+        """
+
+        def bad_listener(event: LLMEvent) -> None:
+            raise RuntimeError("listener failed!")
+
+        listener = add_llm_event_listener(bad_listener)
+
+        _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
+        _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
+
+        assert listener.delivered == 0
+        assert listener.failed == 2
+        assert not listener.healthy
+        assert isinstance(listener.last_error, RuntimeError)
+
+    def test_listener_reading_an_absent_event_field_is_reported(self):
+        """The exact drift that lost three benchmark runs.
+
+        A consumer reading a field LLMEvent no longer carries raises on every
+        event, records nothing, and reports zero cost. The failure has to be
+        visible on the handle, because the emit path deliberately swallows it.
+        """
+        recorded = []
+
+        def stale_listener(event: LLMEvent) -> None:
+            recorded.append(event.billed_cost)  # removed from LLMEvent
+
+        listener = add_llm_event_listener(stale_listener)
+
+        _emit_llm_event(
+            LLMEvent(request={"model": "test@provider"}, provider_cost=1.25),
+        )
+
+        assert recorded == []
+        assert listener.failed == 1
+        assert not listener.healthy
+        assert isinstance(listener.last_error, AttributeError)
+
+    def test_failure_is_logged(self, caplog):
+        """A silent drop is the failure mode; the log is the other half of the
+        signal for a consumer that never checks the handle."""
+        import logging
+
+        def bad_listener(event: LLMEvent) -> None:
+            raise RuntimeError("listener failed!")
+
+        add_llm_event_listener(bad_listener)
+
+        with caplog.at_level(logging.ERROR, logger="unillm"):
+            _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
+
+        assert any(
+            "listener" in record.message.lower() for record in caplog.records
+        ), caplog.text
+
+    def test_raising_scoped_hook_does_not_break_the_call(self):
+        def bad_hook(event: LLMEvent) -> None:
+            raise RuntimeError("hook failed!")
+
+        captured = []
+        add_llm_event_listener(captured.append)
+
+        with llm_event_hook_scope(bad_hook):
+            _emit_llm_event(LLMEvent(request={"model": "test@provider"}))
+
+        assert len(captured) == 1
 
 
 class TestLLMEventEmissionIntegration:
