@@ -26,3 +26,4 @@ logs/*
 
 # Local sibling clones for path deps in this environment
 .deps/
+.DS_Store

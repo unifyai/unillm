@@ -146,6 +146,24 @@ def _apply_openrouter_hard_provider_pin(kw: dict, model: str) -> None:
     kw["extra_body"] = extra_body
 
 
+def _request_openrouter_usage_accounting(kw: dict, model: str) -> None:
+    """Ask OpenRouter to report the authoritative charged cost of a generation.
+
+    OpenRouter returns ``usage.cost`` only when a request opts in. Without it
+    the amount has to be reconstructed from local pricing data, which cannot
+    price a model that data has never seen — and a generation nobody can price
+    is still charged by the provider while the caller records nothing. Opting
+    in removes the dependency on local pricing for OpenRouter entirely.
+    """
+    if not model.startswith(_OPENROUTER_MODEL_PREFIX):
+        return
+    extra_body = dict(kw.get("extra_body") or {})
+    usage = dict(extra_body.get("usage") or {})
+    usage.setdefault("include", True)
+    extra_body["usage"] = usage
+    kw["extra_body"] = extra_body
+
+
 def _enforce_parallel_tool_call_response_limit(
     chat_completion: Any,
     parallel_tool_calls: Optional[bool],
@@ -229,7 +247,7 @@ def _bill_abandoned_call(
         if cost is None or cost <= 0:
             return
 
-        asyncio.create_task(
+        _spawn_deduction(
             asyncio.to_thread(
                 _safe_deduct_credits,
                 cost,
@@ -263,6 +281,23 @@ def _bill_abandoned_call(
     llm_task.add_done_callback(bill)
 
 
+_INFLIGHT_DEDUCTIONS: set = set()
+
+
+def _spawn_deduction(coro, *, name: str) -> None:
+    """Run a credit deduction in the background, holding it until it finishes.
+
+    The event loop keeps only a weak reference to a task, so a deduction whose
+    handle is discarded may be garbage-collected before it ever runs — losing a
+    charge for a generation the provider has already billed. Retaining the task
+    until completion is what makes the deduction reliable rather than a
+    best-effort side effect.
+    """
+    task = asyncio.create_task(coro, name=name)
+    _INFLIGHT_DEDUCTIONS.add(task)
+    task.add_done_callback(_INFLIGHT_DEDUCTIONS.discard)
+
+
 def _safe_deduct_credits(
     amount: float,
     *,
@@ -273,6 +308,16 @@ def _safe_deduct_credits(
     abandoned: bool = False,
 ) -> None:
     """Deduct credits with ledger metadata from billing context."""
+    # A call the gateway handled was already metered and deducted server-side;
+    # charging again here would double-bill. Every provider the gateway brokers
+    # has to be listed, so this guard tracks the redirects in
+    # ``_prepare_provider_request_kw`` — a provider routed there but missing
+    # here is billed twice, and silently, since both charges look correct in
+    # isolation. Non-gateway providers and gateway-off deployments still deduct
+    # client-side.
+    if _llm_gateway_active() and _gateway_brokers_model(model):
+        return
+
     from ..billing_context import get_billing_context
 
     ctx = get_billing_context()
@@ -459,6 +504,55 @@ def _apply_deepseek_v4_reasoning_effort(kw: dict, model: str) -> None:
     kw["extra_body"] = extra_body
 
 
+# --- LLM gateway (Orchestra broker) -----------------------------------------
+# Opt-in via env so rollout is per-environment and default-off. When
+# ``UNILLM_LLM_GATEWAY_URL`` is set (and an auth key is available), OpenRouter
+# calls are routed through the gateway and billed there.
+_LLM_GATEWAY_URL_ENV = "UNILLM_LLM_GATEWAY_URL"
+_LLM_GATEWAY_KEY_ENVS = ("UNILLM_LLM_GATEWAY_KEY", "UNIFY_KEY")
+
+
+def _llm_gateway_base() -> str | None:
+    base = (os.environ.get(_LLM_GATEWAY_URL_ENV) or "").strip().rstrip("/")
+    return base or None
+
+
+def _llm_gateway_key() -> str | None:
+    for env in _LLM_GATEWAY_KEY_ENVS:
+        value = (os.environ.get(env) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _gateway_brokers_model(model: str | None) -> bool:
+    """Whether the gateway, when active, carries this call.
+
+    Kept next to the redirects it mirrors: the request path decides where a
+    call goes and the billing path decides who charges for it, and the two
+    have to agree on exactly the same set or a call is charged twice.
+
+    Matches both spellings, since the model reaches the two paths in
+    different forms — the transport sees ``openrouter/openai/x`` and
+    ``claude-opus-5``, while accounting sees ``openai/x@openrouter`` and
+    ``claude-opus-5@anthropic``.
+    """
+    name = (model or "").strip().lower()
+    if not name:
+        return False
+    return (
+        name.startswith(_OPENROUTER_MODEL_PREFIX)
+        or name.endswith("@openrouter")
+        or name.startswith("anthropic/")
+        or name.endswith("@anthropic")
+    )
+
+
+def _llm_gateway_active() -> bool:
+    """Gateway routing is on only when both a base URL and an auth key exist."""
+    return bool(_llm_gateway_base()) and bool(_llm_gateway_key())
+
+
 def _prepare_provider_request_kw(
     *,
     kw: dict,
@@ -469,6 +563,39 @@ def _prepare_provider_request_kw(
     model = str(kw.get("model") or "")
     tools = kw.get("tools")
 
+    # LLM gateway: when configured, route OpenRouter traffic through Orchestra's
+    # server-side broker instead of calling OpenRouter directly, so the provider
+    # key never has to live in this process. The gateway is OpenAI-compatible, so
+    # LiteLLM's OpenRouter transport reaches it by overriding api_base/api_key.
+    # Billing is settled server-side by the gateway, so ``_safe_deduct_credits``
+    # skips these calls (see its guard) to avoid double-charging.
+    if (
+        _llm_gateway_active()
+        and model.startswith(_OPENROUTER_MODEL_PREFIX)
+        and kw.get("api_base") is None
+    ):
+        kw["api_base"] = _llm_gateway_base()
+        kw["api_key"] = _llm_gateway_key()
+
+    # Anthropic is brokered too, but over its own protocol rather than the
+    # OpenAI-compatible one: Anthropic publishes no OpenAI-shaped surface, so
+    # the gateway proxies Messages API bytes and this transport must address
+    # that route directly. LiteLLM uses ``api_base`` verbatim for this
+    # provider, so the full path is set here rather than a host to append to.
+    #
+    # The key goes in two places on purpose. LiteLLM sends ``api_key`` as
+    # Anthropic's ``x-api-key``, but the gateway is Orchestra and authenticates
+    # on ``Authorization: Bearer`` like its every other route; sending only the
+    # former would reach the route unauthenticated. The gateway discards both
+    # and substitutes the real provider credential regardless.
+    if _llm_gateway_active() and provider == "anthropic" and kw.get("api_base") is None:
+        gateway_key = _llm_gateway_key()
+        kw["api_base"] = f"{_llm_gateway_base()}/anthropic/v1/messages"
+        kw["api_key"] = gateway_key
+        headers = dict(kw.get("extra_headers") or {})
+        headers.setdefault("Authorization", f"Bearer {gateway_key}")
+        kw["extra_headers"] = headers
+
     if (
         provider == "minimax"
         and kw.get("api_base") is None
@@ -477,6 +604,7 @@ def _prepare_provider_request_kw(
         kw["api_base"] = "https://api.minimax.io/v1"
 
     _apply_openrouter_hard_provider_pin(kw, model)
+    _request_openrouter_usage_accounting(kw, model)
 
     if provider == "xiaomi-mimo" and kw.get("api_base") is None:
         if not model.startswith(_OPENROUTER_MODEL_PREFIX):
@@ -1981,7 +2109,7 @@ class AsyncUnify(_UniClient):
                     _provider_cost_from_stream_usage(accounting_model, usage_info)
                 )
                 if provider_cost is not None and provider_cost > 0:
-                    asyncio.create_task(
+                    _spawn_deduction(
                         asyncio.to_thread(
                             _safe_deduct_credits,
                             provider_cost,
@@ -2078,7 +2206,7 @@ class AsyncUnify(_UniClient):
             accounting_model = _canonical_model_for_accounting(retry_kw.get("model"))
             cost = compute_cost_from_response(accounting_model, completion)
             if cost is not None and cost > 0:
-                asyncio.create_task(
+                _spawn_deduction(
                     asyncio.to_thread(
                         _safe_deduct_credits,
                         cost,
@@ -2355,7 +2483,7 @@ class AsyncUnify(_UniClient):
 
         # Deduct credits for cache misses (use the already-computed cost)
         if provider_cost is not None and provider_cost > 0:
-            asyncio.create_task(
+            _spawn_deduction(
                 asyncio.to_thread(
                     _safe_deduct_credits,
                     provider_cost,
