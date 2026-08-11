@@ -25,12 +25,20 @@ def _enable_gateway(monkeypatch, url=_GATEWAY + "/", key="unify-key"):
 
 class TestGatewayRouting:
     def test_inactive_by_default(self, monkeypatch):
+        """With no gateway configured the call goes straight to the provider.
+
+        ``api_key`` is no longer proof of redirection: the provider credential
+        travels with every request now, so the gateway is distinguished by
+        ``api_base`` and by the key being the provider's rather than the
+        gateway's.
+        """
         monkeypatch.delenv("UNILLM_LLM_GATEWAY_URL", raising=False)
+        monkeypatch.setenv("UNIFY_KEY", "unify-key")
         assert _llm_gateway_active() is False
         kw = {"model": "openrouter/openai/gpt-5.6-sol"}
         _prepare_provider_request_kw(kw=kw, provider="openrouter", stream=False)
         assert kw.get("api_base") is None
-        assert kw.get("api_key") is None
+        assert kw.get("api_key") != "unify-key"
 
     def test_active_requires_both_url_and_key(self, monkeypatch):
         monkeypatch.setenv("UNILLM_LLM_GATEWAY_URL", _GATEWAY)
