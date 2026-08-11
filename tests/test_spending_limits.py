@@ -607,3 +607,42 @@ class TestLimitBoundary:
 
         assert response.allowed is True
         assert response.percent_used == pytest.approx(99.99, rel=0.01)
+
+
+class TestEveryUsableEndpointNamesItsProvider:
+    """The invariant Unify's payment gate is total because of.
+
+    ``unify.spending_limits`` refuses a gated provider by matching the
+    endpoint's vendor prefix and its trailing ``@provider`` route. Both are
+    read off the endpoint string, so the gate can only be complete if an
+    endpoint that names neither cannot reach a provider in the first place.
+
+    It cannot: an alias is registered as ``model@provider``, so a bare model
+    name resolves to nothing and is rejected before any credential is used.
+    That is what makes "no ``@``" a non-case for the gate rather than a hole
+    in it. A default-provider fallback added here would silently reopen one,
+    which is why this is pinned in UniLLM rather than assumed by Unify.
+    """
+
+    def test_a_bare_model_name_resolves_to_nothing(self):
+        from unillm.endpoints.utils import get_model_alias
+
+        with pytest.raises(ValueError, match="not found"):
+            get_model_alias("claude-fable-5")
+
+    def test_a_bare_model_name_cannot_construct_a_client(self):
+        """Rejected at construction, so no call is ever dispatched unmetered."""
+        import unillm
+
+        with pytest.raises(ValueError, match="not found"):
+            unillm.AsyncUnify("claude-fable-5", api_key="unused")
+
+    def test_both_routes_to_a_vendor_keep_the_vendor_visible(self):
+        """Neither form can reach Anthropic without saying so in the string."""
+        from unillm.endpoints.utils import get_model_alias
+
+        assert get_model_alias("claude-fable-5@anthropic") == "anthropic/claude-fable-5"
+        assert (
+            get_model_alias("anthropic/claude-opus-4.8@openrouter")
+            == "openrouter/anthropic/claude-opus-4.8"
+        )
