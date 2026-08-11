@@ -146,6 +146,36 @@ def _apply_openrouter_hard_provider_pin(kw: dict, model: str) -> None:
     kw["extra_body"] = extra_body
 
 
+def _pass_provider_credential_explicitly(kw: dict, model: str, provider: str) -> None:
+    """Send the provider credential with the request instead of via the env.
+
+    LiteLLM falls back to reading provider credentials from ``os.environ`` at
+    call time. That forces the credential to stay readable in the process for
+    as long as any call might happen, which is indefinitely — and a host that
+    also runs untrusted code in that process cannot then withhold it without
+    breaking inference already in flight.
+
+    The value is taken from settings captured at import, so passing it here
+    makes the call self-contained and lets a host scrub the environment. Only
+    credentials the settings actually carry are set, and never over one a
+    caller (or the gateway path) has already chosen, so an unrecognised
+    provider keeps LiteLLM's own resolution untouched.
+    """
+    if kw.get("api_key"):
+        return
+    from unillm.settings import SETTINGS
+
+    if model.startswith(_OPENROUTER_MODEL_PREFIX):
+        secret = SETTINGS.OPENROUTER_API_KEY
+    elif provider == "anthropic":
+        secret = SETTINGS.ANTHROPIC_API_KEY
+    else:
+        return
+    value = secret.get_secret_value() if secret is not None else ""
+    if value:
+        kw["api_key"] = value
+
+
 def _request_openrouter_usage_accounting(kw: dict, model: str) -> None:
     """Ask OpenRouter to report the authoritative charged cost of a generation.
 
@@ -605,6 +635,9 @@ def _prepare_provider_request_kw(
 
     _apply_openrouter_hard_provider_pin(kw, model)
     _request_openrouter_usage_accounting(kw, model)
+    # After the gateway branches above, so a brokered call keeps the gateway's
+    # own credential rather than the provider one.
+    _pass_provider_credential_explicitly(kw, model, provider)
 
     if provider == "xiaomi-mimo" and kw.get("api_base") is None:
         if not model.startswith(_OPENROUTER_MODEL_PREFIX):
