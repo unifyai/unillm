@@ -1,9 +1,12 @@
 """Cost computation using LiteLLM's pricing data."""
 
+import logging
 import re
 from typing import Optional, Union
 
 import litellm
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _normalize_model_name(model: str) -> str:
@@ -299,7 +302,17 @@ def compute_cost_from_response(
             cached_tokens=cached_tokens,
         )
     except ValueError:
-        # Model not in LiteLLM's pricing database - skip cost tracking
+        # The generation consumed tokens and the provider charged for it, so an
+        # absent price is a gap in accounting rather than a free call. Callers
+        # treat ``None`` as "nothing to record", which would silently write off
+        # real spend, so make the omission loud enough to be noticed and fixed.
+        _LOGGER.error(
+            "No pricing available for %r; %d prompt and %d completion tokens "
+            "were charged by the provider but cannot be costed.",
+            model,
+            prompt_tokens,
+            completion_tokens,
+        )
         return None
 
 
