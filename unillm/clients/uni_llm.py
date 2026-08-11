@@ -146,6 +146,36 @@ def _apply_openrouter_hard_provider_pin(kw: dict, model: str) -> None:
     kw["extra_body"] = extra_body
 
 
+def _pass_provider_credential_explicitly(kw: dict, model: str, provider: str) -> None:
+    """Send the provider credential with the request instead of via the env.
+
+    LiteLLM falls back to reading provider credentials from ``os.environ`` at
+    call time. That forces the credential to stay readable in the process for
+    as long as any call might happen, which is indefinitely — and a host that
+    also runs untrusted code in that process cannot then withhold it without
+    breaking inference already in flight.
+
+    The value is taken from settings captured at import, so passing it here
+    makes the call self-contained and lets a host scrub the environment. Only
+    credentials the settings actually carry are set, and never over one a
+    caller (or the gateway path) has already chosen, so an unrecognised
+    provider keeps LiteLLM's own resolution untouched.
+    """
+    if kw.get("api_key"):
+        return
+    from unillm.settings import SETTINGS
+
+    if model.startswith(_OPENROUTER_MODEL_PREFIX):
+        secret = SETTINGS.OPENROUTER_API_KEY
+    elif provider == "anthropic":
+        secret = SETTINGS.ANTHROPIC_API_KEY
+    else:
+        return
+    value = secret.get_secret_value() if secret is not None else ""
+    if value:
+        kw["api_key"] = value
+
+
 def _request_openrouter_usage_accounting(kw: dict, model: str) -> None:
     """Ask OpenRouter to report the authoritative charged cost of a generation.
 
@@ -548,6 +578,29 @@ def _gateway_brokers_model(model: str | None) -> bool:
     )
 
 
+#: Header the broker reads to attribute a brokered call to an assistant.
+#:
+#: The direct path took this from the billing context when it deducted
+#: client-side. Gateway-routed calls skip that deduction -- the broker settles
+#: them -- so without carrying it explicitly the assistant is lost, and with it
+#: both per-assistant reporting and the per-assistant spending caps, which are
+#: enforced against exactly this id. A header rather than a body field: the
+#: body is provider-shaped and forwarded, so anything added there has to be
+#: stripped again before it reaches a provider that would reject it.
+_ASSISTANT_HEADER = "X-Unify-Assistant-Id"
+
+
+def _gateway_attribution_headers() -> dict:
+    """Attribution the broker cannot infer from the request itself."""
+    from ..billing_context import get_billing_context
+
+    ctx = get_billing_context()
+    assistant_id = getattr(ctx, "assistant_id", None)
+    if assistant_id is None:
+        return {}
+    return {_ASSISTANT_HEADER: str(assistant_id)}
+
+
 def _llm_gateway_active() -> bool:
     """Gateway routing is on only when both a base URL and an auth key exist."""
     return bool(_llm_gateway_base()) and bool(_llm_gateway_key())
@@ -576,6 +629,10 @@ def _prepare_provider_request_kw(
     ):
         kw["api_base"] = _llm_gateway_base()
         kw["api_key"] = _llm_gateway_key()
+        or_headers = dict(kw.get("extra_headers") or {})
+        or_headers.update(_gateway_attribution_headers())
+        if or_headers:
+            kw["extra_headers"] = or_headers
 
     # Anthropic is brokered too, but over its own protocol rather than the
     # OpenAI-compatible one: Anthropic publishes no OpenAI-shaped surface, so
@@ -594,6 +651,7 @@ def _prepare_provider_request_kw(
         kw["api_key"] = gateway_key
         headers = dict(kw.get("extra_headers") or {})
         headers.setdefault("Authorization", f"Bearer {gateway_key}")
+        headers.update(_gateway_attribution_headers())
         kw["extra_headers"] = headers
 
     if (
@@ -605,6 +663,9 @@ def _prepare_provider_request_kw(
 
     _apply_openrouter_hard_provider_pin(kw, model)
     _request_openrouter_usage_accounting(kw, model)
+    # After the gateway branches above, so a brokered call keeps the gateway's
+    # own credential rather than the provider one.
+    _pass_provider_credential_explicitly(kw, model, provider)
 
     if provider == "xiaomi-mimo" and kw.get("api_base") is None:
         if not model.startswith(_OPENROUTER_MODEL_PREFIX):
