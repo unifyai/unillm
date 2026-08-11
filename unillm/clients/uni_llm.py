@@ -146,6 +146,24 @@ def _apply_openrouter_hard_provider_pin(kw: dict, model: str) -> None:
     kw["extra_body"] = extra_body
 
 
+def _request_openrouter_usage_accounting(kw: dict, model: str) -> None:
+    """Ask OpenRouter to report the authoritative charged cost of a generation.
+
+    OpenRouter returns ``usage.cost`` only when a request opts in. Without it
+    the amount has to be reconstructed from local pricing data, which cannot
+    price a model that data has never seen — and a generation nobody can price
+    is still charged by the provider while the caller records nothing. Opting
+    in removes the dependency on local pricing for OpenRouter entirely.
+    """
+    if not model.startswith(_OPENROUTER_MODEL_PREFIX):
+        return
+    extra_body = dict(kw.get("extra_body") or {})
+    usage = dict(extra_body.get("usage") or {})
+    usage.setdefault("include", True)
+    extra_body["usage"] = usage
+    kw["extra_body"] = extra_body
+
+
 def _enforce_parallel_tool_call_response_limit(
     chat_completion: Any,
     parallel_tool_calls: Optional[bool],
@@ -229,7 +247,7 @@ def _bill_abandoned_call(
         if cost is None or cost <= 0:
             return
 
-        asyncio.create_task(
+        _spawn_deduction(
             asyncio.to_thread(
                 _safe_deduct_credits,
                 cost,
@@ -261,6 +279,23 @@ def _bill_abandoned_call(
         )
 
     llm_task.add_done_callback(bill)
+
+
+_INFLIGHT_DEDUCTIONS: set = set()
+
+
+def _spawn_deduction(coro, *, name: str) -> None:
+    """Run a credit deduction in the background, holding it until it finishes.
+
+    The event loop keeps only a weak reference to a task, so a deduction whose
+    handle is discarded may be garbage-collected before it ever runs — losing a
+    charge for a generation the provider has already billed. Retaining the task
+    until completion is what makes the deduction reliable rather than a
+    best-effort side effect.
+    """
+    task = asyncio.create_task(coro, name=name)
+    _INFLIGHT_DEDUCTIONS.add(task)
+    task.add_done_callback(_INFLIGHT_DEDUCTIONS.discard)
 
 
 def _safe_deduct_credits(
@@ -477,6 +512,7 @@ def _prepare_provider_request_kw(
         kw["api_base"] = "https://api.minimax.io/v1"
 
     _apply_openrouter_hard_provider_pin(kw, model)
+    _request_openrouter_usage_accounting(kw, model)
 
     if provider == "xiaomi-mimo" and kw.get("api_base") is None:
         if not model.startswith(_OPENROUTER_MODEL_PREFIX):
@@ -1981,7 +2017,7 @@ class AsyncUnify(_UniClient):
                     _provider_cost_from_stream_usage(accounting_model, usage_info)
                 )
                 if provider_cost is not None and provider_cost > 0:
-                    asyncio.create_task(
+                    _spawn_deduction(
                         asyncio.to_thread(
                             _safe_deduct_credits,
                             provider_cost,
@@ -2078,7 +2114,7 @@ class AsyncUnify(_UniClient):
             accounting_model = _canonical_model_for_accounting(retry_kw.get("model"))
             cost = compute_cost_from_response(accounting_model, completion)
             if cost is not None and cost > 0:
-                asyncio.create_task(
+                _spawn_deduction(
                     asyncio.to_thread(
                         _safe_deduct_credits,
                         cost,
@@ -2355,7 +2391,7 @@ class AsyncUnify(_UniClient):
 
         # Deduct credits for cache misses (use the already-computed cost)
         if provider_cost is not None and provider_cost > 0:
-            asyncio.create_task(
+            _spawn_deduction(
                 asyncio.to_thread(
                     _safe_deduct_credits,
                     provider_cost,
