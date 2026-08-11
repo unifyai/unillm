@@ -52,9 +52,9 @@ def _ensure_openrouter_model_registered(model_id: str) -> None:
 
     if model_id in _OPENROUTER_REGISTERED:
         return
-    _OPENROUTER_REGISTERED.add(model_id)
     try:
         if litellm.get_model_info(openrouter_model(model_id)):
+            _OPENROUTER_REGISTERED.add(model_id)
             return
     except Exception:
         # Unknown to LiteLLM, which is precisely the case worth filling in.
@@ -65,6 +65,13 @@ def _ensure_openrouter_model_registered(model_id: str) -> None:
     info = catalog_pricing_as_litellm_info(model_id)
     if info is not None:
         register_openrouter_model_info({model_id: info})
+        _OPENROUTER_REGISTERED.add(model_id)
+        return
+    # Reaching here means the catalog could not describe the id — either it
+    # genuinely lists no such model, or the snapshot was unavailable. Only the
+    # second case is worth retrying, and the two are indistinguishable here, so
+    # leave the id unmemoised: repeating a cheap lookup is far better than
+    # pinning a model to "unpriceable" for the remaining life of the process.
 
 
 def _openrouter_aliases(endpoint: str) -> tuple[str, str]:
