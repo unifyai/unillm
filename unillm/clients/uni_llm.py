@@ -578,6 +578,29 @@ def _gateway_brokers_model(model: str | None) -> bool:
     )
 
 
+#: Header the broker reads to attribute a brokered call to an assistant.
+#:
+#: The direct path took this from the billing context when it deducted
+#: client-side. Gateway-routed calls skip that deduction -- the broker settles
+#: them -- so without carrying it explicitly the assistant is lost, and with it
+#: both per-assistant reporting and the per-assistant spending caps, which are
+#: enforced against exactly this id. A header rather than a body field: the
+#: body is provider-shaped and forwarded, so anything added there has to be
+#: stripped again before it reaches a provider that would reject it.
+_ASSISTANT_HEADER = "X-Unify-Assistant-Id"
+
+
+def _gateway_attribution_headers() -> dict:
+    """Attribution the broker cannot infer from the request itself."""
+    from ..billing_context import get_billing_context
+
+    ctx = get_billing_context()
+    assistant_id = getattr(ctx, "assistant_id", None)
+    if assistant_id is None:
+        return {}
+    return {_ASSISTANT_HEADER: str(assistant_id)}
+
+
 def _llm_gateway_active() -> bool:
     """Gateway routing is on only when both a base URL and an auth key exist."""
     return bool(_llm_gateway_base()) and bool(_llm_gateway_key())
@@ -606,6 +629,10 @@ def _prepare_provider_request_kw(
     ):
         kw["api_base"] = _llm_gateway_base()
         kw["api_key"] = _llm_gateway_key()
+        or_headers = dict(kw.get("extra_headers") or {})
+        or_headers.update(_gateway_attribution_headers())
+        if or_headers:
+            kw["extra_headers"] = or_headers
 
     # Anthropic is brokered too, but over its own protocol rather than the
     # OpenAI-compatible one: Anthropic publishes no OpenAI-shaped surface, so
@@ -624,6 +651,7 @@ def _prepare_provider_request_kw(
         kw["api_key"] = gateway_key
         headers = dict(kw.get("extra_headers") or {})
         headers.setdefault("Authorization", f"Bearer {gateway_key}")
+        headers.update(_gateway_attribution_headers())
         kw["extra_headers"] = headers
 
     if (
