@@ -18,6 +18,7 @@ from .local_cache import LocalCache
 from .local_separate_cache import LocalSeparateCache
 from .cache_benchmark import CacheStats, get_cache_stats
 from ._caching import (
+    CacheMissError,
     _get_cache,
     _write_to_cache,
     is_caching_enabled,
@@ -28,6 +29,7 @@ from ._caching import (
 
 __all__ = [
     "BaseCache",
+    "CacheMissError",
     "CANON_VERSION",
     "canonical_digest",
     "canonical_digest_of_raw_key",
