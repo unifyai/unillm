@@ -10,6 +10,7 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 
 from unillm.caching import (
+    CacheMissError,
     LocalCache,
     LocalSeparateCache,
     BaseCache,
@@ -547,7 +548,7 @@ class TestNdjsonIndexedStore:
                 value='"hit"',
                 res_types=None,
             )
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(CacheMissError) as exc_info:
                 _get_cache(
                     fn_name="completion",
                     kw={
@@ -556,10 +557,9 @@ class TestNdjsonIndexedStore:
                     },
                     raise_on_empty=True,
                 )
-            assert exc_info.value.__cause__ is not None
-            cause = str(exc_info.value.__cause__)
-            assert "Key was not found in the cache" in cause
-            assert "closest match" not in cause
+            message = str(exc_info.value)
+            assert "Key was not found in the cache" in message
+            assert "closest match" not in message
 
 
 class TestLocalSeparateIndexedRead:

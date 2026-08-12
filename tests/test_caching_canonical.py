@@ -7,6 +7,7 @@ import tempfile
 import pytest
 
 from unillm.caching import (
+    CacheMissError,
     LocalSeparateCache,
     _get_cache,
     _write_to_cache,
@@ -317,14 +318,14 @@ class TestGetCacheKeying:
     def test_canonical_read_only_raises_on_genuine_miss(self):
         with _CacheHandler():
             _write_to_cache("fn", _kw("recorded prompt"), "answer")
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(CacheMissError) as exc_info:
                 _get_cache(
                     fn_name="fn",
                     kw=_kw("a genuinely different prompt"),
                     raise_on_empty=True,
                     keying="canonical",
                 )
-            assert "Key was not found in the cache" in str(exc_info.value.__cause__)
+            assert "Key was not found in the cache" in str(exc_info.value)
 
     def test_keying_defaults_to_settings(self, monkeypatch):
         from unillm.settings import SETTINGS
