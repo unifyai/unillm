@@ -37,6 +37,16 @@ def _cache_key_kwargs(kw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+class CacheMissError(Exception):
+    """A read-only cache lookup found no entry for the request.
+
+    Raised instead of a bare ``Exception`` so callers replaying a recorded
+    session can distinguish "this step was never recorded" from a genuine
+    cache-layer failure and react (e.g. a tool loop treating the step as an
+    unanswered in-flight call that a later event supersedes).
+    """
+
+
 # Global state
 CACHE_LOCK = threading.Lock()
 CACHING_ENABLED = False
@@ -137,7 +147,7 @@ def _get_cache(
                     hit_kind = "canonical"
         if hit_kind is None:
             if raise_on_empty:
-                raise Exception(
+                raise CacheMissError(
                     f"Failed to get cache for function {fn_name} with kwargs "
                     f"{BaseCache.serialize_object(kw, indent=4)} "
                     f"from cache at {filename}. Key was not found in the cache.",
@@ -166,6 +176,8 @@ def _get_cache(
                     break
                 item = item[idx]
         return ret, hit_kind
+    except CacheMissError:
+        raise
     except Exception as e:
         raise Exception(
             f"Failed to get cache for function {fn_name} with kwargs {kw} "
