@@ -29,6 +29,10 @@ jobs:
     runs-on: ubuntu-latest-8-cores
     if: github.event_name == 'workflow_dispatch' || github.head_ref == 'staging'
     timeout-minutes: 120
+    # Internal-mode secrets live in the unify-testing environment (per-repo
+    # scoping since the SOC2 org-secret tightening; see the matching comment
+    # in tests.yml for the full story and the secrets to populate).
+    environment: unify-testing
     # actions:read lets the cross-branch cache hydrate step list and download
     # the llm-cache-refresh artifact; contents:read is for checkout.
     permissions:
@@ -39,19 +43,29 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # Detect whether internal secrets are available (org CI vs external fork)
+    # Detect whether the full internal secret set is available (org CI vs
+    # external fork). CLONE_TOKEN alone is not enough: internal mode also
+    # authenticates to GCP and seeds Orchestra, so a repo that has
+    # CLONE_TOKEN but not the other secrets must run in external mode
+    # rather than fail at the GCP auth step.
     - name: Check internal secrets
       id: secrets-check
       run: |
-        if [ -n "$CLONE_TOKEN" ]; then
+        missing=""
+        [ -z "$CLONE_TOKEN" ] && missing="$missing CLONE_TOKEN"
+        [ -z "$GCP_SERVICE_ACCOUNT_JSON" ] && missing="$missing GCP_SERVICE_ACCOUNT_JSON"
+        [ -z "$UNIFY_KEY" ] && missing="$missing UNIFY_KEY"
+        if [ -z "$missing" ]; then
           echo "has_internal=true" >> $GITHUB_OUTPUT
           echo "Running in internal mode (Orchestra + GCP available)"
         else
           echo "has_internal=false" >> $GITHUB_OUTPUT
-          echo "Running in external mode (no Orchestra, using production API fallback)"
+          echo "Running in external mode (no Orchestra, using production API fallback); missing:$missing"
         fi
       env:
         CLONE_TOKEN: ${{ secrets.CLONE_TOKEN }}
+        GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+        UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
 
     # --- Internal-only: Clone and set up Orchestra ---
 
