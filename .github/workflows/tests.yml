@@ -421,7 +421,7 @@ jobs:
     # Upload cache diff artifact (new entries from this run)
     - name: Upload cache artifact
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: cache-diff-${{ github.run_id }}
         path: .cache_write.ndjson
@@ -487,7 +487,7 @@ jobs:
 
     - name: Upload logs
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: logs-${{ github.run_id }}
         path: logs/
