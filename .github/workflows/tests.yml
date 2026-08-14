@@ -1,10 +1,11 @@
 # CI for unillm
 #
 # Two modes:
-#   Internal (CLONE_TOKEN available): Clones Orchestra, starts a local server,
-#     and runs tests against it. Full observability (GCP, OTel, logs).
-#   External (no CLONE_TOKEN): Tests run without a local Orchestra. Credit
-#     deduction falls back to the production API (or silently warns if no
+#   Internal (CLONE_TOKEN, GCP_SERVICE_ACCOUNT_JSON and UNIFY_KEY all
+#     available): Clones Orchestra, starts a local server, and runs tests
+#     against it. Full observability (GCP, OTel, logs).
+#   External (any of the above missing): Tests run without a local Orchestra.
+#     Credit deduction falls back to the production API (or silently warns if no
 #     UNIFY_KEY). External contributors can rely on cached responses; cache refresh
 #     needs OPENROUTER_API_KEY and ANTHROPIC_API_KEY in the llm-cache-refresh env.
 
@@ -119,6 +120,16 @@ jobs:
     needs: should-run-tests
     if: needs.should-run-tests.outputs.run_tests == 'true'
     timeout-minutes: 120
+    # Internal-mode secrets are scoped per repo since the SOC2 org-secret
+    # tightening (visibility "all" -> "private" cut public repos off from
+    # inherited org secrets). Sibling repos hold them in a testing
+    # environment (unisdk: unify-testing, unify: unity-testing); this job
+    # uses the same shape. Populating GCP_SERVICE_ACCOUNT_JSON and UNIFY_KEY
+    # in this repo's unify-testing environment (manually, via GitHub UI --
+    # write-only, never in source) is all that is needed to enable internal
+    # mode; until then the secrets-check gate below routes the job through
+    # external mode.
+    environment: unify-testing
     # actions:read lets the cross-branch cache hydrate step list and download
     # the llm-cache-refresh artifact; contents:read is for checkout.
     permissions:
@@ -129,19 +140,29 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # Detect whether internal secrets are available (org CI vs external fork)
+    # Detect whether the full internal secret set is available (org CI vs
+    # external fork). CLONE_TOKEN alone is not enough: internal mode also
+    # authenticates to GCP and seeds Orchestra, so a repo that has
+    # CLONE_TOKEN but not the other secrets must run in external mode
+    # rather than fail at the GCP auth step.
     - name: Check internal secrets
       id: secrets-check
       run: |
-        if [ -n "$CLONE_TOKEN" ]; then
+        missing=""
+        [ -z "$CLONE_TOKEN" ] && missing="$missing CLONE_TOKEN"
+        [ -z "$GCP_SERVICE_ACCOUNT_JSON" ] && missing="$missing GCP_SERVICE_ACCOUNT_JSON"
+        [ -z "$UNIFY_KEY" ] && missing="$missing UNIFY_KEY"
+        if [ -z "$missing" ]; then
           echo "has_internal=true" >> $GITHUB_OUTPUT
           echo "Running in internal mode (Orchestra + GCP available)"
         else
           echo "has_internal=false" >> $GITHUB_OUTPUT
-          echo "Running in external mode (no Orchestra, using production API fallback)"
+          echo "Running in external mode (no Orchestra, using production API fallback); missing:$missing"
         fi
       env:
         CLONE_TOKEN: ${{ secrets.CLONE_TOKEN }}
+        GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+        UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
 
     # --- Internal-only: Clone and set up Orchestra ---
 
