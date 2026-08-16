@@ -111,7 +111,7 @@ jobs:
     # Runs in seed mode too, so the seed merges onto the existing store instead
     # of replacing it.
     - name: Restore LLM cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -158,7 +158,7 @@ jobs:
     # shadow that store for every later run.
     - name: Store consolidated cache
       if: steps.consolidate.outputs.publish == 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}

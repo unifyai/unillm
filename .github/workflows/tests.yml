@@ -222,7 +222,7 @@ jobs:
         pip install poetry
 
     - name: Cache uv dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cache/uv
@@ -233,7 +233,7 @@ jobs:
 
     - name: Cache poetry dependencies
       if: steps.secrets-check.outputs.has_internal == 'true'
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.cache/pypoetry
         key: poetry-${{ runner.os }}-orchestra-${{ steps.orchestra-sha.outputs.sha }}
@@ -243,7 +243,7 @@ jobs:
     # Restore LLM response cache (.cache.ndjson)
     - name: Restore LLM cache
       id: cache-restore
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -515,7 +515,7 @@ jobs:
 
     - name: Restore existing consolidated cache
       id: cache-restore
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -553,7 +553,7 @@ jobs:
     # shadow that store for every later run.
     - name: Store consolidated cache
       if: steps.consolidate.outputs.publish == 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
