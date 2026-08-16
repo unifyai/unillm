@@ -95,7 +95,7 @@ jobs:
   black:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -138,7 +138,7 @@ jobs:
     env:
       LOGS_DIR: ${{ github.workspace }}/logs
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     # Detect whether the full internal secret set is available (org CI vs
     # external fork). The clone App's key alone is not enough: internal mode
@@ -181,7 +181,7 @@ jobs:
 
     - name: Clone orchestra repo for local deployment
       if: steps.secrets-check.outputs.has_internal == 'true'
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         repository: unifyai/orchestra
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
@@ -511,7 +511,7 @@ jobs:
     needs: [should-run-tests, pytest-run]
     if: always() && needs.should-run-tests.outputs.run_tests == 'true'
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Restore existing consolidated cache
       id: cache-restore

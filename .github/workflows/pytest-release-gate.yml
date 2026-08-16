@@ -42,7 +42,7 @@ jobs:
     env:
       LOGS_DIR: ${{ github.workspace }}/logs
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     # The release gate exists to exercise the Orchestra integration, so the
     # full internal secret set is mandatory: the clone App's key reaches
@@ -97,7 +97,7 @@ jobs:
         repositories: orchestra
 
     - name: Clone orchestra repo for local deployment
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         repository: unifyai/orchestra
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
