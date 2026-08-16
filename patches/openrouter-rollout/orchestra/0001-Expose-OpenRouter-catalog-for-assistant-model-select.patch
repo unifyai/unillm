@@ -348,7 +348,7 @@ index e311bee5..e19543e5 100644
 +        if o["model"] == "openai/gpt-5.6-luna@openrouter" and o["reasoning_effort"] == "high"
      )
      assert terra_high > luna_high
- 
+
 @@ -196,7 +196,7 @@ async def test_update_default_model(client: AsyncClient, mock_assistant_infra_ca
      patch_resp = await client.patch(
          f"/v0/assistant/{aid}/config",
@@ -419,18 +419,18 @@ index 0a4f3c63..5f305515 100644
 @@ -29,12 +29,12 @@ from __future__ import annotations
  from dataclasses import dataclass, replace
  from typing import Literal, Optional, Tuple
- 
+
 -PLATFORM_DEFAULT_MODEL = "gpt-5.6-sol@openai"
 +PLATFORM_DEFAULT_MODEL = "openai/gpt-5.6-sol@openrouter"
  PLATFORM_DEFAULT_REASONING_EFFORT = "high"
  PLATFORM_DEFAULT_DISPLAY_NAME = "GPT-5.6 Sol"
- 
- # Matches Unify's UNITY_CONVERSATION_SLOW_BRAIN_* defaults.
+
+ # Matches Unify's UNIFY_CONVERSATION_SLOW_BRAIN_* defaults.
 -PLATFORM_SLOW_BRAIN_MODEL = "gpt-5.6-terra@openai"
 +PLATFORM_SLOW_BRAIN_MODEL = "openai/gpt-5.6-terra@openrouter"
  PLATFORM_SLOW_BRAIN_DISPLAY_NAME = "GPT-5.6 Terra"
  PLATFORM_SLOW_BRAIN_REASONING_EFFORT = "high"
- 
+
 @@ -166,7 +166,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
          aa_slug="gemini-3-1-pro-preview",
      ),
@@ -515,7 +515,7 @@ index 0a4f3c63..5f305515 100644
 @@ -385,6 +385,8 @@ _VALID_PAIRS = {
      if option.model is not None
  }
- 
+
 +_VALID_EFFORTS = {None, "low", "medium", "high"}
 +
  # Terra high — used for the slow-brain system-default credit display.
@@ -556,26 +556,26 @@ index 0a4f3c63..5f305515 100644
 +    if reasoning_effort is not None and not info.get("supports_reasoning"):
 +        return False
 +    return True
- 
+
 -    return (model, reasoning_effort) in _VALID_PAIRS
- 
+
 +def is_valid_slow_brain_model(
 +    model: str,
 +    reasoning_effort: Optional[str],
 +) -> bool:
 +    """Slow brain shares the multimodal catalog; tools are not required."""
- 
+
 -# Alias: slow brain uses the same curated pairs as the actor default.
 -is_valid_slow_brain_model = is_valid_default_model
 +    return is_valid_default_model(model, reasoning_effort, require_tools=False)
- 
- 
+
+
  def list_model_options(
      usage: Literal["actor", "slow_brain"] = "actor",
  ) -> Tuple[DefaultModelOption, ...]:
 -    """Return catalog options, with the system-default row labeled for ``usage``."""
 +    """Return curated recommended options, labeled for ``usage``."""
- 
+
      if usage == "actor":
          return DEFAULT_MODEL_OPTIONS
 diff --git a/orchestra/web/api/assistant/schema.py b/orchestra/web/api/assistant/schema.py
@@ -700,8 +700,8 @@ index ba17fe16..1afdee5e 100644
 +        None,
 +        description="Whether reasoning_effort may be set for this model.",
      )
- 
- 
+
+
 diff --git a/orchestra/web/api/assistant/views.py b/orchestra/web/api/assistant/views.py
 index 1f46998e..6327e223 100644
 --- a/orchestra/web/api/assistant/views.py
@@ -729,8 +729,8 @@ index 1f46998e..6327e223 100644
              for option in list_model_options(usage)
          ],
      )
- 
- 
+
+
 +@router.get(
 +    "/assistant/default-model-options/search",
 +    response_model=InfoResponse[List[DefaultModelOptionRead]],
@@ -786,13 +786,12 @@ index ebcf2a1b..0d054973 100644
 +++ b/orchestra/web/api/plot/llm_inference.py
 @@ -379,7 +379,7 @@ async def infer_plot_config(
      )
- 
+
      payload = {
 -        "model": "gpt-4o-mini@openai",
 +        "model": "openai/gpt-4o-mini@openrouter",
          "messages": [
              {"role": "system", "content": SYSTEM_PROMPT},
              {"role": "user", "content": user_prompt},
--- 
+--
 2.43.0
-

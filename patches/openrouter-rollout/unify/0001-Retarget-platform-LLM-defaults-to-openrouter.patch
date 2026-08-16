@@ -33,12 +33,12 @@ index 2238569e0..4d4c2b49b 100644
 @@ -24,7 +24,7 @@ def test_default_profile_uses_actor_model():
  def test_gpt_5_5_high_profile_uses_openai_high_effort():
      profile = resolve_act_llm_profile(GPT_5_5_HIGH_ACT_LLM_PROFILE)
- 
+
 -    assert profile.model == "gpt-5.5@openai"
 +    assert profile.model == "openai/gpt-5.5@openrouter"
      assert profile.reasoning_effort == "high"
      assert profile.client_kwargs == {"reasoning_effort": "high"}
- 
+
 @@ -45,8 +45,8 @@ def test_profile_docs_are_curated_and_include_relative_prices():
      }
      assert "roughly 17x the MiniMax input-token rate" in docs
@@ -47,8 +47,8 @@ index 2238569e0..4d4c2b49b 100644
 -    assert "gpt-5.6-sol@openai" in docs
 +    assert "openai/gpt-5.5@openrouter" in docs
 +    assert "openai/gpt-5.6-sol@openrouter" in docs
- 
- 
+
+
  def test_profile_context_is_scoped():
 diff --git a/tests/common/test_llm_client.py b/tests/common/test_llm_client.py
 index 56c2df1f3..398741883 100644
@@ -64,8 +64,8 @@ index 56c2df1f3..398741883 100644
              stateful=False,
              origin="ConversationManager",
 @@ -83,12 +83,12 @@ def test_new_slow_brain_llm_client_uses_terra_high_by_default() -> None:
- 
- 
+
+
  def test_new_slow_brain_llm_client_uses_assistant_slow_brain() -> None:
 -    SESSION_DETAILS.assistant.slow_brain_model = "gpt-5.6-luna@openai"
 +    SESSION_DETAILS.assistant.slow_brain_model = "openai/gpt-5.6-luna@openrouter"
@@ -79,7 +79,7 @@ index 56c2df1f3..398741883 100644
              stateful=False,
              origin="ConversationManager",
 @@ -97,12 +97,12 @@ def test_new_slow_brain_llm_client_uses_assistant_slow_brain() -> None:
- 
+
  def test_new_llm_client_uses_assistant_default_model_and_effort() -> None:
      """The assistant default pins model and overrides call-site effort."""
 -    SESSION_DETAILS.assistant.default_model = "gpt-5.5@openai"
@@ -94,7 +94,7 @@ index 56c2df1f3..398741883 100644
              stateful=False,
              origin=None,
 @@ -125,7 +125,7 @@ def test_new_llm_client_without_effort_keeps_call_site_effort() -> None:
- 
+
  def test_new_llm_client_explicit_model_bypasses_assistant_default() -> None:
      """Call sites pinning a model (fast brain, profiles) are untouched."""
 -    SESSION_DETAILS.assistant.default_model = "gpt-5.5@openai"
@@ -114,7 +114,7 @@ index 2bedea736..67148482c 100644
 +        assert field_info.default == "openai/gpt-5.6-sol@openrouter"
          effort = ProductionSettings.model_fields["UNIFY_REASONING_EFFORT"]
          assert effort.default == "high"
- 
+
 @@ -27,6 +27,7 @@ class TestLLMProviderValidation:
              OPENAI_API_KEY="",
              ANTHROPIC_API_KEY="",
@@ -134,14 +134,14 @@ index 2bedea736..67148482c 100644
 +    def test_validation_passes_when_openrouter_credential_provided(self):
 +        """Validation accepts OpenRouter for *@openrouter platform defaults."""
 +        settings = ProductionSettings(
-+            UNITY_VALIDATE_LLM_PROVIDERS=True,
++            UNIFY_VALIDATE_LLM_PROVIDERS=True,
 +            OPENAI_API_KEY="",
 +            ANTHROPIC_API_KEY="",
 +            DEEPSEEK_API_KEY="",
 +            OPENROUTER_API_KEY="sk-or-test",
          )
          settings.validate_llm_providers()
- 
+
 @@ -51,6 +64,7 @@ class TestLLMProviderValidation:
              OPENAI_API_KEY="",
              ANTHROPIC_API_KEY="",
@@ -149,7 +149,7 @@ index 2bedea736..67148482c 100644
 +            OPENROUTER_API_KEY="",
          )
          settings.validate_llm_providers()
- 
+
 @@ -61,6 +75,7 @@ class TestLLMProviderValidation:
              OPENAI_API_KEY="sk-test-openai",
              ANTHROPIC_API_KEY="sk-ant-test",
@@ -171,14 +171,14 @@ index c46fce1f2..b24a1690b 100644
 --- a/tests/conversation_manager/actions/integration/conftest.py
 +++ b/tests/conversation_manager/actions/integration/conftest.py
 @@ -64,7 +64,7 @@ def pytest_configure(config) -> None:
-     os.environ["UNITY_WEB_ENABLED"] = "false"
-     os.environ["UNITY_MEMORY_ENABLED"] = "false"
- 
+     os.environ["UNIFY_WEB_ENABLED"] = "false"
+     os.environ["UNIFY_MEMORY_ENABLED"] = "false"
+
 -    # Production actor/model defaults (gpt-5.6-sol@openai) come from SETTINGS.
 +    # Production actor/model defaults (openai/gpt-5.6-sol@openrouter) come from SETTINGS.
- 
+
      # Ensure NEW marker comparisons are stable in tests.
-     os.environ.setdefault("UNITY_INCREMENTING_TIMESTAMPS", "true")
+     os.environ.setdefault("UNIFY_INCREMENTING_TIMESTAMPS", "true")
 diff --git a/tests/conversation_manager/actions/test_persist_action.py b/tests/conversation_manager/actions/test_persist_action.py
 index 20ab2a3df..d2f38211f 100644
 --- a/tests/conversation_manager/actions/test_persist_action.py
@@ -190,7 +190,7 @@ index 20ab2a3df..d2f38211f 100644
 -        assert "gpt-5.6-sol@openai" in description
 +        assert "openai/gpt-5.6-sol@openrouter" in description
          assert "high reasoning effort" in description
- 
+
      @pytest.mark.asyncio
 diff --git a/tests/conversation_manager/core/test_coordinator_product_literacy_eval.py b/tests/conversation_manager/core/test_coordinator_product_literacy_eval.py
 index c3de0e8a0..dd6da182c 100644
@@ -198,13 +198,13 @@ index c3de0e8a0..dd6da182c 100644
 +++ b/tests/conversation_manager/core/test_coordinator_product_literacy_eval.py
 @@ -43,7 +43,7 @@ _ACCESSIBLE_ORGANIZATIONS = [
  ]
- 
+
  _PRIMARY_LLM_CONFIG = {
 -    "model": "gpt-5.5@openai",
 +    "model": "openai/gpt-5.5@openrouter",
      "reasoning_effort": "high",
  }
- 
+
 diff --git a/unify/actor/base.py b/unify/actor/base.py
 index ab86033bf..5e96db331 100644
 --- a/unify/actor/base.py
@@ -329,7 +329,7 @@ index fe3a6bfbd..d792c4246 100644
 --- a/unify/conversation_manager/livekit_unify_adapter.py
 +++ b/unify/conversation_manager/livekit_unify_adapter.py
 @@ -47,7 +47,7 @@ class UnifyLLM(llm.LLM):
- 
+
      def __init__(
          self,
 -        model: str = "gpt-5.4-mini@openai",
@@ -344,7 +344,7 @@ index f57e4d368..d6ee9381b 100644
 @@ -59,9 +59,9 @@ class ConversationSettings(BaseSettings):
              construction so rotating quick tunnels take effect immediately.
      """
- 
+
 -    FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
 +    FAST_BRAIN_MODEL: str = "openai/gpt-5.4-mini@openrouter"
      FAST_BRAIN_REASONING_EFFORT: str = "low"
@@ -363,7 +363,7 @@ index dbbe80d11..b5f101b67 100644
      # Default model is aligned with project preference.
 -    SUMMARY_MODEL: str = "gpt-5.2@openai"
 +    SUMMARY_MODEL: str = "openai/gpt-5.2@openrouter"
- 
+
      # Summariser token accounting / backoff
      SUMMARY_ENCODING: str = "o200k_base"
 diff --git a/unify/gateway/local_setup.py b/unify/gateway/local_setup.py
@@ -405,8 +405,8 @@ index 0327ecd3c..4ea1f458f 100644
      DEEPSEEK_API_KEY: SecretStr = SecretStr("")
 +    # OpenRouter — used for ``*@openrouter`` endpoints (platform defaults).
 +    OPENROUTER_API_KEY: SecretStr = SecretStr("")
-     UNITY_VALIDATE_LLM_PROVIDERS: bool = True
- 
+     UNIFY_VALIDATE_LLM_PROVIDERS: bool = True
+
      # ─────────────────────────────────────────────────────────────────────────
 @@ -305,11 +307,13 @@ class ProductionSettings(BaseSettings):
              "OPENAI_API_KEY": self.OPENAI_API_KEY,
@@ -421,8 +421,7 @@ index 0327ecd3c..4ea1f458f 100644
 +                "Set OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, "
 +                "and/or DEEPSEEK_API_KEY.",
              )
- 
- 
--- 
-2.43.0
 
+
+--
+2.43.0
