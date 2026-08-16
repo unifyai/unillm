@@ -31,7 +31,8 @@ jobs:
     timeout-minutes: 120
     # Internal-mode secrets live in the unify-testing environment (per-repo
     # scoping since the SOC2 org-secret tightening; see the matching comment
-    # in tests.yml for the full story and the secrets to populate).
+    # in tests.yml for the full story and the secrets to populate). Unlike
+    # tests.yml, this job requires them -- see "Require internal secrets".
     environment: unify-testing
     # actions:read lets the cross-branch cache hydrate step list and download
     # the llm-cache-refresh artifact; contents:read is for checkout.
@@ -43,38 +44,51 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # Detect whether the full internal secret set is available (org CI vs
-    # external fork). The clone App's key alone is not enough: internal mode
-    # also authenticates to GCP and seeds Orchestra, so a repo that has the
-    # key but not the other secrets must run in external mode rather than
-    # fail at the GCP auth step.
-    - name: Check internal secrets
-      id: secrets-check
+    # The release gate exists to exercise the Orchestra integration, so the
+    # full internal secret set is mandatory: the clone App's key reaches
+    # orchestra, GCP auth and UNIFY_KEY let it start and seed. tests.yml
+    # degrades to an external, production-API mode when they are absent --
+    # correct there, because fork PRs genuinely cannot hold secrets -- but
+    # this workflow only runs on pull_request(main) and workflow_dispatch,
+    # where a trusted internal branch always can. Missing secrets here are a
+    # misconfiguration, and skipping the integration would let a release be
+    # approved on a gate that tested almost nothing. Fail, and name them.
+    - name: Require internal secrets
       run: |
         missing=""
         [ -z "$CI_CLONE_APP_PRIVATE_KEY" ] && missing="$missing CI_CLONE_APP_PRIVATE_KEY"
         [ -z "$GCP_SERVICE_ACCOUNT_JSON" ] && missing="$missing GCP_SERVICE_ACCOUNT_JSON"
         [ -z "$UNIFY_KEY" ] && missing="$missing UNIFY_KEY"
-        if [ -z "$missing" ]; then
-          echo "has_internal=true" >> $GITHUB_OUTPUT
-          echo "Running in internal mode (Orchestra + GCP available)"
-        else
-          echo "has_internal=false" >> $GITHUB_OUTPUT
-          echo "Running in external mode (no Orchestra, using production API fallback); missing:$missing"
+        if [ -n "$missing" ]; then
+          echo "::error::Release gate misconfigured: the unify-testing environment is missing:$missing"
+          echo "::error::The Orchestra integration cannot run without these, and this gate"
+          echo "::error::will not report green on a suite that skipped it. Populate them in"
+          echo "::error::the repo's unify-testing environment (GitHub UI; write-only)."
+          {
+            echo "## ❌ Release gate misconfigured"
+            echo ""
+            echo "Missing from the \`unify-testing\` environment:"
+            for secret in $missing; do
+              echo "- \`$secret\`"
+            done
+            echo ""
+            echo "The Orchestra integration cannot run without these."
+          } >> $GITHUB_STEP_SUMMARY
+          exit 1
         fi
+        echo "Internal secrets present; the Orchestra integration will run"
       env:
         CI_CLONE_APP_PRIVATE_KEY: ${{ secrets.CI_CLONE_APP_PRIVATE_KEY }}
         GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
         UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
 
-    # --- Internal-only: Clone and set up Orchestra ---
+    # --- Clone and set up Orchestra ---
 
     # Mints an installation token that can read orchestra and nothing else,
     # then revokes it when the job ends. 4606137 is the unifyai-ci-clone
     # App, which holds Contents: Read only; an App id is not a secret.
     - name: Mint a token that can read orchestra
       id: clone-token
-      if: steps.secrets-check.outputs.has_internal == 'true'
       uses: actions/create-github-app-token@v3
       with:
         app-id: '4606137'
@@ -83,7 +97,6 @@ jobs:
         repositories: orchestra
 
     - name: Clone orchestra repo for local deployment
-      if: steps.secrets-check.outputs.has_internal == 'true'
       uses: actions/checkout@v4
       with:
         repository: unifyai/orchestra
@@ -93,17 +106,15 @@ jobs:
         fetch-depth: 1
 
     - name: Authenticate to Google Cloud
-      if: steps.secrets-check.outputs.has_internal == 'true'
       uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
 
     - name: Get orchestra commit SHA
-      if: steps.secrets-check.outputs.has_internal == 'true'
       id: orchestra-sha
       run: echo "sha=$(git -C orchestra rev-parse HEAD)" >> $GITHUB_OUTPUT
 
-    # --- Clone unify (needed by all modes for uv sync) ---
+    # --- Clone unify (needed for uv sync) ---
 
     - name: Clone unify repo (public; no token needed)
       run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unisdk.git unify-sdk
@@ -119,7 +130,6 @@ jobs:
       uses: astral-sh/setup-uv@v4
 
     - name: Install poetry (for orchestra)
-      if: steps.secrets-check.outputs.has_internal == 'true'
       run: |
         python -m pip install --upgrade pip
         pip install poetry
@@ -135,7 +145,6 @@ jobs:
           uv-${{ runner.os }}-
 
     - name: Cache poetry dependencies
-      if: steps.secrets-check.outputs.has_internal == 'true'
       uses: actions/cache@v4
       with:
         path: ~/.cache/pypoetry
@@ -203,7 +212,6 @@ jobs:
       run: uv sync --group dev
 
     - name: Install orchestra dependencies
-      if: steps.secrets-check.outputs.has_internal == 'true'
       run: |
         cd "${{ github.workspace }}/orchestra"
         poetry install --no-interaction
@@ -218,7 +226,6 @@ jobs:
         mkdir -p "$LOGS_DIR/all"
 
     - name: Start local orchestra
-      if: steps.secrets-check.outputs.has_internal == 'true'
       run: |
         ORCHESTRA_SEED_USER=1 \
         ORCHESTRA_WORKERS=8 \
@@ -316,7 +323,7 @@ jobs:
         echo "$STATS — [view logs]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
 
     - name: Dump orchestra logs on failure
-      if: failure() && steps.secrets-check.outputs.has_internal == 'true'
+      if: failure()
       run: |
         echo "=== Orchestra Server Logs ==="
         if [ -f /tmp/orchestra-local-server.log ]; then
@@ -392,7 +399,7 @@ jobs:
         retention-days: 90
 
     - name: Stop local orchestra
-      if: always() && steps.secrets-check.outputs.has_internal == 'true'
+      if: always()
       run: |
         "${{ github.workspace }}/orchestra/scripts/local.sh" stop || true
 
