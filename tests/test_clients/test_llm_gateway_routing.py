@@ -6,9 +6,17 @@ client-side (the gateway settles it). Everything is default-off and must not
 touch non-OpenRouter providers.
 """
 
+import base64
+
+import pytest
 import unisdk
 
+from unillm.billing_context import set_billing_context
 from unillm.clients.uni_llm import (
+    _ASSISTANT_HEADER,
+    _LABEL_HEADER,
+    _SOURCE_HEADER,
+    _gateway_attribution_headers,
     _gateway_brokers_model,
     _llm_gateway_active,
     _prepare_provider_request_kw,
@@ -199,3 +207,65 @@ class TestBrokeredSetMatchesTheRedirects:
     def test_providers_the_gateway_does_not_carry_still_deduct(self):
         for model in ("gpt-4", "deepseek/deepseek-chat", "kimi-k3@moonshotai"):
             assert _gateway_brokers_model(model) is False
+
+
+@pytest.fixture(autouse=True)
+def _reset_billing_context():
+    """Billing context is a ContextVar, not per-test state; clear it either side."""
+    set_billing_context()
+    yield
+    set_billing_context()
+
+
+class TestGatewayAttributionHeaders:
+    """The billing-context read that lets a brokered call carry its origin.
+
+    Gateway-routed calls skip the client-side deduction that would otherwise
+    read the billing context directly, so this is what threads assistant id,
+    label and source to the broker instead -- as headers, since the request
+    body is provider-shaped and forwarded to the provider verbatim.
+    """
+
+    def test_no_context_produces_no_headers(self):
+        assert _gateway_attribution_headers() == {}
+
+    def test_assistant_id_alone(self):
+        set_billing_context(assistant_id=7366)
+        assert _gateway_attribution_headers() == {_ASSISTANT_HEADER: "7366"}
+
+    def test_source_is_sent_as_plain_text(self):
+        set_billing_context(source="tool")
+        assert _gateway_attribution_headers() == {_SOURCE_HEADER: "tool"}
+
+    def test_an_empty_source_produces_no_header(self):
+        set_billing_context(source="")
+        assert _SOURCE_HEADER not in _gateway_attribution_headers()
+
+    def test_an_ascii_label_is_base64url_encoded(self):
+        set_billing_context(label="Researching leads")
+        headers = _gateway_attribution_headers()
+        assert headers[_LABEL_HEADER] == base64.urlsafe_b64encode(
+            b"Researching leads",
+        ).decode("ascii")
+
+    def test_a_chinese_label_is_base64url_encoded_as_utf8(self):
+        """Raw HTTP headers are latin-1; an unencoded Chinese label would break them."""
+        label = "研究客户需求"
+        set_billing_context(label=label)
+        headers = _gateway_attribution_headers()
+        decoded = base64.urlsafe_b64decode(headers[_LABEL_HEADER]).decode("utf-8")
+        assert decoded == label
+
+    def test_an_empty_label_produces_no_header(self):
+        set_billing_context(label="")
+        assert _LABEL_HEADER not in _gateway_attribution_headers()
+
+    def test_all_three_together(self):
+        set_billing_context(assistant_id=1, source="chat", label="客户研究")
+        headers = _gateway_attribution_headers()
+        assert headers[_ASSISTANT_HEADER] == "1"
+        assert headers[_SOURCE_HEADER] == "chat"
+        assert (
+            base64.urlsafe_b64decode(headers[_LABEL_HEADER]).decode("utf-8")
+            == "客户研究"
+        )
