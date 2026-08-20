@@ -115,6 +115,77 @@ def test_structured_only_wrapper_promotes_to_content():
     assert result.choices[0].finish_reason == "stop"
 
 
+def _named_tool_call(
+    name: str,
+    arguments: dict,
+    *,
+    call_id: str = "call_native",
+) -> dict:
+    return ChatCompletionMessageToolCall(
+        id=call_id,
+        type="function",
+        function=Function(name=name, arguments=json.dumps(arguments)),
+    ).model_dump(warnings=False)
+
+
+def test_schema_shaped_tool_call_promotes_when_no_tools_declared():
+    spec = canonicalize_response_format(TextResponse)
+    payload = {"thoughts": "Judged it."}
+    completion = _completion(
+        None,
+        tool_calls=[_named_tool_call("TextResponse", payload)],
+        finish_reason="tool_calls",
+    )
+
+    result = normalize_json_tool_call_wrappers(
+        completion,
+        response_format_spec=spec,
+        tools=None,
+    )
+
+    assert result.choices[0].message.content == json.dumps(payload)
+    assert result.choices[0].message.tool_calls is None
+    assert result.choices[0].finish_reason == "stop"
+
+
+def test_schema_shaped_tool_call_untouched_when_tools_declared():
+    spec = canonicalize_response_format(TextResponse)
+    completion = _completion(
+        None,
+        tool_calls=[_named_tool_call("greet", {"thoughts": "hi"})],
+        finish_reason="tool_calls",
+    )
+
+    result = normalize_json_tool_call_wrappers(
+        completion,
+        response_format_spec=spec,
+        tools=[GREET_TOOL],
+    )
+
+    assert result.choices[0].message.content is None
+    assert _tool_names(result) == ["greet"]
+    assert result.choices[0].finish_reason == "tool_calls"
+
+
+def test_schema_shaped_tool_call_untouched_on_schema_mismatch():
+    spec = canonicalize_response_format(TextResponse)
+    completion = _completion(
+        None,
+        tool_calls=[_named_tool_call("TextResponse", {"unexpected": 1})],
+        finish_reason="tool_calls",
+    )
+
+    result = normalize_json_tool_call_wrappers(
+        completion,
+        response_format_spec=spec,
+        tools=None,
+    )
+
+    assert result.choices[0].message.content is None
+    assert _tool_names(result) == ["TextResponse"]
+    assert result.choices[0].finish_reason == "tool_calls"
+
+
 def test_wrapper_with_inner_single_tool():
     completion = _completion(
         None,
