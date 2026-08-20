@@ -1,4 +1,11 @@
-"""Normalize ``json_tool_call`` wrapper tool calls to OpenAI-standard shape."""
+"""Normalize ``json_tool_call`` wrapper tool calls to OpenAI-standard shape.
+
+Also promotes a lone schema-shaped tool call to structured content: some
+endpoints answer a ``json_schema`` response_format with the payload inside a
+tool call of their own naming (``content`` null) instead of the
+``json_tool_call`` wrapper. When the request declared no tools, such a call
+cannot be a real invocation — its arguments are the structured output.
+"""
 
 from __future__ import annotations
 
@@ -115,7 +122,6 @@ def normalize_json_tool_call_wrappers(
     tools: Optional[List[dict]],
 ) -> "ChatCompletion":
     """Promote structured output to content and unwrap inner tool calls."""
-    _ = tools
     msg = chat_completion.choices[0].message
     tool_calls = msg.tool_calls
     if not tool_calls:
@@ -152,7 +158,11 @@ def normalize_json_tool_call_wrappers(
             normalized_calls.extend(unwrapped)
 
     if not had_wrapper:
-        return chat_completion
+        return _promote_schema_shaped_tool_call(
+            chat_completion,
+            response_format_spec=response_format_spec,
+            tools=tools,
+        )
 
     msg.tool_calls = normalized_calls or None
     choice = chat_completion.choices[0]
@@ -161,5 +171,49 @@ def normalize_json_tool_call_wrappers(
     logger.info(
         "Normalized json_tool_call wrappers to %s tool call(s)",
         len(normalized_calls),
+    )
+    return chat_completion
+
+
+def _promote_schema_shaped_tool_call(
+    chat_completion: "ChatCompletion",
+    *,
+    response_format_spec: Optional[ResponseFormatSpec],
+    tools: Optional[List[dict]],
+) -> "ChatCompletion":
+    """Promote a lone tool call that carries the requested structured output.
+
+    Applies only when the caller asked for a ``json_schema`` response and
+    declared no tools: the response then has nothing legitimate to call, so a
+    single tool call whose arguments validate against the requested schema is
+    the structured output wearing a tool call's shape. Anything else — tools
+    declared, several calls, non-empty content, arguments that fail the
+    schema — passes through untouched.
+    """
+    if response_format_spec is None or tools:
+        return chat_completion
+    msg = chat_completion.choices[0].message
+    if msg.content is not None and str(msg.content).strip():
+        return chat_completion
+    calls = msg.tool_calls or []
+    if len(calls) != 1:
+        return chat_completion
+    fn_info = _tool_call_to_dict(calls[0]).get("function") or {}
+    if not isinstance(fn_info, dict):
+        return chat_completion
+    try:
+        args = _parse_json_args(fn_info.get("arguments", "{}"))
+    except json.JSONDecodeError:
+        return chat_completion
+    if not isinstance(args, dict):
+        return chat_completion
+    if validate_against_spec(args, response_format_spec) is not None:
+        return chat_completion
+    msg.content = json.dumps(args, ensure_ascii=False)
+    msg.tool_calls = None
+    chat_completion.choices[0].finish_reason = "stop"
+    logger.info(
+        "Promoted schema-shaped tool call %r to structured content",
+        fn_info.get("name"),
     )
     return chat_completion
