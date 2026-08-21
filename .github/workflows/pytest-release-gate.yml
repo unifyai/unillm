@@ -135,7 +135,7 @@ jobs:
         pip install poetry
 
     - name: Cache uv dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cache/uv
@@ -145,7 +145,7 @@ jobs:
           uv-${{ runner.os }}-
 
     - name: Cache poetry dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.cache/pypoetry
         key: poetry-${{ runner.os }}-orchestra-${{ steps.orchestra-sha.outputs.sha }}
@@ -155,7 +155,7 @@ jobs:
     # Restore LLM response cache (.cache.ndjson)
     - name: Restore LLM cache
       id: cache-restore
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
