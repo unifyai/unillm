@@ -63,7 +63,7 @@ jobs:
           exit 1
         fi
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     # Staged as a diff rather than copied over .cache.ndjson. The seed is a
     # floor, not a replacement: copying it in discarded everything the store
