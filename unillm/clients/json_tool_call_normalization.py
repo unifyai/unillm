@@ -175,6 +175,26 @@ def normalize_json_tool_call_wrappers(
     return chat_completion
 
 
+def _names_a_declared_tool(name: Any, tools: Optional[List[dict]]) -> bool:
+    """Whether *name* is one of the tools the request actually offered.
+
+    A call naming one is a real invocation whatever else it looks like. A call
+    naming anything else had nothing to invoke, which is what makes it
+    readable as misplaced structured output.
+    """
+
+    if not tools or not isinstance(name, str) or not name:
+        return False
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function")
+        declared = fn.get("name") if isinstance(fn, dict) else tool.get("name")
+        if declared == name:
+            return True
+    return False
+
+
 def _promote_schema_shaped_tool_call(
     chat_completion: "ChatCompletion",
     *,
@@ -183,14 +203,24 @@ def _promote_schema_shaped_tool_call(
 ) -> "ChatCompletion":
     """Promote a lone tool call that carries the requested structured output.
 
-    Applies only when the caller asked for a ``json_schema`` response and
-    declared no tools: the response then has nothing legitimate to call, so a
-    single tool call whose arguments validate against the requested schema is
-    the structured output wearing a tool call's shape. Anything else — tools
-    declared, several calls, non-empty content, arguments that fail the
-    schema — passes through untouched.
+    Applies when the caller asked for a ``json_schema`` response and the
+    answer is a single call the caller never offered: that call cannot be a
+    real invocation, so arguments validating against the requested schema are
+    the structured output wearing a tool call's shape.
+
+    The test is per-call, not per-request. Declaring tools does not stop a
+    provider putting structured output in a call of its own naming, and a
+    caller that both offers tools and asks for a schema had no way to read
+    that answer -- the payload sits in ``tool_calls`` while it reads
+    ``content``. Every agentic loop that wants typed output is in exactly
+    that position, so scoping this to tool-less requests left the case
+    unreachable for them.
+
+    A call naming a declared tool is still left alone: that is a real
+    invocation, and promoting it would swallow the request. Several calls,
+    non-empty content, or arguments that fail the schema also pass through.
     """
-    if response_format_spec is None or tools:
+    if response_format_spec is None:
         return chat_completion
     msg = chat_completion.choices[0].message
     if msg.content is not None and str(msg.content).strip():
@@ -200,6 +230,8 @@ def _promote_schema_shaped_tool_call(
         return chat_completion
     fn_info = _tool_call_to_dict(calls[0]).get("function") or {}
     if not isinstance(fn_info, dict):
+        return chat_completion
+    if _names_a_declared_tool(fn_info.get("name"), tools):
         return chat_completion
     try:
         args = _parse_json_args(fn_info.get("arguments", "{}"))
