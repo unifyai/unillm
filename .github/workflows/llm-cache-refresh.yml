@@ -93,7 +93,7 @@ jobs:
 
     - name: Install uv
       if: inputs.publish_seed != 'PUBLISH_SEED_OK'
-      uses: astral-sh/setup-uv@v5
+      uses: astral-sh/setup-uv@v7
 
     - name: Configure unify path for CI
       if: inputs.publish_seed != 'PUBLISH_SEED_OK'
