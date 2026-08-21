@@ -589,16 +589,41 @@ def _gateway_brokers_model(model: str | None) -> bool:
 #: stripped again before it reaches a provider that would reject it.
 _ASSISTANT_HEADER = "X-Unify-Assistant-Id"
 
+#: Headers carrying the billing-context action label/source, for the same
+#: reason as ``_ASSISTANT_HEADER`` above: the direct path read these off the
+#: billing context when it deducted client-side, and a gateway-routed call
+#: needs them to travel explicitly since the broker -- not this process --
+#: settles the call and writes the ledger row.
+#:
+#: The label is base64url-encoded because it is free-form text (an act label
+#: can be written in any language, e.g. Chinese) and raw HTTP header values
+#: are latin-1 -- sending one unencoded would corrupt or crash on the wire.
+#: The source is a short internal tag (``"chat"``, ``"tool"``, ...) and
+#: travels as plain text.
+_LABEL_HEADER = "X-Unify-Label"
+_SOURCE_HEADER = "X-Unify-Source"
+
 
 def _gateway_attribution_headers() -> dict:
     """Attribution the broker cannot infer from the request itself."""
+    import base64
+
     from ..billing_context import get_billing_context
 
     ctx = get_billing_context()
+    headers: dict[str, str] = {}
     assistant_id = getattr(ctx, "assistant_id", None)
-    if assistant_id is None:
-        return {}
-    return {_ASSISTANT_HEADER: str(assistant_id)}
+    if assistant_id is not None:
+        headers[_ASSISTANT_HEADER] = str(assistant_id)
+    label = getattr(ctx, "label", None)
+    if label:
+        headers[_LABEL_HEADER] = base64.urlsafe_b64encode(
+            label.encode("utf-8"),
+        ).decode("ascii")
+    source = getattr(ctx, "source", None)
+    if source:
+        headers[_SOURCE_HEADER] = source
+    return headers
 
 
 def _llm_gateway_active() -> bool:
