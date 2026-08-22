@@ -242,16 +242,46 @@ def _parse_python_call_arguments(args_str: str) -> Optional[dict[str, Any]]:
     return arguments
 
 
+def _issued_call_keys(
+    request_messages: Optional[List[dict]],
+) -> frozenset[tuple[str, str]]:
+    """Collect ``(name, canonical_arguments_json)`` for every assistant tool call
+    already issued in the conversation."""
+    keys: set[tuple[str, str]] = set()
+    for message in request_messages or []:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            function = call.get("function")
+            if not isinstance(function, dict):
+                continue
+            name = function.get("name")
+            arguments = _parse_arguments_dict(function.get("arguments"))
+            if isinstance(name, str) and name and arguments is not None:
+                keys.add((name, json.dumps(arguments, sort_keys=True)))
+    return frozenset(keys)
+
+
 def _find_python_tool_call_in_text(
     text: str,
     *,
     tools: Optional[List[dict]],
     candidates: list[str],
+    issued_call_keys: frozenset[tuple[str, str]] = frozenset(),
 ) -> Optional[tuple[str, dict[str, Any]]]:
     """Promote ``tool(arg=...)`` substrings only when arguments are non-empty.
 
     Bare name mentions and argumentless ``tool()`` calls are ignored: they produce
     too many false positives when models narrate completed tools in prose.
+
+    ``issued_call_keys`` carries the ``(name, canonical_arguments_json)`` of tool
+    calls already issued earlier in the conversation. A text call that exactly
+    replays one of them is the model narrating that call (e.g. a final report
+    quoting ``store_skills(request="...")`` next to its result), not a new
+    attempt — promoting it re-executes the tool on every report and never lets
+    the loop finish.
     """
     best: Optional[tuple[int, int, str, dict[str, Any]]] = None
 
@@ -262,6 +292,8 @@ def _find_python_tool_call_in_text(
             if arguments is None or not arguments:
                 continue
             if not _validate_tool_arguments(name, arguments, tools):
+                continue
+            if (name, json.dumps(arguments, sort_keys=True)) in issued_call_keys:
                 continue
             position = match.start()
             candidate = (position, len(name), name, arguments)
@@ -432,40 +464,23 @@ def _find_xml_invoke_tool_call(
     return None
 
 
-def _infer_tool_call_from_content(
+def _infer_explicit_tool_call_from_content(
     content: str,
     *,
     tools: Optional[List[dict]],
     original_tool_choice: Any,
     request_messages: Optional[List[dict]] = None,
 ) -> Optional[tuple[str, dict[str, Any], set[str]]]:
-    del request_messages  # retained for call-site compatibility
-    forced_name = _forced_tool_name(original_tool_choice)
-    candidates = _candidate_tool_names(tools, only_name=forced_name)
-    if not candidates:
-        return None
-
-    explicit = _infer_explicit_tool_call_from_content(
-        content,
-        tools=tools,
-        original_tool_choice=original_tool_choice,
-    )
-    if explicit is not None:
-        return explicit
-
-    return None
-
-
-def _infer_explicit_tool_call_from_content(
-    content: str,
-    *,
-    tools: Optional[List[dict]],
-    original_tool_choice: Any,
-) -> Optional[tuple[str, dict[str, Any], set[str]]]:
     """Promote only explicit tool-call markup from assistant content.
 
     Used for both forced and auto tool_choice. Soft/prose inference is handled
     separately and must not run under ``tool_choice="auto"``.
+
+    When ``request_messages`` is provided, python-style text calls that exactly
+    replay a tool call already issued in the conversation are treated as
+    narration and not promoted. Callers pass it only under auto/None
+    tool_choice: a forced choice leaves the model no final-answer alternative,
+    so there a repeated call is a genuine retry rather than a report.
     """
     forced_name = _forced_tool_name(original_tool_choice)
     candidates = _candidate_tool_names(tools, only_name=forced_name)
@@ -485,6 +500,7 @@ def _infer_explicit_tool_call_from_content(
         search_text,
         tools=tools,
         candidates=candidates,
+        issued_call_keys=_issued_call_keys(request_messages),
     )
     if python_call is not None:
         return python_call[0], python_call[1], set()
@@ -834,22 +850,19 @@ def try_infer_tool_call_from_content(
         return None
 
     # On auto/None, only promote explicit markup (XML invoke, python-style
-    # calls, structured tool fields). Prose/implicit/argumentless inference
-    # is reserved for forced tool_choice so plain assistant text cannot
-    # fabricate repeated tool calls.
-    if _tool_choice_is_forced(original_tool_choice):
-        inferred = _infer_tool_call_from_content(
-            content,
-            tools=tools,
-            original_tool_choice=original_tool_choice,
-            request_messages=request_messages,
-        )
-    else:
-        inferred = _infer_explicit_tool_call_from_content(
-            content,
-            tools=tools,
-            original_tool_choice=original_tool_choice,
-        )
+    # calls, structured tool fields), and never a python-style call that
+    # replays one already issued in the conversation — that is the model
+    # narrating a completed call in its answer, and promoting it re-runs the
+    # tool on every report. Under forced tool_choice the model cannot answer
+    # in text at all, so repeats are genuine retries and stay promotable.
+    inferred = _infer_explicit_tool_call_from_content(
+        content,
+        tools=tools,
+        original_tool_choice=original_tool_choice,
+        request_messages=(
+            None if _tool_choice_is_forced(original_tool_choice) else request_messages
+        ),
+    )
     if inferred is None:
         return None
 
