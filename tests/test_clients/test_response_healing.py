@@ -1091,6 +1091,112 @@ def test_infer_python_call_prefers_leftmost_valid_call():
     ) == {"content": "First", "contact_id": 1}
 
 
+_ISSUED_SEND_CALL_MESSAGE = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [
+        {
+            "id": "call_prior",
+            "type": "function",
+            "function": {
+                "name": "send_unify_message",
+                "arguments": json.dumps({"content": "Done.", "contact_id": 1}),
+            },
+        },
+    ],
+}
+
+
+def test_infer_skips_narrated_replay_of_issued_call_in_auto_mode():
+    """A final answer quoting a call already issued must stay a final answer."""
+    content = (
+        "I completed the task.\n\n"
+        'Called `send_unify_message(content="Done.", contact_id=1)`.\n\n'
+        "**Result:** delivered."
+    )
+    response = _completion(content)
+
+    healed = maybe_heal_tool_calls_in_completion(
+        response,
+        provider="openrouter",
+        original_tool_choice="auto",
+        tools=[SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=None,
+        request_messages=[
+            {"role": "user", "content": "Send the update."},
+            _ISSUED_SEND_CALL_MESSAGE,
+            {"role": "tool", "tool_call_id": "call_prior", "content": "delivered"},
+        ],
+    )
+
+    assert healed.choices[0].message.tool_calls is None
+    assert healed.choices[0].finish_reason == "stop"
+
+
+def test_infer_promotes_new_call_when_narration_replays_earlier_one():
+    """Filtering narrated replays still promotes a genuinely new text call."""
+    content = (
+        'Earlier I called send_unify_message(content="Done.", contact_id=1). '
+        'Now: send_unify_message(content="Follow-up.", contact_id=2)'
+    )
+    response = _completion(content)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider="openrouter",
+        original_tool_choice="auto",
+        tools=[SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=None,
+        request_messages=[_ISSUED_SEND_CALL_MESSAGE],
+    )
+
+    assert inferred is not None
+    assert json.loads(
+        _tool_call_from_message(inferred.choices[0].message)["function"]["arguments"],
+    ) == {"content": "Follow-up.", "contact_id": 2}
+
+
+def test_infer_replay_still_promoted_under_forced_tool_choice():
+    """Forced tool_choice leaves no final-answer alternative, so an identical
+    repeat is a genuine retry and stays promotable."""
+    thoughts = 'send_unify_message(content="Done.", contact_id=1)'
+    content = json.dumps({"thoughts": thoughts})
+    response = _completion(content)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider="openrouter",
+        original_tool_choice="required",
+        tools=[SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=canonicalize_response_format(TextResponse),
+        request_messages=[_ISSUED_SEND_CALL_MESSAGE],
+    )
+
+    assert inferred is not None
+    call = _tool_call_from_message(inferred.choices[0].message)
+    assert call["function"]["name"] == "send_unify_message"
+
+
+def test_infer_promotes_python_call_without_prior_history_in_auto_mode():
+    """With no matching call in the transcript, auto-mode promotion is intact."""
+    content = 'Tool call: send_unify_message(content="Done.", contact_id=1)'
+    response = _completion(content)
+
+    inferred = try_infer_tool_call_from_content(
+        response,
+        provider="openrouter",
+        original_tool_choice="auto",
+        tools=[SEND_UNIFY_MESSAGE_TOOL],
+        response_format_spec=None,
+        request_messages=[{"role": "user", "content": "Send the update."}],
+    )
+
+    assert inferred is not None
+    assert json.loads(
+        _tool_call_from_message(inferred.choices[0].message)["function"]["arguments"],
+    ) == {"content": "Done.", "contact_id": 1}
+
+
 def test_infer_wait_from_thoughts_only_json():
     """Prose that only mentions waiting must not promote argumentless wait."""
 
