@@ -148,7 +148,36 @@ def test_schema_shaped_tool_call_promotes_when_no_tools_declared():
     assert result.choices[0].finish_reason == "stop"
 
 
-def test_schema_shaped_tool_call_untouched_when_tools_declared():
+def test_schema_shaped_tool_call_promotes_when_it_names_no_declared_tool():
+    """Offering tools must not make typed output unreadable.
+
+    A caller that both declares tools and asks for a schema reads
+    ``content``; a provider answering in a call of its own naming leaves the
+    payload where nothing looks. Every agentic loop wanting typed output is
+    in that position, so a per-request test left the case unreachable.
+    """
+    spec = canonicalize_response_format(TextResponse)
+    payload = {"thoughts": "Judged it from inside a tool loop."}
+    completion = _completion(
+        None,
+        tool_calls=[_named_tool_call("TextResponse", payload)],
+        finish_reason="tool_calls",
+    )
+
+    result = normalize_json_tool_call_wrappers(
+        completion,
+        response_format_spec=spec,
+        tools=[GREET_TOOL],
+    )
+
+    assert result.choices[0].message.content == json.dumps(payload)
+    assert result.choices[0].message.tool_calls is None
+    assert result.choices[0].finish_reason == "stop"
+
+
+def test_a_call_naming_a_declared_tool_is_left_alone():
+    """A real invocation, whatever else it looks like: promoting it would
+    swallow the request the model actually made."""
     spec = canonicalize_response_format(TextResponse)
     completion = _completion(
         None,
