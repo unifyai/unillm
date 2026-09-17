@@ -89,12 +89,9 @@ def test_sync_openrouter_generate_bills_usage_cost() -> None:
     usage.cost = 0.0015
     response.usage = usage
 
-    with (
-        patch(
-            "unillm.clients.uni_llm.litellm.completion",
-            return_value=response,
-        ),
-        patch("unillm.clients.uni_llm._safe_deduct_credits") as deduct,
+    with patch(
+        "unillm.clients.uni_llm.litellm.completion",
+        return_value=response,
     ):
         client = unillm.Unify(
             "openai/gpt-4o-mini@openrouter",
@@ -109,5 +106,3 @@ def test_sync_openrouter_generate_bills_usage_cost() -> None:
 
     assert len(events) == 1
     assert events[0].provider_cost == 0.0015
-    deduct.assert_called_once()
-    assert deduct.call_args.args[0] == 0.0015

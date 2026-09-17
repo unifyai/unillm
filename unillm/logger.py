@@ -51,8 +51,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-import unisdk
-
 from .settings import SETTINGS
 
 # ---------------------------------------------------------------------------
@@ -527,7 +525,7 @@ def log_usage(
     transcript: list[dict[str, str]] | None = None,
     label: str | None = None,
 ) -> float:
-    """Log usage for an externally-managed LLM session and deduct credits.
+    """Log usage for an externally-managed LLM session.
 
     Designed for APIs that bypass the standard unillm generate() path (e.g.
     OpenAI Realtime API via LiveKit), where the caller has real usage stats
@@ -536,9 +534,8 @@ def log_usage(
     This function:
     1. Writes a log file (request context + usage) to the configured log dir
     2. Computes the real cost from token counts (including audio tokens)
-    3. Deducts credits from the user's account
-    4. Emits an LLMEvent (so downstream hooks like cumulative spend tracking fire)
-    5. Logs to console
+    3. Emits an LLMEvent (so downstream hooks like cumulative spend tracking fire)
+    4. Logs to console
 
     Args:
         model: The model identifier (e.g. 'gpt-4o-realtime-preview').
@@ -565,7 +562,7 @@ def log_usage(
         label: Label for the log entry (e.g. 'gpt-4o-realtime-preview').
 
     Returns:
-        The cost that was deducted, in USD.
+        The provider cost of the session, in USD.
     """
     from .costs import compute_full_cost_from_usage
 
@@ -615,33 +612,6 @@ def log_usage(
                 f.write("\n")
         except Exception:
             pass
-
-    # Deduct credits with full attribution
-    if provider_cost > 0:
-        try:
-            from .billing_context import get_billing_context
-
-            ctx = get_billing_context()
-            detail: dict = {"model": model}
-            if usage.get("input_tokens") is not None:
-                detail["prompt_tokens"] = usage["input_tokens"]
-            if usage.get("output_tokens") is not None:
-                detail["completion_tokens"] = usage["output_tokens"]
-            if ctx.source:
-                detail["source"] = ctx.source
-            if ctx.label:
-                detail["label"] = ctx.label
-            unisdk.deduct_credits(
-                provider_cost,
-                category="llm",
-                assistant_id=ctx.assistant_id,
-                user_id=ctx.user_id,
-                organization_id=ctx.organization_id,
-                description="Assistant work",
-                detail=detail,
-            )
-        except Exception:
-            _LOGGER.warning(f"Failed to deduct credits: ${provider_cost:.6f}")
 
     # Emit LLM event so downstream hooks (e.g. cumulative spend tracking) fire
     from .llm_events import LLMEvent, _emit_llm_event

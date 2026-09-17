@@ -291,15 +291,14 @@ class TestCostEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify(
-                                "openai/gpt-4o@openrouter",
-                                cache=True,
+                        client = unillm.Unify(
+                            "openai/gpt-4o@openrouter",
+                            cache=True,
+                        )
+                        with capture_costs() as events:
+                            client.generate(
+                                messages=[{"role": "user", "content": "Hi"}],
                             )
-                            with capture_costs() as events:
-                                client.generate(
-                                    messages=[{"role": "user", "content": "Hi"}],
-                                )
 
         assert len(events) == 1
         event = events[0]
@@ -412,15 +411,14 @@ class TestCostEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify(
-                                "openai/gpt-4o@openrouter",
-                                cache=True,
-                            )
-                            # No capture context - should not error
-                            response = client.generate(
-                                messages=[{"role": "user", "content": "Hi"}],
-                            )
+                        client = unillm.Unify(
+                            "openai/gpt-4o@openrouter",
+                            cache=True,
+                        )
+                        # No capture context - should not error
+                        response = client.generate(
+                            messages=[{"role": "user", "content": "Hi"}],
+                        )
 
         # Just verify it completed without error
         assert response is not None

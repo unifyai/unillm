@@ -5,8 +5,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Type, Union
 
-import requests
-
 # noinspection PyProtectedMember
 from openai._types import Headers
 from openai.types.chat import (
@@ -19,10 +17,6 @@ from pydantic import BaseModel, create_model
 from typing_extensions import Self
 
 # local
-from unisdk import BASE_URL
-from unisdk.utils import http
-
-from unisdk.utils.helpers import _create_request_header, _validate_api_key
 from unillm.types import PromptCacheParam
 
 
@@ -69,7 +63,7 @@ class _Client(ABC):
 
         # initial values
         self._client_id = uuid.uuid4().hex
-        self._api_key = _validate_api_key(api_key)
+        self._api_key = api_key
         self._system_message = None
         self._messages = None
         self._frequency_penalty = None
@@ -1126,33 +1120,6 @@ class _Client(ABC):
         self.reset_parallel_tool_calls()
         self.reset_reasoning_effort()
         return self
-
-    # Credits #
-    # --------#
-
-    def get_credit_balance(self) -> Union[float, None]:
-        """
-        Get the remaining credits left on your account.
-
-        Returns:
-            The remaining credits on the account if successful, otherwise None.
-        Raises:
-            BadRequestError: If there was an HTTP error.
-            ValueError: If there was an error parsing the JSON response.
-        """
-        url = f"{BASE_URL}/credits"
-        headers = _create_request_header(self._api_key)
-        try:
-            response = http.get(url, headers=headers, timeout=10)
-            if response.status_code != 200:
-                raise Exception(response.json())
-            return response.json()["credits"]
-        except requests.RequestException as e:
-            raise requests.RequestException(
-                "There was an error with the request.",
-            ) from e
-        except (KeyError, ValueError) as e:
-            raise ValueError("Error parsing JSON response.") from e
 
     # Methods #
     # --------#

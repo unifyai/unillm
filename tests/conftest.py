@@ -45,16 +45,6 @@ def pytest_sessionstart(session):
     except ImportError:
         os.environ["UNILLM_LOG_DIR"] = str(unillm_log_dir)
 
-    # Unify SDK file logging (HTTP request traces)
-    unisdk_log_dir = root_path / "logs" / "unify" / subdir
-    unisdk_log_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        from unisdk.utils.http import configure_log_dir as configure_unisdk_log_dir
-
-        configure_unisdk_log_dir(str(unisdk_log_dir))
-    except ImportError:
-        os.environ["UNISDK_LOG_DIR"] = str(unisdk_log_dir)
-
     # Orchestra log directory (for local orchestra server, if running)
     # This sets the env var so that if a local orchestra is started, it knows where to log
     orchestra_log_dir = root_path / "logs" / "orchestra" / subdir

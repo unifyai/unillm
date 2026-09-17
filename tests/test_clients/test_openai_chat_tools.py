@@ -150,7 +150,6 @@ async def test_openrouter_openai_cost_events_use_chat_model() -> None:
             "unillm.clients.uni_llm.compute_cost_from_response",
             return_value=0.02,
         ) as compute_cost,
-        patch("unillm.clients.uni_llm._safe_deduct_credits"),
     ):
         client = unillm.AsyncUnify(
             "openai/gpt-5.5@openrouter",

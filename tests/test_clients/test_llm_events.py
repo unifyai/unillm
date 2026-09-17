@@ -242,15 +242,14 @@ class TestLLMEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify(
-                                "openai/gpt-4o@openrouter",
-                                cache=True,
+                        client = unillm.Unify(
+                            "openai/gpt-4o@openrouter",
+                            cache=True,
+                        )
+                        with llm_event_hook_scope(capture_hook):
+                            client.generate(
+                                messages=[{"role": "user", "content": "Hi"}],
                             )
-                            with llm_event_hook_scope(capture_hook):
-                                client.generate(
-                                    messages=[{"role": "user", "content": "Hi"}],
-                                )
 
         # Should have one event per LLM call
         assert len(captured) == 1
@@ -299,16 +298,15 @@ class TestLLMEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify(
-                                "openai/gpt-4o@openrouter",
-                                cache=True,
+                        client = unillm.Unify(
+                            "openai/gpt-4o@openrouter",
+                            cache=True,
+                        )
+                        client.set_response_format(_Decision)
+                        with llm_event_hook_scope(capture_hook):
+                            client.generate(
+                                messages=[{"role": "user", "content": "Hi"}],
                             )
-                            client.set_response_format(_Decision)
-                            with llm_event_hook_scope(capture_hook):
-                                client.generate(
-                                    messages=[{"role": "user", "content": "Hi"}],
-                                )
 
         assert len(captured) == 1
         event = captured[0]
@@ -461,16 +459,15 @@ class TestLLMEventEmissionMocked:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify(
-                                "openai/gpt-4o@openrouter",
-                                cache=True,
-                                temperature=0.7,
+                        client = unillm.Unify(
+                            "openai/gpt-4o@openrouter",
+                            cache=True,
+                            temperature=0.7,
+                        )
+                        with llm_event_hook_scope(capture_hook):
+                            client.generate(
+                                messages=[{"role": "user", "content": "Test"}],
                             )
-                            with llm_event_hook_scope(capture_hook):
-                                client.generate(
-                                    messages=[{"role": "user", "content": "Test"}],
-                                )
 
         event = captured[0]
         # Request should contain full kwargs
@@ -618,15 +615,14 @@ class TestLLMEventCosts:
                         "unillm.clients.uni_llm.compute_cost_from_response",
                         return_value=0.001,
                     ):
-                        with patch("unillm.clients.uni_llm.unisdk.deduct_credits"):
-                            client = unillm.Unify(
-                                "openai/gpt-4o@openrouter",
-                                cache=True,
+                        client = unillm.Unify(
+                            "openai/gpt-4o@openrouter",
+                            cache=True,
+                        )
+                        with llm_event_hook_scope(capture_hook):
+                            client.generate(
+                                messages=[{"role": "user", "content": "Hi"}],
                             )
-                            with llm_event_hook_scope(capture_hook):
-                                client.generate(
-                                    messages=[{"role": "user", "content": "Hi"}],
-                                )
 
         assert len(captured) == 1
         event = captured[0]

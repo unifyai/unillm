@@ -27,13 +27,12 @@ UniLLM is the model-access layer in the wider Unify stack:
               └───────────┘       └────────────┘
 ```
 
-**This repo (UniLLM)** handles LLM inference for Unify. It normalizes requests across providers (OpenAI, Anthropic, Vertex AI, etc.), provides response caching for test determinism, and can integrate with Unify for logging and billing context.
+**This repo (UniLLM)** handles LLM inference for Unify. It normalizes requests across providers (OpenAI, Anthropic, Vertex AI, etc.), provides response caching for test determinism, and carries attribution context for the wider Unify stack.
 
 If you're here from the Unify quickstart, this is the layer that talks to model providers. OpenAI and Anthropic are the simplest documented paths, but the point of UniLLM is that the provider choice is yours, including other supported providers and compatible local endpoints.
 
 Related repositories:
 - [Unify](https://github.com/unifyai/unify) — AI assistant brain (primary consumer)
-- [unisdk](https://github.com/unifyai/unisdk) — Python SDK for logging and persistence
 - [Orchestra](https://github.com/unifyai/orchestra) — Backend API and database
 
 ## Installation
@@ -69,7 +68,7 @@ export ANTHROPIC_API_KEY=<your-key>
 # ... other provider keys
 ```
 
-You do not need a Unify account for basic inference. `UNIFY_KEY` only matters for optional logging, credit, and observability features that integrate with the wider Unify stack.
+You do not need a Unify account for basic inference. `UNIFY_KEY` only matters for the optional gateway routing and observability features that integrate with the wider Unify stack.
 
 ### Google Cloud / Vertex AI
 
@@ -295,12 +294,11 @@ unillm/
 > the [unify repo](https://github.com/unifyai/unify). The steps below are for
 > developing this library itself.
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management. The persistence/logging dependency (`unisdk`) is resolved from a sibling checkout via `[tool.uv.sources]`, so clone it alongside this repo before syncing.
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
 ### Setup
 
 ```bash
-git clone https://github.com/unifyai/unisdk.git
 git clone https://github.com/unifyai/unillm.git
 cd unillm
 uv sync
@@ -317,7 +315,7 @@ without making real LLM calls.
 uv run pytest tests/ -v
 ```
 
-`UNIFY_KEY` is optional. If set, credit deduction runs against the [Unify API](https://unify.ai). If unset, credit deduction silently warns and tests continue normally.
+`UNIFY_KEY` is optional; the test suite does not need it.
 
 ### Running Tests in CI
 

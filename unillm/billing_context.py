@@ -1,8 +1,8 @@
-"""Billing context for credit deduction attribution.
+"""Attribution metadata for LLM calls.
 
-Host applications (e.g. Unify) set the billing context so that
-``_safe_deduct_credits`` can include assistant/user metadata in
-the ledger entry without UniLLM needing direct access to session state.
+Host applications (e.g. Unify) set the billing context so that the
+assistant/user/label metadata rides on gateway requests (as headers) and on
+LLM events without UniLLM needing direct access to session state.
 
 Usage::
 
@@ -48,11 +48,11 @@ def set_billing_context(
         user_id: The user whose interaction triggered the cost.
         organization_id: The organization owning the billing account.
         source: What triggered this LLM call — ``"chat"``, ``"call"``,
-            ``"tool"``, etc.  Stored in ``detail.source`` on the ledger.
+            ``"tool"``, etc.
         label: A short, human-readable description of what the assistant
-            is working on (e.g. ``"Researching leads"``).  Stored in
-            ``detail.label`` on the ledger so usage line items can show
-            *what* the spend was for, not just the category.
+            is working on (e.g. ``"Researching leads"``), so usage
+            reporting can show *what* the spend was for, not just the
+            category.
     """
     _BILLING_CONTEXT.set(
         BillingContext(

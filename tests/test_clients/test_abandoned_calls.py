@@ -1,4 +1,4 @@
-"""Tests for billing calls whose caller stopped waiting for the answer."""
+"""Tests for accounting calls whose caller stopped waiting for the answer."""
 
 from __future__ import annotations
 
@@ -30,54 +30,9 @@ def _response(cost: float) -> ModelResponse:
     return response
 
 
-async def _abandon_mid_call(deduct_patch_target: str, delay: float = 0.05):
-    """Dispatch a call, drop it while in flight, and return the deduct mock."""
-    response = _response(4.25)
-
-    async def slow_completion(*args, **kwargs):
-        await asyncio.sleep(delay)
-        return response
-
-    with (
-        patch(
-            "unillm.clients.uni_llm._acompletion_with_transient_retry",
-            side_effect=slow_completion,
-        ),
-        patch(deduct_patch_target) as deduct,
-    ):
-        client = unillm.AsyncUnify(
-            "openai/gpt-4o-mini@openrouter",
-            api_key="test-key",
-            cache=False,
-        )
-        call = asyncio.create_task(
-            client.generate(messages=[{"role": "user", "content": "hi"}]),
-        )
-        # Let the request reach the provider, then walk away from it.
-        await asyncio.sleep(delay / 5)
-        call.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await call
-
-        # The generation was already running, so it lands shortly after.
-        await asyncio.sleep(delay * 4)
-        return deduct
-
-
-@pytest.mark.asyncio
-async def test_abandoned_call_is_charged_at_the_reported_cost():
-    """A cancelled call still bills, at the amount the provider reports."""
-    deduct = await _abandon_mid_call("unillm.clients.uni_llm._safe_deduct_credits")
-
-    deduct.assert_called_once()
-    assert deduct.call_args.args[0] == 4.25
-    assert deduct.call_args.kwargs["abandoned"] is True
-    assert deduct.call_args.kwargs["model"] == "openrouter/openai/gpt-4o-mini"
-
-
 @pytest.mark.asyncio
 async def test_abandoned_call_reports_its_cost_to_spending_limits():
-    """The charge reaches the LLM event, which is what spending limits read."""
+    """The cost reaches the LLM event, which is what spending limits read."""
     captured: list = []
     response = _response(1.5)
 
@@ -85,12 +40,9 @@ async def test_abandoned_call_reports_its_cost_to_spending_limits():
         await asyncio.sleep(0.05)
         return response
 
-    with (
-        patch(
-            "unillm.clients.uni_llm._acompletion_with_transient_retry",
-            side_effect=slow_completion,
-        ),
-        patch("unillm.clients.uni_llm._safe_deduct_credits"),
+    with patch(
+        "unillm.clients.uni_llm._acompletion_with_transient_retry",
+        side_effect=slow_completion,
     ):
         unillm.set_llm_event_hook(captured.append)
         try:
@@ -116,9 +68,11 @@ async def test_abandoned_call_reports_its_cost_to_spending_limits():
 
 
 @pytest.mark.asyncio
-async def test_call_denied_by_a_spending_limit_is_not_charged():
-    """A limit denial cancels the call itself; the account owes nothing."""
+async def test_call_denied_by_a_spending_limit_reports_no_cost():
+    """A limit denial cancels the call itself; nothing was spent."""
     from unillm.limit_hooks import LimitCheckResponse
+
+    captured: list = []
 
     async def slow_completion(*args, **kwargs):
         await asyncio.sleep(0.05)
@@ -134,15 +88,18 @@ async def test_call_denied_by_a_spending_limit_is_not_charged():
         ),
         patch("unillm.clients.uni_llm.is_limit_check_enabled", return_value=True),
         patch("unillm.clients.uni_llm.check_limits", side_effect=denied),
-        patch("unillm.clients.uni_llm._safe_deduct_credits") as deduct,
     ):
-        client = unillm.AsyncUnify(
-            "openai/gpt-4o-mini@openrouter",
-            api_key="test-key",
-            cache=False,
-        )
-        with pytest.raises(SpendingLimitExceededError):
-            await client.generate(messages=[{"role": "user", "content": "hi"}])
-        await asyncio.sleep(0.2)
+        unillm.set_llm_event_hook(captured.append)
+        try:
+            client = unillm.AsyncUnify(
+                "openai/gpt-4o-mini@openrouter",
+                api_key="test-key",
+                cache=False,
+            )
+            with pytest.raises(SpendingLimitExceededError):
+                await client.generate(messages=[{"role": "user", "content": "hi"}])
+            await asyncio.sleep(0.2)
+        finally:
+            unillm.set_llm_event_hook(None)
 
-    deduct.assert_not_called()
+    assert [e for e in captured if e.provider_cost] == []

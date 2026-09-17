@@ -1,15 +1,13 @@
-"""Tests for LLM-gateway routing (Orchestra broker) in the OpenRouter path.
+"""Tests for LLM-gateway routing in the OpenRouter and Anthropic paths.
 
-When ``UNILLM_LLM_GATEWAY_URL`` (+ an auth key) is set, OpenRouter traffic is
-redirected to the gateway via ``api_base``/``api_key`` and billing is skipped
-client-side (the gateway settles it). Everything is default-off and must not
-touch non-OpenRouter providers.
+When ``UNILLM_LLM_GATEWAY_URL`` (+ an auth key) is set, OpenRouter and
+Anthropic traffic is redirected to the gateway via ``api_base``/``api_key``.
+Everything is default-off and must not touch other providers.
 """
 
 import base64
 
 import pytest
-import unisdk
 
 from unillm.billing_context import set_billing_context
 from unillm.clients.uni_llm import (
@@ -17,10 +15,8 @@ from unillm.clients.uni_llm import (
     _LABEL_HEADER,
     _SOURCE_HEADER,
     _gateway_attribution_headers,
-    _gateway_brokers_model,
     _llm_gateway_active,
     _prepare_provider_request_kw,
-    _safe_deduct_credits,
 )
 
 _GATEWAY = "https://internal.example.com/v0/llm"
@@ -92,64 +88,6 @@ class TestGatewayRouting:
         assert kw["api_key"] == "dedicated"
 
 
-class TestDeductSkip:
-    def test_skips_openrouter_deduct_when_active(self, monkeypatch):
-        _enable_gateway(monkeypatch)
-        calls = []
-        monkeypatch.setattr(
-            unisdk,
-            "deduct_credits",
-            lambda *a, **k: calls.append(k),
-            raising=False,
-        )
-        _safe_deduct_credits(1.23, model="openrouter/openai/gpt-5.6-sol")
-        assert calls == []
-
-    def test_deducts_openrouter_when_inactive(self, monkeypatch):
-        monkeypatch.delenv("UNILLM_LLM_GATEWAY_URL", raising=False)
-        calls = []
-        monkeypatch.setattr(
-            unisdk,
-            "deduct_credits",
-            lambda *a, **k: calls.append(k),
-            raising=False,
-        )
-        _safe_deduct_credits(1.23, model="openrouter/openai/gpt-5.6-sol")
-        assert len(calls) == 1
-
-    def test_deducts_an_unbrokered_provider_even_when_active(self, monkeypatch):
-        """A provider the gateway does not carry is still charged here.
-
-        Was asserted with Anthropic, which the gateway now brokers and
-        settles server-side; charging it client-side too would double-bill.
-        Restated against a provider that still goes direct, so the case it
-        was written for is still covered.
-        """
-        _enable_gateway(monkeypatch)
-        calls = []
-        monkeypatch.setattr(
-            unisdk,
-            "deduct_credits",
-            lambda *a, **k: calls.append(k),
-            raising=False,
-        )
-        _safe_deduct_credits(1.23, model="deepseek-chat@deepseek")
-        assert len(calls) == 1
-
-    def test_a_brokered_anthropic_call_is_not_charged_twice(self, monkeypatch):
-        """The gateway settled it; charging here would bill the same call twice."""
-        _enable_gateway(monkeypatch)
-        calls = []
-        monkeypatch.setattr(
-            unisdk,
-            "deduct_credits",
-            lambda *a, **k: calls.append(k),
-            raising=False,
-        )
-        _safe_deduct_credits(1.23, model="claude-opus-5@anthropic")
-        assert calls == []
-
-
 class TestAnthropicRouting:
     """Anthropic is brokered over its own protocol, not the OpenAI-shaped one."""
 
@@ -187,28 +125,6 @@ class TestAnthropicRouting:
         assert kw["api_base"] == "https://x"
 
 
-class TestBrokeredSetMatchesTheRedirects:
-    """The billing skip and the redirects must cover the same providers.
-
-    A provider routed to the gateway but missing from the skip is charged
-    twice -- once server-side, once here -- and neither charge looks wrong
-    on its own, so the drift is invisible until the numbers are compared.
-    """
-
-    def test_both_spellings_of_each_brokered_provider_are_covered(self):
-        for model in (
-            "openrouter/openai/gpt-5.6-sol",
-            "openai/gpt-5.6-sol@openrouter",
-            "anthropic/claude-opus-4.8",
-            "claude-opus-5@anthropic",
-        ):
-            assert _gateway_brokers_model(model) is True
-
-    def test_providers_the_gateway_does_not_carry_still_deduct(self):
-        for model in ("gpt-4", "deepseek/deepseek-chat", "kimi-k3@moonshotai"):
-            assert _gateway_brokers_model(model) is False
-
-
 @pytest.fixture(autouse=True)
 def _reset_billing_context():
     """Billing context is a ContextVar, not per-test state; clear it either side."""
@@ -220,10 +136,9 @@ def _reset_billing_context():
 class TestGatewayAttributionHeaders:
     """The billing-context read that lets a brokered call carry its origin.
 
-    Gateway-routed calls skip the client-side deduction that would otherwise
-    read the billing context directly, so this is what threads assistant id,
-    label and source to the broker instead -- as headers, since the request
-    body is provider-shaped and forwarded to the provider verbatim.
+    This is what threads assistant id, label and source to the broker -- as
+    headers, since the request body is provider-shaped and forwarded to the
+    provider verbatim.
     """
 
     def test_no_context_produces_no_headers(self):

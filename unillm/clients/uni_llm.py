@@ -21,8 +21,11 @@ from typing import (
 
 import litellm
 
+# litellm prints a red provider list to stdout whenever it cannot classify a
+# model string; every ``@openrouter`` endpoint trips it, so keep it quiet.
+litellm.suppress_debug_info = True
+
 # local
-import unisdk
 from openai._types import Headers
 from ..costs import compute_cost_from_response
 from ..limit_hooks import (
@@ -247,22 +250,21 @@ def _cancel_inflight_task(task: asyncio.Task) -> None:
 def _bill_abandoned_call(
     llm_task: asyncio.Task,
     *,
-    api_key: str | None,
     accounting_model: str,
     request_kw: dict,
     origin: str | None,
 ) -> None:
-    """Charge for a dispatched call whose caller stopped waiting for it.
+    """Account for a dispatched call whose caller stopped waiting for it.
 
     The provider generates and bills the moment the request lands, so an
     abandoned call is real money spent on behalf of a real account. The
     amount comes from the response rather than from the prompt: pricing
     ``prompt_tokens`` at list rate ignores cached input and misprices by
     more than 2x, so the request is left to finish in the background and
-    the charge it reports is what gets deducted.
+    the cost it reports is what gets recorded.
 
     Emitting the LLM event here is what lets spending limits see the
-    money. A limit only counts what reached the ledger, so before this an
+    money. A limit only counts what it is told about, so without this an
     account could out-spend its cap through calls nobody ever read.
     """
 
@@ -277,16 +279,6 @@ def _bill_abandoned_call(
         if cost is None or cost <= 0:
             return
 
-        _spawn_deduction(
-            asyncio.to_thread(
-                _safe_deduct_credits,
-                cost,
-                api_key=api_key,
-                model=accounting_model,
-                abandoned=True,
-            ),
-            name="unillm_deduct_credits_abandoned",
-        )
         _emit_llm_event(
             LLMEvent(
                 request=_request_kw_for_event(request_kw, accounting_model),
@@ -311,82 +303,11 @@ def _bill_abandoned_call(
     llm_task.add_done_callback(bill)
 
 
-_INFLIGHT_DEDUCTIONS: set = set()
-
-
-def _spawn_deduction(coro, *, name: str) -> None:
-    """Run a credit deduction in the background, holding it until it finishes.
-
-    The event loop keeps only a weak reference to a task, so a deduction whose
-    handle is discarded may be garbage-collected before it ever runs — losing a
-    charge for a generation the provider has already billed. Retaining the task
-    until completion is what makes the deduction reliable rather than a
-    best-effort side effect.
-    """
-    task = asyncio.create_task(coro, name=name)
-    _INFLIGHT_DEDUCTIONS.add(task)
-    task.add_done_callback(_INFLIGHT_DEDUCTIONS.discard)
-
-
-def _safe_deduct_credits(
-    amount: float,
-    *,
-    api_key: str | None = None,
-    model: str | None = None,
-    prompt_tokens: int | None = None,
-    completion_tokens: int | None = None,
-    abandoned: bool = False,
-) -> None:
-    """Deduct credits with ledger metadata from billing context."""
-    # A call the gateway handled was already metered and deducted server-side;
-    # charging again here would double-bill. Every provider the gateway brokers
-    # has to be listed, so this guard tracks the redirects in
-    # ``_prepare_provider_request_kw`` — a provider routed there but missing
-    # here is billed twice, and silently, since both charges look correct in
-    # isolation. Non-gateway providers and gateway-off deployments still deduct
-    # client-side.
-    if _llm_gateway_active() and _gateway_brokers_model(model):
-        return
-
-    from ..billing_context import get_billing_context
-
-    ctx = get_billing_context()
-    detail: dict = {}
-    if model:
-        detail["model"] = model
-    if prompt_tokens is not None:
-        detail["prompt_tokens"] = prompt_tokens
-    if completion_tokens is not None:
-        detail["completion_tokens"] = completion_tokens
-    if abandoned:
-        # The caller walked away before reading the answer. Marked so a
-        # customer asking "what was this line?" gets a real answer.
-        detail["abandoned"] = True
-    if ctx.source:
-        detail["source"] = ctx.source
-    if ctx.label:
-        detail["label"] = ctx.label
-
-    try:
-        unisdk.deduct_credits(
-            amount,
-            api_key=api_key,
-            category="llm",
-            assistant_id=ctx.assistant_id,
-            user_id=ctx.user_id,
-            organization_id=ctx.organization_id,
-            description="Assistant work",
-            detail=detail or None,
-        )
-    except Exception:
-        _LOGGER.warning("Failed to deduct credits: $%.6f", amount, exc_info=True)
-
-
 def _provider_cost_from_stream_usage(
     accounting_model: str,
     usage_info: object,
-) -> tuple[float | None, int, int]:
-    """Return (provider_cost, prompt_tokens, completion_tokens) for a stream usage blob.
+) -> float | None:
+    """Price a stream's usage blob.
 
     Prefers OpenRouter's authoritative ``usage.cost`` when present; otherwise
     prices tokens via LiteLLM / catalog fallback.
@@ -405,19 +326,15 @@ def _provider_cost_from_stream_usage(
 
     reported = extract_openrouter_usage_cost(usage_info)
     if reported is not None:
-        return reported, prompt_tokens, completion_tokens
+        return reported
 
     if prompt_tokens <= 0 and completion_tokens <= 0:
-        return None, prompt_tokens, completion_tokens
+        return None
 
     try:
-        return (
-            compute_cost(accounting_model, prompt_tokens, completion_tokens),
-            prompt_tokens,
-            completion_tokens,
-        )
+        return compute_cost(accounting_model, prompt_tokens, completion_tokens)
     except ValueError:
-        return None, prompt_tokens, completion_tokens
+        return None
 
 
 def _canonical_model_for_accounting(model: str | None) -> str:
@@ -537,7 +454,8 @@ def _apply_deepseek_v4_reasoning_effort(kw: dict, model: str) -> None:
 # --- LLM gateway (Orchestra broker) -----------------------------------------
 # Opt-in via env so rollout is per-environment and default-off. When
 # ``UNILLM_LLM_GATEWAY_URL`` is set (and an auth key is available), OpenRouter
-# calls are routed through the gateway and billed there.
+# and Anthropic calls are routed through the gateway, which holds the provider
+# credentials so they never have to live in this process.
 _LLM_GATEWAY_URL_ENV = "UNILLM_LLM_GATEWAY_URL"
 _LLM_GATEWAY_KEY_ENVS = ("UNILLM_LLM_GATEWAY_KEY", "UNIFY_KEY")
 
@@ -555,45 +473,20 @@ def _llm_gateway_key() -> str | None:
     return None
 
 
-def _gateway_brokers_model(model: str | None) -> bool:
-    """Whether the gateway, when active, carries this call.
-
-    Kept next to the redirects it mirrors: the request path decides where a
-    call goes and the billing path decides who charges for it, and the two
-    have to agree on exactly the same set or a call is charged twice.
-
-    Matches both spellings, since the model reaches the two paths in
-    different forms — the transport sees ``openrouter/openai/x`` and
-    ``claude-opus-5``, while accounting sees ``openai/x@openrouter`` and
-    ``claude-opus-5@anthropic``.
-    """
-    name = (model or "").strip().lower()
-    if not name:
-        return False
-    return (
-        name.startswith(_OPENROUTER_MODEL_PREFIX)
-        or name.endswith("@openrouter")
-        or name.startswith("anthropic/")
-        or name.endswith("@anthropic")
-    )
-
-
 #: Header the broker reads to attribute a brokered call to an assistant.
 #:
-#: The direct path took this from the billing context when it deducted
-#: client-side. Gateway-routed calls skip that deduction -- the broker settles
-#: them -- so without carrying it explicitly the assistant is lost, and with it
-#: both per-assistant reporting and the per-assistant spending caps, which are
-#: enforced against exactly this id. A header rather than a body field: the
-#: body is provider-shaped and forwarded, so anything added there has to be
-#: stripped again before it reaches a provider that would reject it.
+#: The broker sees only provider-shaped bytes, so without carrying this
+#: explicitly the assistant is lost, and with it both per-assistant reporting
+#: and the per-assistant spending caps, which are enforced against exactly
+#: this id. A header rather than a body field: the body is forwarded to the
+#: provider verbatim, so anything added there has to be stripped again before
+#: it reaches a provider that would reject it.
 _ASSISTANT_HEADER = "X-Unify-Assistant-Id"
 
 #: Headers carrying the billing-context action label/source, for the same
-#: reason as ``_ASSISTANT_HEADER`` above: the direct path read these off the
-#: billing context when it deducted client-side, and a gateway-routed call
-#: needs them to travel explicitly since the broker -- not this process --
-#: settles the call and writes the ledger row.
+#: reason as ``_ASSISTANT_HEADER`` above: they live in this process's billing
+#: context, and a brokered call needs them to travel explicitly for the
+#: broker's own reporting to say what the spend was for.
 #:
 #: The label is base64url-encoded because it is free-form text (an act label
 #: can be written in any language, e.g. Chinese) and raw HTTP header values
@@ -645,8 +538,6 @@ def _prepare_provider_request_kw(
     # server-side broker instead of calling OpenRouter directly, so the provider
     # key never has to live in this process. The gateway is OpenAI-compatible, so
     # LiteLLM's OpenRouter transport reaches it by overriding api_base/api_key.
-    # Billing is settled server-side by the gateway, so ``_safe_deduct_credits``
-    # skips these calls (see its guard) to avoid double-charging.
     if (
         _llm_gateway_active()
         and model.startswith(_OPENROUTER_MODEL_PREFIX)
@@ -1587,19 +1478,11 @@ class Unify(_UniClient):
             llm_error = e
             raise
         finally:
-            # Deduct credits based on usage after streaming completes
             if usage_info is not None:
-                provider_cost, prompt_tokens, completion_tokens = (
-                    _provider_cost_from_stream_usage(accounting_model, usage_info)
+                provider_cost = _provider_cost_from_stream_usage(
+                    accounting_model,
+                    usage_info,
                 )
-                if provider_cost is not None and provider_cost > 0:
-                    _safe_deduct_credits(
-                        provider_cost,
-                        api_key=self._api_key,
-                        model=accounting_model,
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                    )
 
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
@@ -1627,7 +1510,7 @@ class Unify(_UniClient):
         label_suffix: str,
         origin: Optional[str] = None,
     ) -> "ChatCompletion":
-        """Execute a single postprocessing retry: LLM call + logging + cost deduction."""
+        """Execute a single postprocessing retry: LLM call + logging + cost event."""
         label = f"{endpoint}-{label_suffix}"
         # Refusal fallbacks re-issue the request on a different model than the
         # one this client is bound to.
@@ -1684,12 +1567,6 @@ class Unify(_UniClient):
             accounting_model = _canonical_model_for_accounting(retry_kw.get("model"))
             cost = compute_cost_from_response(accounting_model, completion)
             if cost is not None and cost > 0:
-                _safe_deduct_credits(
-                    cost,
-                    api_key=self._api_key,
-                    model=accounting_model,
-                )
-
                 _emit_cost_event(
                     CostEvent.from_completion(
                         model=accounting_model,
@@ -1931,14 +1808,6 @@ class Unify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-
-        # Deduct credits for cache misses (use the already-computed cost).
-        if provider_cost is not None and provider_cost > 0:
-            _safe_deduct_credits(
-                provider_cost,
-                api_key=self._api_key,
-                model=accounting_model,
-            )
 
         # Always return full completion; _apply_stateful_logic handles extraction
         return chat_completion
@@ -2189,23 +2058,11 @@ class AsyncUnify(_UniClient):
             except BaseException:
                 pass
 
-            # Deduct credits based on usage after streaming completes
             if usage_info is not None:
-                provider_cost, prompt_tokens, completion_tokens = (
-                    _provider_cost_from_stream_usage(accounting_model, usage_info)
+                provider_cost = _provider_cost_from_stream_usage(
+                    accounting_model,
+                    usage_info,
                 )
-                if provider_cost is not None and provider_cost > 0:
-                    _spawn_deduction(
-                        asyncio.to_thread(
-                            _safe_deduct_credits,
-                            provider_cost,
-                            api_key=self._api_key,
-                            model=accounting_model,
-                            prompt_tokens=prompt_tokens,
-                            completion_tokens=completion_tokens,
-                        ),
-                        name="unillm_deduct_credits_stream",
-                    )
 
             # Emit LLM event (after streaming completes)
             _emit_llm_event(
@@ -2233,7 +2090,7 @@ class AsyncUnify(_UniClient):
         label_suffix: str,
         origin: Optional[str] = None,
     ) -> "ChatCompletion":
-        """Execute a single postprocessing retry: LLM call + logging + cost deduction."""
+        """Execute a single postprocessing retry: LLM call + logging + cost event."""
         label = f"{endpoint}-{label_suffix}"
         # Refusal fallbacks re-issue the request on a different model than the
         # one this client is bound to.
@@ -2292,16 +2149,6 @@ class AsyncUnify(_UniClient):
             accounting_model = _canonical_model_for_accounting(retry_kw.get("model"))
             cost = compute_cost_from_response(accounting_model, completion)
             if cost is not None and cost > 0:
-                _spawn_deduction(
-                    asyncio.to_thread(
-                        _safe_deduct_credits,
-                        cost,
-                        api_key=self._api_key,
-                        model=accounting_model,
-                    ),
-                    name=f"unillm_deduct_credits_{label_suffix}",
-                )
-
                 _emit_cost_event(
                     CostEvent.from_completion(
                         model=accounting_model,
@@ -2501,12 +2348,11 @@ class AsyncUnify(_UniClient):
             # An unconsumed LLM task means the caller stopped waiting (a
             # limit denial cancels the call itself and clears the handle,
             # so it never lands here). The request is already with the
-            # provider, so charge for it once the response arrives instead
+            # provider, so account for it once the response arrives instead
             # of cancelling and losing both the answer and the amount.
             if llm_task is not None:
                 _bill_abandoned_call(
                     llm_task,
-                    api_key=self._api_key,
                     accounting_model=accounting_model,
                     request_kw=transport_kw,
                     origin=origin,
@@ -2565,18 +2411,6 @@ class AsyncUnify(_UniClient):
                     completion=chat_completion,
                     cache_status=cache_status,
                 ),
-            )
-
-        # Deduct credits for cache misses (use the already-computed cost)
-        if provider_cost is not None and provider_cost > 0:
-            _spawn_deduction(
-                asyncio.to_thread(
-                    _safe_deduct_credits,
-                    provider_cost,
-                    api_key=self._api_key,
-                    model=accounting_model,
-                ),
-                name="unillm_deduct_credits",
             )
 
         # Apply postprocessing checks (tool retries + response_format validation)

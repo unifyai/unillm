@@ -10,7 +10,6 @@ FIRST_PARTY = {
     "communication",
     "console",
     "orchestra",
-    "unisdk",
     "unillm",
     "unify",
     "unity-deploy",
