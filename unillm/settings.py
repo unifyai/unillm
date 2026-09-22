@@ -1,10 +1,67 @@
+import json
+import os
+from pathlib import Path
 from typing import Any, Union
 
-from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
+from pydantic.fields import FieldInfo
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 from unillm.types.cache import CACHE_KEYINGS, CACHE_MODES, CacheParam
+
+# Provider keys that Secret Manager supplies when the environment does not.
+PROVIDER_KEYS = (
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_MANAGEMENT_API_KEY",
+    "TOGETHER_API_KEY",
+    "ANTHROPIC_API_KEY",
+)
+SECRET_MANAGER_PROJECT = "gcp-project-saas"
+SERVICE_ACCOUNT_KEY = Path("~/.config/gcloud/automation.json").expanduser()
+
+
+class SecretManagerSource(PydanticBaseSettingsSource):
+    """Provider keys from Google Secret Manager, read as the team service
+    account whose key sits at ``~/.config/gcloud/automation.json``.
+
+    Lowest priority: a key in the environment or a ``.env`` file wins. On a
+    machine without that key file the source contributes nothing, so the
+    library behaves as a plain env-configured package everywhere else.
+    """
+
+    def get_field_value(
+        self,
+        field: FieldInfo,
+        field_name: str,
+    ) -> tuple[Any, str, bool]:
+        return None, field_name, False
+
+    def __call__(self) -> dict[str, Any]:
+        wanted = [name for name in PROVIDER_KEYS if not os.environ.get(name)]
+        if not wanted or not SERVICE_ACCOUNT_KEY.is_file():
+            return {}
+        from google.api_core.exceptions import NotFound
+        from google.cloud import secretmanager
+        from google.oauth2 import service_account
+
+        credentials = service_account.Credentials.from_service_account_info(
+            json.loads(SERVICE_ACCOUNT_KEY.read_text()),
+        )
+        client = secretmanager.SecretManagerServiceClient(credentials=credentials)
+        values: dict[str, Any] = {}
+        for name in wanted:
+            try:
+                response = client.access_secret_version(
+                    name=f"projects/{SECRET_MANAGER_PROJECT}/secrets/{name}/versions/latest",
+                )
+            except NotFound:
+                continue
+            values[name] = response.payload.data.decode("utf-8")
+        return values
 
 
 def _parse_bool(v: Any) -> bool:
@@ -22,6 +79,22 @@ class Settings(BaseSettings):
         case_sensitive=True,
         extra="ignore",
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            SecretManagerSource(settings_cls),
+        )
 
     # OpenRouter
     OPENROUTER_API_KEY: SecretStr = SecretStr("")
