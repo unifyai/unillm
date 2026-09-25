@@ -45,18 +45,10 @@ def pytest_sessionstart(session):
     except ImportError:
         os.environ["UNILLM_LOG_DIR"] = str(unillm_log_dir)
 
-    # Orchestra log directory (for local orchestra server, if running)
-    # This sets the env var so that if a local orchestra is started, it knows where to log
-    orchestra_log_dir = root_path / "logs" / "orchestra" / subdir
-    orchestra_log_dir.mkdir(parents=True, exist_ok=True)
-    os.environ["ORCHESTRA_LOG_DIR"] = str(orchestra_log_dir)
-
-    # Cross-repo OTEL traces (all services write to the same directory)
+    # OpenTelemetry span export
     otel_log_dir = root_path / "logs" / "all" / subdir
     otel_log_dir.mkdir(parents=True, exist_ok=True)
     os.environ["UNILLM_OTEL_LOG_DIR"] = str(otel_log_dir)
-    os.environ["UNISDK_OTEL_LOG_DIR"] = str(otel_log_dir)
-    os.environ["ORCHESTRA_OTEL_LOG_DIR"] = str(otel_log_dir)
 
 
 # TODO: Won't be needed once LiteLLM handles their type annotations correctly...

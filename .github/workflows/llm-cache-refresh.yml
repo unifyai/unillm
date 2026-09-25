@@ -4,7 +4,7 @@ run-name: LLM cache refresh (${{ inputs.test_path }})
 # Dedicated, keyed workflow that (re)populates the shared LLM response cache
 # stored in the GitHub Actions cache (.cache.ndjson). Normal CI runs read-only
 # and never calls paid LLM APIs; this workflow is the only place that writes the
-# cache. Mirrors the pattern in unifyai/droid's llm-cache-refresh.yml.
+# cache.
 
 on:
   workflow_dispatch:
@@ -50,7 +50,6 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
     steps:
     - name: Validate inputs
       run: |
@@ -81,10 +80,6 @@ jobs:
         cp .github/cache-seed/cache.ndjson cache-artifacts/seed/.cache_write.ndjson
         echo "Staged seed with $(grep -c . cache-artifacts/seed/.cache_write.ndjson || true) entries"
 
-    - name: Clone unify repo (public; no token needed)
-      if: inputs.publish_seed != 'PUBLISH_SEED_OK'
-      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unisdk.git unify-sdk
-
     - name: Set up Python
       if: inputs.publish_seed != 'PUBLISH_SEED_OK'
       uses: actions/setup-python@v5
@@ -94,10 +89,6 @@ jobs:
     - name: Install uv
       if: inputs.publish_seed != 'PUBLISH_SEED_OK'
       uses: astral-sh/setup-uv@v5
-
-    - name: Configure unify path for CI
-      if: inputs.publish_seed != 'PUBLISH_SEED_OK'
-      run: sed -i 's|path = "../unisdk"|path = "./unify-sdk"|g' pyproject.toml
 
     - name: Install unillm deps
       if: inputs.publish_seed != 'PUBLISH_SEED_OK'
@@ -163,10 +154,11 @@ jobs:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
-    # The Actions cache above is branch-scoped, so promotion PRs into main
-    # (which run as pull_request with base=main) cannot restore it. Publish the
-    # full consolidated cache as an artifact too — artifacts are not
-    # branch-scoped — so tests.yml can hydrate from it across branches.
+    # The Actions cache above drops an entry nobody has read for seven days,
+    # and an entry saved on a branch other than main is visible only on that
+    # branch. Publish the full consolidated cache as an artifact too, which
+    # lasts 90 days and can be read from any branch, so tests.yml can hydrate
+    # from it.
     - name: Publish consolidated cache as cross-branch artifact
       if: steps.consolidate.outputs.publish == 'true'
       uses: actions/upload-artifact@v4

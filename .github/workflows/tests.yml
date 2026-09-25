@@ -1,13 +1,8 @@
 # CI for unillm
 #
-# Two modes:
-#   Internal (CI_CLONE_APP_PRIVATE_KEY, GCP_SERVICE_ACCOUNT_JSON and UNIFY_KEY
-#     all available): Clones Orchestra, starts a local server, and runs tests
-#     against it. Full observability (GCP, OTel, logs).
-#   External (any of the above missing): Tests run without a local Orchestra.
-#     Credit deduction falls back to the production API (or silently warns if no
-#     UNIFY_KEY). External contributors can rely on cached responses; cache refresh
-#     needs OPENROUTER_API_KEY and ANTHROPIC_API_KEY in the llm-cache-refresh env.
+# The suite replays the shared LLM response cache read-only and never calls a
+# paid provider API; llm-cache-refresh.yml is the only workflow that writes
+# the cache.
 
 name: Testing unillm
 
@@ -40,11 +35,6 @@ jobs:
         PR_TITLE: ${{ github.event.pull_request.title }}
         REF_NAME: ${{ github.ref_name }}
       run: |
-        # The staging->main promotion gate lives entirely in
-        # pytest-release-gate.yml now (pull_request(main)/workflow_dispatch
-        # only), so this workflow no longer special-cases base==main: doing
-        # so here would run the suite a second time on every release PR.
-
         # workflow_dispatch always runs tests
         if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
           echo "run_tests=true" >> "$GITHUB_OUTPUT"
@@ -60,14 +50,11 @@ jobs:
             exit 0
           fi
 
-          # staging/main take direct pushes as a matter of course (see AGENTS.md
-          # "commit directly to staging"), untagged -- run the suite on those
-          # regardless so an untagged trunk push still gets real feedback. This
-          # is independent of the staging->main release gate, which lives
-          # entirely in pytest-release-gate.yml and never reads this output.
-          if [[ "$REF_NAME" == "staging" || "$REF_NAME" == "main" ]]; then
+          # main takes direct pushes as a matter of course, untagged, so run
+          # the suite on every push there.
+          if [[ "$REF_NAME" == "main" ]]; then
             echo "run_tests=true" >> "$GITHUB_OUTPUT"
-            echo "Tests triggered by direct push to $REF_NAME"
+            echo "Tests triggered by direct push to main"
             exit 0
           fi
 
@@ -110,28 +97,13 @@ jobs:
         uv sync --only-group lint --no-install-project --frozen
         uv run --no-sync black --check .
 
-  # The everyday suite, for developer feedback on pushes and non-release PRs.
-  # The required "pytest" release-gate context is published entirely by
-  # pytest-release-gate.yml, which runs this same job on
-  # pull_request(main)/workflow_dispatch only -- never push -- so an ordinary
-  # push here can never satisfy that gate with a stale pass.
   pytest-run:
     runs-on: ubuntu-latest-8-cores
     needs: should-run-tests
     if: needs.should-run-tests.outputs.run_tests == 'true'
     timeout-minutes: 120
-    # Internal-mode secrets are scoped per repo since the SOC2 org-secret
-    # tightening (visibility "all" -> "private" cut public repos off from
-    # inherited org secrets). Sibling repos hold them in a testing
-    # environment (unisdk: unify-testing, unify: unity-testing); this job
-    # uses the same shape. Populating GCP_SERVICE_ACCOUNT_JSON and UNIFY_KEY
-    # in this repo's unify-testing environment (manually, via GitHub UI --
-    # write-only, never in source) is all that is needed to enable internal
-    # mode; until then the secrets-check gate below routes the job through
-    # external mode.
-    environment: unify-testing
-    # actions:read lets the cross-branch cache hydrate step list and download
-    # the llm-cache-refresh artifact; contents:read is for checkout.
+    # actions:read lets the cache hydrate step list and download the
+    # llm-cache-refresh artifact; contents:read is for checkout.
     permissions:
       contents: read
       actions: read
@@ -140,78 +112,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # Detect whether the full internal secret set is available (org CI vs
-    # external fork). The clone App's key alone is not enough: internal mode
-    # also authenticates to GCP and seeds Orchestra, so a repo that has the
-    # key but not the other secrets must run in external mode rather than
-    # fail at the GCP auth step.
-    - name: Check internal secrets
-      id: secrets-check
-      run: |
-        missing=""
-        [ -z "$CI_CLONE_APP_PRIVATE_KEY" ] && missing="$missing CI_CLONE_APP_PRIVATE_KEY"
-        [ -z "$GCP_SERVICE_ACCOUNT_JSON" ] && missing="$missing GCP_SERVICE_ACCOUNT_JSON"
-        [ -z "$UNIFY_KEY" ] && missing="$missing UNIFY_KEY"
-        if [ -z "$missing" ]; then
-          echo "has_internal=true" >> $GITHUB_OUTPUT
-          echo "Running in internal mode (Orchestra + GCP available)"
-        else
-          echo "has_internal=false" >> $GITHUB_OUTPUT
-          echo "Running in external mode (no Orchestra, using production API fallback); missing:$missing"
-        fi
-      env:
-        CI_CLONE_APP_PRIVATE_KEY: ${{ secrets.CI_CLONE_APP_PRIVATE_KEY }}
-        GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
-        UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
-
-    # --- Internal-only: Clone and set up Orchestra ---
-
-    # Mints an installation token that can read orchestra and nothing else,
-    # then revokes it when the job ends. 4606137 is the unifyai-ci-clone
-    # App, which holds Contents: Read only; an App id is not a secret.
-    - name: Mint a token that can read orchestra
-      id: clone-token
-      if: steps.secrets-check.outputs.has_internal == 'true'
-      uses: actions/create-github-app-token@v3
-      with:
-        app-id: '4606137'
-        private-key: ${{ secrets.CI_CLONE_APP_PRIVATE_KEY }}
-        owner: ${{ github.repository_owner }}
-        repositories: orchestra
-
-    - name: Clone orchestra repo for local deployment
-      if: steps.secrets-check.outputs.has_internal == 'true'
-      uses: actions/checkout@v4
-      with:
-        repository: unifyai/orchestra
-        ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        path: orchestra
-        token: ${{ steps.clone-token.outputs.token }}
-        fetch-depth: 1
-
-    # GCP_SERVICE_ACCOUNT_JSON is a key for the CI service account that let
-    # the local Orchestra reach its storage buckets. That account has been
-    # deleted, so the key no longer authenticates. A private key downloads
-    # once and this secret is write-only: check the team's Secret Manager for
-    # a stored copy before minting another key, and store any new one there.
-    - name: Authenticate to Google Cloud
-      if: steps.secrets-check.outputs.has_internal == 'true'
-      uses: google-github-actions/auth@v2
-      with:
-        credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
-
-    - name: Get orchestra commit SHA
-      if: steps.secrets-check.outputs.has_internal == 'true'
-      id: orchestra-sha
-      run: echo "sha=$(git -C orchestra rev-parse HEAD)" >> $GITHUB_OUTPUT
-
-    # --- Clone unify (needed by all modes for uv sync) ---
-
-    - name: Clone unify repo (public; no token needed)
-      run: git clone --depth 1 --branch "${{ github.ref_name == 'main' && 'main' || 'staging' }}" https://github.com/unifyai/unisdk.git unify-sdk
-
-    # --- Common setup ---
-
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -219,12 +119,6 @@ jobs:
 
     - name: Install uv
       uses: astral-sh/setup-uv@v4
-
-    - name: Install poetry (for orchestra)
-      if: steps.secrets-check.outputs.has_internal == 'true'
-      run: |
-        python -m pip install --upgrade pip
-        pip install poetry
 
     - name: Cache uv dependencies
       uses: actions/cache@v4
@@ -236,15 +130,6 @@ jobs:
         restore-keys: |
           uv-${{ runner.os }}-
 
-    - name: Cache poetry dependencies
-      if: steps.secrets-check.outputs.has_internal == 'true'
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pypoetry
-        key: poetry-${{ runner.os }}-orchestra-${{ steps.orchestra-sha.outputs.sha }}
-        restore-keys: |
-          poetry-${{ runner.os }}-orchestra-
-
     # Restore LLM response cache (.cache.ndjson)
     - name: Restore LLM cache
       id: cache-restore
@@ -255,12 +140,11 @@ jobs:
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
 
-    # The Actions cache is branch-scoped: a promotion PR into main runs as
-    # pull_request (base=main) and can't restore the staging-scoped cache, so
-    # the read-only suite would miss every entry. Artifacts are not
-    # branch-scoped, so hydrate the consolidated cache from the latest
-    # successful llm-cache-refresh run on the head branch (fallback: staging).
-    # This makes the staging->main promotion pytest a meaningful, passable gate.
+    # The Actions cache drops an entry nobody has read for seven days, and an
+    # entry saved on a branch other than main is visible only on that branch.
+    # Artifacts last 90 days and can be read from any branch, so hydrate the
+    # consolidated cache from the latest successful llm-cache-refresh run on
+    # the branch under test, falling back to main.
     - name: Hydrate LLM cache from refresh artifact
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -270,9 +154,9 @@ jobs:
         run_id="$(gh run list --repo "$REPO" --workflow=llm-cache-refresh.yml \
           --status=success --branch "$BRANCH" --limit 1 \
           --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null)"
-        if [ -z "$run_id" ] && [ "$BRANCH" != "staging" ]; then
+        if [ -z "$run_id" ] && [ "$BRANCH" != "main" ]; then
           run_id="$(gh run list --repo "$REPO" --workflow=llm-cache-refresh.yml \
-            --status=success --branch staging --limit 1 \
+            --status=success --branch main --limit 1 \
             --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null)"
         fi
         if [ -n "$run_id" ]; then
@@ -298,48 +182,11 @@ jobs:
           echo "WARNING: no .cache.ndjson present after hydrate step"
         fi
 
-    - name: Configure unify path for CI
-      run: sed -i 's|path = "../unisdk"|path = "./unify-sdk"|g' pyproject.toml
-
     - name: Install unillm deps
       run: uv sync --group dev
 
-    - name: Install orchestra dependencies
-      if: steps.secrets-check.outputs.has_internal == 'true'
-      run: |
-        cd "${{ github.workspace }}/orchestra"
-        poetry install --no-interaction
-
-    # --- Logging and Orchestra startup ---
-
     - name: Setup logging directories
-      run: |
-        mkdir -p "$LOGS_DIR/unillm"
-        mkdir -p "$LOGS_DIR/unisdk"
-        mkdir -p "$LOGS_DIR/orchestra"
-        mkdir -p "$LOGS_DIR/all"
-
-    # UNIFY_KEY is not a real credential: local.sh seeds it into this job's
-    # throwaway Orchestra as the test user's API key, so any string works.
-    # Never store a real key in this secret; the repository is public.
-    - name: Start local orchestra
-      if: steps.secrets-check.outputs.has_internal == 'true'
-      run: |
-        ORCHESTRA_SEED_USER=1 \
-        ORCHESTRA_WORKERS=8 \
-        ORCHESTRA_LOG_DIR="$LOGS_DIR/orchestra" \
-        ORCHESTRA_OTEL_LOG_DIR="$LOGS_DIR/all" \
-        ORCHESTRA_GCP_BUCKET_NAME="${{ vars.GCP_BUCKET_LOGS }}" \
-        ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME="${{ vars.GCP_BUCKET_ASSISTANT_IMAGES }}" \
-        ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME="${{ vars.GCP_BUCKET_RECORDINGS }}" \
-        GCP_PROJECT_ID="${{ vars.GCP_PROJECT_ID }}" \
-        GCP_LOCATION="${{ vars.GCP_LOCATION }}" \
-        UNIFY_KEY="${{ secrets.UNIFY_KEY }}" \
-        "${{ github.workspace }}/orchestra/scripts/local.sh" start
-
-        echo "ORCHESTRA_URL=http://127.0.0.1:8000/v0" >> $GITHUB_ENV
-
-    # --- Run tests ---
+      run: mkdir -p "$LOGS_DIR/unillm" "$LOGS_DIR/all"
 
     - name: Run unit tests
       id: pytest
@@ -368,7 +215,6 @@ jobs:
 
         exit $exit_code
       env:
-        UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
         OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         # Together BYOK is registered on the OpenRouter workspace; this env is
         # available for local/direct Together use and for BYOK registration scripts.
@@ -383,10 +229,8 @@ jobs:
         UNILLM_OTEL: "true"
         UNILLM_OTEL_LOG_DIR: ${{ env.LOGS_DIR }}/all
         UNILLM_LOG_DIR: ${{ env.LOGS_DIR }}/unillm
-        UNISDK_OTEL: "true"
-        UNISDK_OTEL_LOG_DIR: ${{ env.LOGS_DIR }}/all
 
-    # --- Post-test reporting and cleanup ---
+    # --- Post-test reporting ---
 
     - name: Generate success summary
       if: success()
@@ -420,17 +264,6 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "$STATS — [view logs]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
 
-    - name: Dump orchestra logs on failure
-      if: failure() && steps.secrets-check.outputs.has_internal == 'true'
-      run: |
-        echo "=== Orchestra Server Logs ==="
-        if [ -f /tmp/orchestra-local-server.log ]; then
-          cat /tmp/orchestra-local-server.log
-          cp /tmp/orchestra-local-server.log "$LOGS_DIR/orchestra/server.log"
-        else
-          echo "No orchestra log file found"
-        fi
-
     # Upload .cache_write.ndjson, which holds every entry this run served:
     # the local_separate backend promotes each cache hit into it.
     - name: Upload cache artifact
@@ -448,45 +281,12 @@ jobs:
       run: |
         echo "=== Preparing logs for upload ==="
 
-        if [ -f /tmp/orchestra-local-server.log ]; then
-          cp /tmp/orchestra-local-server.log "$LOGS_DIR/orchestra/server.log"
-          echo "✓ Copied orchestra server log"
-        fi
-
         # --- unillm logs ---
         if [ -d "$LOGS_DIR/unillm" ]; then
           file_count=$(find "$LOGS_DIR/unillm" -type f 2>/dev/null | wc -l | tr -d ' ')
           echo "✓ unillm logs: $file_count files"
         else
           echo "○ unillm logs: directory not found"
-        fi
-
-        # --- unify logs ---
-        if [ -d "$LOGS_DIR/unisdk" ]; then
-          file_count=$(find "$LOGS_DIR/unisdk" -type f 2>/dev/null | wc -l | tr -d ' ')
-          echo "✓ unify logs: $file_count files"
-        else
-          echo "○ unify logs: directory not found"
-        fi
-
-        # --- orchestra logs (requires filename sanitization for Windows compatibility) ---
-        if [ -d "$LOGS_DIR/orchestra" ]; then
-          sanitized=0
-          while IFS= read -r -d '' file; do
-            newname=$(echo "$file" | tr ':' '_')
-            if mv "$file" "$newname" 2>/dev/null; then
-              ((sanitized++)) || true
-            fi
-          done < <(find "$LOGS_DIR/orchestra" -type f -name '*:*' -print0 2>/dev/null || true)
-
-          file_count=$(find "$LOGS_DIR/orchestra" -type f 2>/dev/null | wc -l | tr -d ' ')
-          if [ "$sanitized" -gt 0 ]; then
-            echo "✓ orchestra logs: $file_count files ($sanitized filenames sanitized)"
-          else
-            echo "✓ orchestra logs: $file_count files"
-          fi
-        else
-          echo "○ orchestra logs: directory not found"
         fi
 
         # --- OpenTelemetry traces ---
@@ -507,11 +307,6 @@ jobs:
         path: logs/
         if-no-files-found: ignore
         retention-days: 90
-
-    - name: Stop local orchestra
-      if: always() && steps.secrets-check.outputs.has_internal == 'true'
-      run: |
-        "${{ github.workspace }}/orchestra/scripts/local.sh" stop || true
 
   # Cache consolidation job: merges new cache entries and saves to GitHub cache
   cache-consolidation:
