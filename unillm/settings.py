@@ -20,13 +20,13 @@ PROVIDER_KEYS = (
     "TOGETHER_API_KEY",
     "ANTHROPIC_API_KEY",
 )
-SECRET_MANAGER_PROJECT = "gcp-project-saas"
 SERVICE_ACCOUNT_KEY = Path("~/.config/gcloud/automation.json").expanduser()
 
 
 class SecretManagerSource(PydanticBaseSettingsSource):
     """Provider keys from Google Secret Manager, read as the team service
-    account whose key sits at ``~/.config/gcloud/automation.json``.
+    account whose key sits at ``~/.config/gcloud/automation.json``, from the
+    project named by that key's ``project_id``.
 
     Lowest priority: a key in the environment or a ``.env`` file wins. On a
     machine without that key file the source contributes nothing, so the
@@ -48,15 +48,14 @@ class SecretManagerSource(PydanticBaseSettingsSource):
         from google.cloud import secretmanager
         from google.oauth2 import service_account
 
-        credentials = service_account.Credentials.from_service_account_info(
-            json.loads(SERVICE_ACCOUNT_KEY.read_text()),
-        )
+        info = json.loads(SERVICE_ACCOUNT_KEY.read_text())
+        credentials = service_account.Credentials.from_service_account_info(info)
         client = secretmanager.SecretManagerServiceClient(credentials=credentials)
         values: dict[str, Any] = {}
         for name in wanted:
             try:
                 response = client.access_secret_version(
-                    name=f"projects/{SECRET_MANAGER_PROJECT}/secrets/{name}/versions/latest",
+                    name=f"projects/{info['project_id']}/secrets/{name}/versions/latest",
                 )
             except NotFound:
                 continue
