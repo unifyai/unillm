@@ -538,7 +538,7 @@ def log_usage(
     4. Logs to console
 
     Args:
-        model: The model identifier (e.g. 'gpt-4o-realtime-preview').
+        model: The model identifier (e.g. 'gpt-realtime-1.5').
         usage: Usage dict with token counts. Expected shape::
 
             {
@@ -559,7 +559,7 @@ def log_usage(
         transcript: Conversation transcript as a list of
             ``{"role": "user"|"assistant"|"system", "content": "..."}`` dicts.
             Included in the log file for debuggability.
-        label: Label for the log entry (e.g. 'gpt-4o-realtime-preview').
+        label: Label for the log entry (e.g. 'gpt-realtime-1.5').
 
     Returns:
         The provider cost of the session, in USD.

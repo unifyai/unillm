@@ -811,10 +811,10 @@ class TestLogUsage:
         ]
 
         cost = log_usage(
-            "gpt-4o-realtime-preview",
+            "gpt-realtime-1.5",
             usage,
             transcript=transcript,
-            label="gpt-4o-realtime-preview",
+            label="gpt-realtime-1.5",
         )
 
         # Should return a positive cost
@@ -828,7 +828,7 @@ class TestLogUsage:
 
         # Log file should contain the request section with model and transcript
         assert "LLM request" in content
-        assert "gpt-4o-realtime-preview" in content
+        assert "gpt-realtime-1.5" in content
         assert "What's the weather like?" in content
         assert "Let me check on that for you." in content
 
@@ -853,7 +853,7 @@ class TestLogUsage:
 
         usage = {"input_tokens": 50, "output_tokens": 30}
 
-        cost = log_usage("gpt-4o-realtime-preview", usage)
+        cost = log_usage("gpt-realtime-1.5", usage)
 
         assert cost > 0
 
@@ -863,7 +863,7 @@ class TestLogUsage:
         content = log_files[0].read_text()
         # Should NOT contain "messages" key when no transcript
         assert "messages" not in content
-        assert "gpt-4o-realtime-preview" in content
+        assert "gpt-realtime-1.5" in content
 
     def test_emits_llm_event(self, tmp_path, monkeypatch):
         """log_usage emits an LLMEvent so downstream hooks (e.g. cumulative
@@ -897,12 +897,12 @@ class TestLogUsage:
             "unillm.llm_events._emit_llm_event",
             side_effect=lambda e: captured_events.append(e),
         ):
-            log_usage("gpt-4o-realtime-preview", usage)
+            log_usage("gpt-realtime-1.5", usage)
 
         assert len(captured_events) == 1
         event = captured_events[0]
         assert isinstance(event, LLMEvent)
-        assert event.request["model"] == "gpt-4o-realtime-preview"
+        assert event.request["model"] == "gpt-realtime-1.5"
         assert event.provider_cost > 0
         assert event.response["usage"] == usage
 

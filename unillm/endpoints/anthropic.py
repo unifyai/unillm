@@ -5,11 +5,6 @@ from .utils import (
 
 provider = "anthropic"
 models = {
-    "claude-3-haiku": "anthropic/claude-3-haiku-20240307",
-    "claude-3.5-haiku": "anthropic/claude-3-5-haiku-20241022",
-    "claude-4-sonnet": "anthropic/claude-sonnet-4-20250514",
-    "claude-4-opus": "anthropic/claude-opus-4-20250514",
-    "claude-4.1-opus": "anthropic/claude-opus-4-1-20250805",
     "claude-4.5-sonnet": "anthropic/claude-sonnet-4-5-20250929",
     "claude-4.5-haiku": "anthropic/claude-haiku-4-5-20251001",
     "claude-4.5-opus": "anthropic/claude-opus-4-5-20251101",
@@ -23,12 +18,10 @@ models = {
 
 CONTEXT_1M_BETA = "context-1m-2025-08-07"
 CONTEXT_1M_MODELS = {
-    "anthropic/claude-sonnet-4-20250514",
     "anthropic/claude-sonnet-4-5-20250929",
     "anthropic/claude-opus-4-6",
     "anthropic/claude-sonnet-4-6",
     "anthropic/claude-opus-4-8",
-    models["claude-4-sonnet"],
     models["claude-4.5-sonnet"],
     models["claude-4.6-opus"],
     models["claude-4.6-sonnet"],
@@ -73,15 +66,6 @@ REFUSAL_FALLBACK_MODELS = {
 register_model_alias_map(provider, models)
 register_litellm_model_info(
     {
-        "anthropic/claude-3-5-haiku-20241022": {
-            "litellm_provider": provider,
-            "mode": "chat",
-            "max_input_tokens": 200_000,
-            "input_cost_per_token": 0.80 / 1_000_000,
-            "cache_creation_input_token_cost": 1.00 / 1_000_000,
-            "cache_read_input_token_cost": 0.08 / 1_000_000,
-            "output_cost_per_token": 4.00 / 1_000_000,
-        },
         "anthropic/claude-opus-4-6": {
             "litellm_provider": provider,
             "mode": "chat",

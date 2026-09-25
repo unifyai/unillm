@@ -74,7 +74,7 @@ response = client.generate(
 )
 
 # Async client
-async_client = unillm.AsyncUnify("claude-sonnet-4-20250514@anthropic")
+async_client = unillm.AsyncUnify("claude-sonnet-5@anthropic")
 response = await async_client.generate(
     messages=[{"role": "user", "content": "Hello!"}]
 )
@@ -88,7 +88,7 @@ All models use a consistent `model@provider` format:
 
 ```python
 client = unillm.Unify("openai/gpt-4o@openrouter")
-client = unillm.Unify("claude-sonnet-4-20250514@anthropic")
+client = unillm.Unify("claude-sonnet-5@anthropic")
 client = unillm.Unify("gemini-2.0-flash@vertexai")
 ```
 

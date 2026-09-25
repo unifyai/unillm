@@ -13,9 +13,9 @@ load_dotenv(_repo_root / ".env", override=True)
 # Set UNILLM_CACHE_DIR to repo root so cache location is consistent regardless of cwd
 os.environ.setdefault("UNILLM_CACHE_DIR", str(_repo_root))
 
-# Price models from the cost map bundled with the locked litellm. Otherwise
-# litellm downloads the map from its main branch on import, and that copy
-# drops retired models the cost tests still price.
+# Price models from the cost map bundled with the locked litellm, so the
+# prices the cost tests assert change only with the lockfile. Otherwise
+# litellm downloads the map from its main branch on import.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 import atexit

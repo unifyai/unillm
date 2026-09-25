@@ -76,12 +76,12 @@ class TestComputeCostWithProviderSuffix:
     def test_compute_cost_with_anthropic_suffix(self):
         """Test that claude model with @anthropic suffix works."""
         cost_with_suffix = compute_cost(
-            "claude-sonnet-4-20250514@anthropic",
+            "claude-sonnet-4-6@anthropic",
             prompt_tokens=1000,
             completion_tokens=500,
         )
         cost_without_suffix = compute_cost(
-            "claude-sonnet-4-20250514",
+            "claude-sonnet-4-6",
             prompt_tokens=1000,
             completion_tokens=500,
         )
@@ -470,16 +470,16 @@ class TestComputeFullCostFromUsage:
                 "audio_tokens": 100,
             },
         }
-        cost = compute_full_cost_from_usage("gpt-4o-realtime-preview", usage)
+        cost = compute_full_cost_from_usage("gpt-realtime-1.5", usage)
 
-        # gpt-4o-realtime-preview:
-        # text: input=$5/M, output=$20/M
-        # audio: input=$40/M, output=$80/M
+        # gpt-realtime-1.5:
+        # text: input=$4/M, output=$16/M
+        # audio: input=$32/M, output=$64/M
         # Expected:
-        #   text: (100 * 5e-6) + (48 * 2e-5) = 0.0005 + 0.00096 = 0.00146
-        #   audio: (27 * 4e-5) + (100 * 8e-5) = 0.00108 + 0.008 = 0.00908
-        #   total: 0.00146 + 0.00908 = 0.01054
-        assert abs(cost - 0.01054) < 1e-6
+        #   text: (100 * 4e-6) + (48 * 1.6e-5) = 0.0004 + 0.000768 = 0.001168
+        #   audio: (27 * 3.2e-5) + (100 * 6.4e-5) = 0.000864 + 0.0064 = 0.007264
+        #   total: 0.001168 + 0.007264 = 0.008432
+        assert abs(cost - 0.008432) < 1e-6
 
     def test_realtime_api_usage_audio_only(self):
         """Test Realtime API with only audio tokens."""
@@ -493,10 +493,10 @@ class TestComputeFullCostFromUsage:
                 "audio_tokens": 500,
             },
         }
-        cost = compute_full_cost_from_usage("gpt-4o-realtime-preview", usage)
+        cost = compute_full_cost_from_usage("gpt-realtime-1.5", usage)
 
-        # audio: (1000 * 4e-5) + (500 * 8e-5) = 0.04 + 0.04 = 0.08
-        assert abs(cost - 0.08) < 1e-9
+        # audio: (1000 * 3.2e-5) + (500 * 6.4e-5) = 0.032 + 0.032 = 0.064
+        assert abs(cost - 0.064) < 1e-9
 
     def test_input_output_tokens_format(self):
         """Test with input_tokens/output_tokens format (alternative to prompt/completion)."""
@@ -521,12 +521,12 @@ class TestComputeFullCostFromUsage:
             input_token_details = MockTokenDetails()
             output_token_details = MockTokenDetails()
 
-        cost = compute_full_cost_from_usage("gpt-4o-realtime-preview", MockUsage())
+        cost = compute_full_cost_from_usage("gpt-realtime-1.5", MockUsage())
 
-        # text: (50 * 5e-6) + (50 * 2e-5) = 0.00025 + 0.001 = 0.00125
-        # audio: (200 * 4e-5) + (200 * 8e-5) = 0.008 + 0.016 = 0.024
-        # total: 0.00125 + 0.024 = 0.02525
-        assert abs(cost - 0.02525) < 1e-9
+        # text: (50 * 4e-6) + (50 * 1.6e-5) = 0.0002 + 0.0008 = 0.001
+        # audio: (200 * 3.2e-5) + (200 * 6.4e-5) = 0.0064 + 0.0128 = 0.0192
+        # total: 0.001 + 0.0192 = 0.0202
+        assert abs(cost - 0.0202) < 1e-9
 
     def test_unknown_model_raises(self):
         """Test that unknown models raise ValueError."""
