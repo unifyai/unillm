@@ -28,13 +28,6 @@ litellm.suppress_debug_info = True
 # local
 from openai._types import Headers
 from ..costs import compute_cost_from_response
-from ..limit_hooks import (
-    check_limits,
-    check_limits_sync,
-    is_limit_check_enabled,
-    LimitCheckRequest,
-    SpendingLimitExceededError,
-)
 
 _LOGGER = logging.getLogger("unillm")
 
@@ -234,19 +227,6 @@ def _normalize_assistant_message_content(chat_completion: Any) -> bool:
     return True
 
 
-def _cancel_inflight_task(task: asyncio.Task) -> None:
-    """Request cancellation without delaying the limit-denial response."""
-    task.cancel()
-
-    def consume_result(completed_task: asyncio.Task) -> None:
-        try:
-            completed_task.result()
-        except (asyncio.CancelledError, Exception):
-            pass
-
-    task.add_done_callback(consume_result)
-
-
 def _bill_abandoned_call(
     llm_task: asyncio.Task,
     *,
@@ -263,9 +243,9 @@ def _bill_abandoned_call(
     more than 2x, so the request is left to finish in the background and
     the cost it reports is what gets recorded.
 
-    Emitting the LLM event here is what lets spending limits see the
-    money. A limit only counts what it is told about, so without this an
-    account could out-spend its cap through calls nobody ever read.
+    Emitting the LLM and cost events here is what records the money. Event
+    hooks and cost tracking only count what they are told about, so without
+    this, calls nobody read would spend without ever showing up.
     """
 
     def bill(completed_task: asyncio.Task) -> None:
@@ -1355,16 +1335,6 @@ class Unify(_UniClient):
             stream=True,
         )
 
-        # Check spending limits before starting stream
-        if is_limit_check_enabled():
-            limit_request = LimitCheckRequest(
-                model=accounting_model,
-                endpoint=endpoint,
-            )
-            limit_result = check_limits_sync(limit_request)
-            if not limit_result.allowed:
-                raise SpendingLimitExceededError(limit_result)
-
         # Track usage from the stream for cost deduction
         usage_info = None
         llm_error: BaseException | None = None
@@ -1579,15 +1549,6 @@ class Unify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ) as span:
-                if is_limit_check_enabled():
-                    limit_request = LimitCheckRequest(
-                        model=accounting_model,
-                        endpoint=endpoint,
-                    )
-                    limit_result = check_limits_sync(limit_request)
-                    if not limit_result.allowed:
-                        raise SpendingLimitExceededError(limit_result)
-
                 if is_cache_enabled:
                     chat_completion, cache_hit_kind = _get_cache(
                         fn_name="chat.completions.create",
@@ -1885,53 +1846,20 @@ class AsyncUnify(_UniClient):
         if pending_path and self._on_log_file_pending:
             self._on_log_file_pending(pending_path)
 
-        # Start limit check and stream connection in parallel for in-flight cancellation
-        limit_task: asyncio.Task | None = None
-        if is_limit_check_enabled():
-            limit_request = LimitCheckRequest(
-                model=accounting_model,
-                endpoint=endpoint,
-            )
-            limit_task = asyncio.create_task(
-                check_limits(limit_request),
-                name="spending_limit_check_stream",
-            )
-
         # Track usage from the stream for cost deduction
         usage_info = None
         llm_error: BaseException | None = None
         provider_cost: float | None = None
-        async_stream = None
         collected_content: list[str] = []
 
         try:
-            # Start stream connection (this initiates the LLM call)
-            stream_task = asyncio.create_task(
-                retry_transient_llm_async(
-                    lambda: litellm.acompletion(
-                        shared_session=get_shared_session(),
-                        client=self._get_async_http_client(),
-                        **transport_kw,
-                    ),
+            async_stream = await retry_transient_llm_async(
+                lambda: litellm.acompletion(
+                    shared_session=get_shared_session(),
+                    client=self._get_async_http_client(),
+                    **transport_kw,
                 ),
-                name="llm_stream_init",
             )
-
-            # Wait for limit check (fast) while stream connects
-            if limit_task is not None:
-                limit_result = await limit_task
-                limit_task = None
-                if not limit_result.allowed:
-                    # Cancel in-flight stream connection
-                    stream_task.cancel()
-                    try:
-                        await stream_task
-                    except asyncio.CancelledError:
-                        pass
-                    raise SpendingLimitExceededError(limit_result)
-
-            # Limit passed, get the stream
-            async_stream = await stream_task
 
             async for chunk in async_stream:  # type: ignore[union-attr]
                 # Capture usage if present in the chunk (final chunk with include_usage)
@@ -2154,7 +2082,6 @@ class AsyncUnify(_UniClient):
         provider_cost: float | None = None
 
         # Task tracking for cleanup
-        limit_task: asyncio.Task | None = None
         llm_task: asyncio.Task | None = None
 
         # Wrap in OTel span with try/finally to guarantee log finalization
@@ -2165,16 +2092,6 @@ class AsyncUnify(_UniClient):
                 provider=self._provider,
                 origin=origin,
             ) as span:
-                if is_limit_check_enabled():
-                    limit_request = LimitCheckRequest(
-                        model=accounting_model,
-                        endpoint=endpoint,
-                    )
-                    limit_task = asyncio.create_task(
-                        check_limits(limit_request),
-                        name="spending_limit_check",
-                    )
-
                 if is_cache_enabled:
                     chat_completion, cache_hit_kind = _get_cache(
                         fn_name="chat.completions.create",
@@ -2184,7 +2101,6 @@ class AsyncUnify(_UniClient):
                     )
                     in_cache = True if chat_completion is not None else False
                 if chat_completion is None:
-                    # Start LLM call immediately (don't wait for limit check)
                     llm_task = asyncio.create_task(
                         _acompletion_with_transient_retry(
                             shared_session=get_shared_session(),
@@ -2195,16 +2111,6 @@ class AsyncUnify(_UniClient):
                     )
 
                     try:
-                        # Wait for limit check first (fast) while LLM runs in background
-                        if limit_task is not None:
-                            limit_result = await limit_task
-                            limit_task = None  # Mark as consumed
-                            if not limit_result.allowed:
-                                _cancel_inflight_task(llm_task)
-                                llm_task = None
-                                raise SpendingLimitExceededError(limit_result)
-
-                        # Limit check passed (or disabled), wait for LLM result.
                         # Shielded so a caller that gives up mid-call doesn't
                         # take the request with it: the provider is already
                         # generating and charging, and the response is the only
@@ -2217,11 +2123,6 @@ class AsyncUnify(_UniClient):
                         llm_error = Exception(e.message)
                         raise llm_error
                 else:
-                    if limit_task is not None:
-                        limit_result = await limit_task
-                        limit_task = None
-                        if not limit_result.allowed:
-                            raise SpendingLimitExceededError(limit_result)
                     _normalize_assistant_message_content(chat_completion)
 
                 # Determine cache status after resolution
@@ -2251,19 +2152,10 @@ class AsyncUnify(_UniClient):
                 cache_status = "error"
             raise
         finally:
-            # The limit check is ours and costs nothing to drop.
-            if limit_task is not None and not limit_task.done():
-                limit_task.cancel()
-                try:
-                    await limit_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-
-            # An unconsumed LLM task means the caller stopped waiting (a
-            # limit denial cancels the call itself and clears the handle,
-            # so it never lands here). The request is already with the
-            # provider, so account for it once the response arrives instead
-            # of cancelling and losing both the answer and the amount.
+            # An unconsumed LLM task means the caller stopped waiting. The
+            # request is already with the provider, so account for it once
+            # the response arrives instead of cancelling and losing both the
+            # answer and the amount.
             if llm_task is not None:
                 _bill_abandoned_call(
                     llm_task,

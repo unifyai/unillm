@@ -237,7 +237,6 @@ unillm/
 ├── tokens.py                # Token counting and context window utilities
 ├── cache_events.py          # Cache hit/miss event capture
 ├── llm_events.py            # LLM event hooks for observability
-├── limit_hooks.py           # Spending limit check callbacks
 ├── logger.py                # File logging and OTel tracing
 ├── clients/                 # LLM client implementations
 │   ├── base.py              # Base client class
