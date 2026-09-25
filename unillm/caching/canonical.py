@@ -36,7 +36,10 @@ _ORDERED_CONTENT_ROLES = frozenset({"assistant"})
 
 # Volatile substrings that vary per run without changing what is being asked.
 # Applied to non-assistant text only. Order matters: composite patterns
-# (timestamps, UUIDs, paths) must run before the bare hex fallback.
+# (timestamps, UUIDs, paths) must run before the bare hex fallback. Outside
+# those shapes, a run of fewer than 32 hex digits, which covers ordinary
+# decimal numbers, is left alone, so a random or clock-derived id of that
+# size in a prompt still changes the digest on every run.
 _VOLATILE_PATTERNS = (
     # ISO-8601 datetimes, including the dashed-time form used in log dirs.
     (

@@ -189,6 +189,11 @@ jobs:
         token: ${{ steps.clone-token.outputs.token }}
         fetch-depth: 1
 
+    # GCP_SERVICE_ACCOUNT_JSON is a key for the CI service account that let
+    # the local Orchestra reach its storage buckets. That account has been
+    # deleted, so the key no longer authenticates. A private key downloads
+    # once and this secret is write-only: check the team's Secret Manager for
+    # a stored copy before minting another key, and store any new one there.
     - name: Authenticate to Google Cloud
       if: steps.secrets-check.outputs.has_internal == 'true'
       uses: google-github-actions/auth@v2
@@ -314,6 +319,9 @@ jobs:
         mkdir -p "$LOGS_DIR/orchestra"
         mkdir -p "$LOGS_DIR/all"
 
+    # UNIFY_KEY is not a real credential: local.sh seeds it into this job's
+    # throwaway Orchestra as the test user's API key, so any string works.
+    # Never store a real key in this secret; the repository is public.
     - name: Start local orchestra
       if: steps.secrets-check.outputs.has_internal == 'true'
       run: |
@@ -423,7 +431,8 @@ jobs:
           echo "No orchestra log file found"
         fi
 
-    # Upload cache diff artifact (new entries from this run)
+    # Upload .cache_write.ndjson, which holds every entry this run served:
+    # the local_separate backend promotes each cache hit into it.
     - name: Upload cache artifact
       if: always()
       uses: actions/upload-artifact@v4

@@ -73,6 +73,10 @@ gh workflow run llm-cache-refresh.yml --repo unifyai/unillm --ref staging \
 
 Requires the `unillm-llm-cache-refresh` environment secrets. Tests may still fail assertions while writing cache; the workflow uses `set +e` so misses are captured. Prefer Path A when refresh runs consistently miss OpenRouter-routed entries.
 
+## Finding why a request missed
+
+A read-only run's misses are its `CacheMissError` messages (`Failed to get cache for function ... with kwargs ...`) in the test log. `.cache_write.ndjson` is not a list of misses: the `local_separate` backend promotes every hit into it, so it holds everything the run served. To find the part of a missed request that drifted, parse the nearest stored key with `parse_raw_key`, pass both requests' kwargs through `canonical_kw` (both in `unillm/caching/canonical.py`) and diff the results.
+
 ## Verification
 
 - Published artifact should contain hundreds of entries (check workflow logs: `Publishing seeded cache with N entries` or `LLM cache ready: N entries` on promotion pytest).
