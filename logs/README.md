@@ -1,21 +1,17 @@
 # Unillm Logging & Tracing
 
-This document covers the logging infrastructure for unillm: LLM request/response traces, Unify SDK HTTP traces, and OpenTelemetry tracing.
+This document covers the logging infrastructure for unillm: LLM request/response traces and OpenTelemetry tracing.
 
 ---
 
 ## Log Directory Overview
 
-All logs are organized under `logs/` with four main subdirectories:
+All logs are organized under `logs/` in two subdirectories:
 
 | Directory | Purpose | Structure | Control |
 |-----------|---------|-----------|---------|
 | `logs/unillm/` | Raw LLM request/response traces | `.txt` files per request | `UNILLM_LOG_DIR` (+ `UNILLM_TERMINAL_LOG` for console) |
-| `logs/unisdk/` | Unify SDK HTTP traces | JSON files per request | `UNISDK_LOG_DIR` (+ `UNISDK_TERMINAL_LOG` for console) |
-| `logs/orchestra/` | Orchestra API traces (server-side) | Per-request JSON with spans | `ORCHESTRA_LOG_DIR` |
-| `logs/all/` | Cross-repo OpenTelemetry traces | `{trace_id}.jsonl` per trace | `*_OTEL_LOG_DIR` |
-
-**Note:** Orchestra logs are only populated when running a local Orchestra server. The test infrastructure sets `ORCHESTRA_LOG_DIR` so that if you start a local orchestra, its traces will be captured here.
+| `logs/all/` | OpenTelemetry traces | `{trace_id}.jsonl` per trace | `UNILLM_OTEL_LOG_DIR` |
 
 ---
 
@@ -104,164 +100,9 @@ If an LLM call hangs or crashes, the `.pending.txt` or `.cache_pending.txt` file
 
 ---
 
-## Unify SDK Logs (`logs/unisdk/`)
-
-Unify SDK HTTP traces capture all requests to the Orchestra API. These are useful for debugging API issues, inspecting request/response payloads, and correlating with server-side traces.
-
-### Directory Structure
-
-```
-logs/unisdk/
-├── 14-26-27.611_POST_projects-contexts_210ms_200_no-trace.json
-├── 14-26-46.175_GET_logs_331ms_200_f124f0d3.json
-├── 14-27-01.234_POST_logs_PENDING_a1b2c3d4.json
-└── ...
-```
-
-### Log File Naming
-
-Files follow the format: `{timestamp}_{METHOD}_{route}_{duration}ms_{status}_{trace_id}.json`
-
-| Component | Example | Description |
-|-----------|---------|-------------|
-| `timestamp` | `14-26-46.175` | Request start time (HH-MM-SS.mmm) |
-| `METHOD` | `GET`, `POST` | HTTP method |
-| `route` | `logs`, `projects-contexts` | API route (normalized) |
-| `duration` | `331ms`, `PENDING` | Request duration (or PENDING while in-flight) |
-| `status` | `200`, `404` | HTTP status code |
-| `trace_id` | `f124f0d3` | Last 8 chars of OpenTelemetry trace ID (or `no-trace`) |
-
-### Log File Contents
-
-Each JSON file contains the full request and response:
-
-```json
-{
-  "trace_id": "099b207f89222185695d25977be454fc",
-  "request": {
-    "method": "GET",
-    "url": "https://api.unify.ai/v0/logs",
-    "headers": {"Authorization": "Bearer ..."},
-    "params": {"limit": 100}
-  },
-  "response": {
-    "status_code": 200,
-    "headers": {"Content-Type": "application/json"},
-    "body": [...]
-  },
-  "duration_ms": 331
-}
-```
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `UNISDK_TERMINAL_LOG` | `true` | Terminal (console) output for HTTP requests |
-| `UNISDK_LOG_DIR` | `""` (disabled) | Directory for file-based request traces (independent of terminal) |
-
-**Quiet terminal, verbose files:**
-```bash
-export UNISDK_TERMINAL_LOG=false
-export UNISDK_LOG_DIR=/path/to/logs/unisdk
-```
-
-### Trace Correlation
-
-The `trace_id` suffix in filenames (last 8 chars) enables correlation with:
-- Unillm LLM traces (same trace context)
-- Orchestra server-side traces (in `logs/orchestra/`)
-- OpenTelemetry spans in `logs/all/`
-
----
-
-## Orchestra Logs (`logs/orchestra/`)
-
-Orchestra logs capture server-side API request traces using OpenTelemetry. These are only populated when running a local Orchestra server for development/testing.
-
-### Directory Structure
-
-```
-logs/orchestra/
-└── 2026-01-05T22-00-00_unillmpid12345/
-    └── requests/
-        ├── 2026-01-05T22-00-01.123_GET_projects_45ms_200_f124f0d3.json
-        ├── 2026-01-05T22-00-02.456_POST_logs_120ms_201_a1b2c3d4.json
-        └── ...
-```
-
-### Log File Naming
-
-Each request generates a JSON file:
-
-```
-{datetime}_{METHOD}_{route}_{duration}ms_{status}_{trace_id_short}.json
-```
-
-| Component | Example | Description |
-|-----------|---------|-------------|
-| `datetime` | `2026-01-05T22-00-01.123` | Request start time (millisecond precision) |
-| `METHOD` | `GET`, `POST`, `DELETE` | HTTP method |
-| `route` | `projects`, `logs` | API route |
-| `duration` | `45ms`, `PENDING` | Request duration (or `PENDING` while in-flight) |
-| `status` | `200`, `404` | HTTP status code |
-| `trace_id_short` | `f124f0d3` | Last 8 chars of OpenTelemetry trace ID |
-
-### Log File Contents
-
-Each JSON file contains the full request trace with all spans:
-
-```json
-{
-  "trace_id": "099b207f89222185695d25977be454fc",
-  "status": "complete",
-  "spans": [
-    {
-      "name": "GET /v0/projects",
-      "span_id": "a1b2c3d4e5f6a7b8",
-      "parent_span_id": null,
-      "start_time": "2026-01-05T22:00:01.123Z",
-      "end_time": "2026-01-05T22:00:01.168Z",
-      "duration_ms": 45,
-      "attributes": {
-        "http.method": "GET",
-        "http.route": "/v0/projects",
-        "http.status_code": 200
-      }
-    },
-    {
-      "name": "SELECT projects",
-      "span_id": "...",
-      "parent_span_id": "a1b2c3d4e5f6a7b8",
-      "attributes": { "db.statement": "SELECT ..." }
-    }
-  ]
-}
-```
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ORCHESTRA_LOG_DIR` | `""` (disabled) | Directory for per-request trace files |
-| `ORCHESTRA_OTEL_LOG_DIR` | `""` | Directory for OTEL span export (typically `logs/all/`) |
-
-**Note:** These are set automatically by the test infrastructure. Orchestra must be started with these environment variables for logging to work.
-
-### When Are Orchestra Logs Created?
-
-Orchestra logs are only created when:
-1. You're running a **local** Orchestra server (not production)
-2. The server was started with `ORCHESTRA_LOG_DIR` set
-3. Requests are made to the local server
-
-For production API calls, you only get client-side traces in `logs/unisdk/`.
-
----
-
 ## OpenTelemetry Traces (`logs/all/`)
 
-When OTEL tracing is enabled, both unillm and the Unify SDK create spans that can be correlated with parent spans (from Unify) and exported for distributed tracing analysis.
+When OTel tracing is enabled, unillm creates a span for each LLM call, parented to the host application's current span when there is one, and exports it for distributed tracing analysis.
 
 ### Directory Structure
 
@@ -272,7 +113,7 @@ logs/all/
 └── ...
 ```
 
-Files are keyed by the 32-character trace ID. When running as part of a larger system (e.g., Unify), spans from all services are aggregated into the same file.
+Files are keyed by the 32-character trace ID. When a host application exports its own spans to the same directory, they land in the same file as unillm's.
 
 ### Trace File Format (JSONL)
 
@@ -280,8 +121,6 @@ Each `.jsonl` file contains one JSON object per line, representing a span:
 
 ```json
 {"service": "unillm", "trace_id": "099b207f...", "span_id": "a1b2c3d4", "parent_span_id": null, "name": "LLM openai/gpt-4@openrouter", "start_time": "2026-01-01T14:30:22.123Z", "end_time": "2026-01-01T14:30:25.456Z", "duration_ms": 3333, "status": "OK", "attributes": {"llm.endpoint": "openai/gpt-4@openrouter", "llm.model": "openrouter/openai/gpt-4", "llm.cache_status": "miss"}}
-{"service": "unify", "trace_id": "099b207f...", "span_id": "e5f6g7h8", "parent_span_id": "a1b2c3d4", "name": "POST /v0/logs", "start_time": "2026-01-01T14:30:22.500Z", "end_time": "2026-01-01T14:30:23.100Z", "duration_ms": 600, "status": "OK", "attributes": {"http.method": "POST", "http.status_code": 200}}
-{"service": "orchestra", "trace_id": "099b207f...", "span_id": "i9j0k1l2", "parent_span_id": "e5f6g7h8", "name": "POST /v0/logs", "start_time": "2026-01-01T14:30:22.550Z", "end_time": "2026-01-01T14:30:23.050Z", "duration_ms": 500, "status": "OK", "attributes": {"http.method": "POST", "http.route": "/v0/logs"}}
 ```
 
 ### Span Attributes
@@ -298,26 +137,6 @@ Each `.jsonl` file contains one JSON object per line, representing a span:
 | `llm.usage.total_tokens` | Total token count |
 | `llm.response_model` | Model from response (may differ from request) |
 
-**Unify spans** (HTTP requests to Orchestra):
-
-| Attribute | Description |
-|-----------|-------------|
-| `http.method` | HTTP method (GET, POST, etc.) |
-| `http.url` | Full request URL |
-| `http.status_code` | Response status code |
-| `http.request.body` | Request body (JSON) |
-| `http.response.body` | Response body (JSON) |
-
-**Orchestra spans** (server-side, when running locally):
-
-| Attribute | Description |
-|-----------|-------------|
-| `http.method` | HTTP method |
-| `http.route` | API route pattern |
-| `http.status_code` | Response status code |
-| `db.statement` | SQL query (for database spans) |
-| `db.operation` | Database operation type |
-
 ### Environment Variables
 
 **Unillm OTEL settings:**
@@ -328,36 +147,18 @@ Each `.jsonl` file contains one JSON object per line, representing a span:
 | `UNILLM_OTEL_ENDPOINT` | `""` | OTLP endpoint for remote export (e.g., Tempo, Jaeger) |
 | `UNILLM_OTEL_LOG_DIR` | `""` | Directory for file-based span export |
 
-**Unify SDK OTEL settings:**
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `UNISDK_OTEL` | `false` | Master switch for Unify SDK OTel tracing |
-| `UNISDK_OTEL_ENDPOINT` | `""` | OTLP endpoint for remote export |
-| `UNISDK_OTEL_LOG_DIR` | `""` | Directory for file-based span export |
-
-**Orchestra OTEL settings** (server-side):
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ORCHESTRA_OTEL_LOG_DIR` | `""` | Directory for file-based span export |
-
-**Enabling file-based tracing (all services):**
+**Enabling file-based tracing:**
 ```bash
-# Enable OTEL for all services, writing to same directory for correlation
 export UNILLM_OTEL=true
 export UNILLM_OTEL_LOG_DIR=/path/to/logs/all
-export UNISDK_OTEL=true
-export UNISDK_OTEL_LOG_DIR=/path/to/logs/all
-export ORCHESTRA_OTEL_LOG_DIR=/path/to/logs/all  # Server-side
 ```
 
 ### Parent TracerProvider Integration
 
-When unillm runs within a larger system (e.g., Unify), it automatically detects and uses the parent's TracerProvider. This ensures all spans share the same trace context for end-to-end correlation.
+When unillm runs inside a host application that has its own TracerProvider, it automatically detects and uses it. This ensures all spans share the same trace context for end-to-end correlation.
 
 The integration flow:
-1. Parent (Unify) creates a TracerProvider and root span
+1. The host creates a TracerProvider and root span
 2. Unillm detects the existing provider and creates child spans
 3. All spans are exported to the same destination (file or collector)
 

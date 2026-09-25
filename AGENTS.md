@@ -38,11 +38,8 @@ UniLLM's caching is fundamental to Unify's test strategy. Tests use real LLM cal
 
 ## Related Repositories
 
-- **unify**: Primary consumer—all async tool loops use UniLLM
-- **orchestra**: Independent (Orchestra has its own LLM endpoints)
-- **unisdk**: Parallel SDK (both are consumed by Unify, but independent of each other)
-- **unify-deploy**: Hosted communication stack may use UniLLM for any LLM operations
-- **console**: Uses Orchestra's chat completion endpoint, not UniLLM directly
+- **unify-agent** (the `unify` package): the one consumer. Its async tool loops call UniLLM, and a local checkout links it as a sibling editable install (`../unillm`).
+- **orchestra**, **unisdk**, **unify-deploy** and **console** are archived along with the hosted platform they made up. UniLLM depends on none of them, and CI starts no server.
 
 ---
 
@@ -50,7 +47,7 @@ UniLLM's caching is fundamental to Unify's test strategy. Tests use real LLM cal
 
 # LLM Cache Invalidation & CI Hydration
 
-UniLLM tests replay LLM responses from `.cache.ndjson`. Normal CI is **read-only** (`UNILLM_CACHE=true`, `UNILLM_CACHE_BACKEND=local_separate` with write disabled): a cache miss fails loudly instead of calling paid APIs.
+UniLLM tests replay LLM responses from `.cache.ndjson`. Normal CI is **read-only** (`UNILLM_CACHE=read-only`, `UNILLM_CACHE_BACKEND=local_separate`): a cache miss fails loudly instead of calling paid APIs.
 
 Backends index `.cache.ndjson` via a `.cache.ndjson.idx` sidecar (sha256 of
 each key → byte offset) so concurrent local sessions do not each hold the
@@ -66,13 +63,17 @@ Refresh (or re-seed) the cache when a change alters cache keys or LLM payloads, 
 - New/changed test prompts, tools, or `response_format` handling
 - New model endpoints exercised by tests
 
-Symptom on a **`staging → main` promotion PR**: `pytest` fails with `Failed to get cache for function chat.completions.create ... from cache at None`.
+Symptom in CI: `pytest` fails with `Failed to get cache for function chat.completions.create ... from cache at None`.
 
-## Why promotion PRs need a separate publish step
+## Where CI gets the cache
 
-GitHub Actions cache for `.cache.ndjson` is **branch-scoped**. A promotion PR runs as `pull_request` with `base=main` and cannot restore the staging-scoped Actions cache.
+`tests.yml` restores `.cache.ndjson` from the GitHub Actions cache, then **hydrates** it from the latest successful **`llm-cache-refresh.yml`** run on the branch under test (fallback: `main`), downloading the `llm-cache-ndjson` artifact. That artifact is the source of truth: the Actions cache drops an entry nobody has read for seven days, and an entry saved on a branch other than `main` is visible only on that branch.
 
-`tests.yml` therefore **hydrates** from the latest successful **`llm-cache-refresh.yml`** run on the PR head branch (fallback: `staging`), downloading the `llm-cache-ndjson` artifact. That artifact is the cross-branch source of truth for promotion pytest.
+The artifact expires 90 days after its run. If CI starts missing everything, check when the last publish on `main` succeeded, and publish again (Path A, steps 4–5) if it is that old:
+
+```bash
+gh run list --repo unifyai/unillm --workflow llm-cache-refresh.yml --branch main --status success --limit 1
+```
 
 ## Path A — Local seed publish (preferred when keys change)
 
@@ -95,25 +96,23 @@ python3 .github/scripts/consolidate_cache.py --artifacts-dir cache-artifacts
 cp .cache.ndjson .github/cache-seed/cache.ndjson
 ```
 
-3. **Commit** `.github/cache-seed/cache.ndjson` to **`staging`** (tracked name avoids `.gitignore` on `.cache.ndjson`).
+3. **Commit** `.github/cache-seed/cache.ndjson` to **`main`** (tracked name avoids `.gitignore` on `.cache.ndjson`).
 
-4. **Publish** the cross-branch artifact on **`staging`**:
+4. **Publish** the artifact on **`main`**:
 
 ```bash
-gh workflow run llm-cache-refresh.yml --repo unifyai/unillm --ref staging \
+gh workflow run llm-cache-refresh.yml --repo unifyai/unillm --ref main \
   -f confirm_llm_spend=skip -f publish_seed=PUBLISH_SEED_OK
 ```
 
-5. **Wait** for that workflow to finish successfully, then **re-run** the promotion PR CI (or push an empty commit). If pytest hydrated before publish completed, it will still use a stale artifact — re-run failed jobs after publish.
-
-6. Merge once **`pytest`** and **`black`** are green on the promotion PR.
+5. **Wait** for that workflow to finish successfully, then **re-run** CI (or push an empty commit). If pytest hydrated before publish completed, it will still use a stale artifact — re-run failed jobs after publish.
 
 ## Path B — Paid CI cache refresh
 
-Dispatch `llm-cache-refresh.yml` on **`staging`** with real LLM spend:
+Dispatch `llm-cache-refresh.yml` on **`main`** with real LLM spend:
 
 ```bash
-gh workflow run llm-cache-refresh.yml --repo unifyai/unillm --ref staging \
+gh workflow run llm-cache-refresh.yml --repo unifyai/unillm --ref main \
   -f test_path=tests/test_clients -f confirm_llm_spend=LLM_SPEND_OK
 ```
 
@@ -125,7 +124,7 @@ A read-only run's misses are its `CacheMissError` messages (`Failed to get cache
 
 ## Verification
 
-- Published artifact should contain hundreds of entries (check workflow logs: `Publishing seeded cache with N entries` or `LLM cache ready: N entries` on promotion pytest).
+- Published artifact should contain hundreds of entries (check workflow logs: `Consolidated entry count: N` in the refresh run, or `LLM cache ready: N entries` in the `tests.yml` hydrate step).
 - Locally, `uv run pytest` with read-only cache should pass before publishing.
 
 ---
@@ -334,182 +333,11 @@ If direct code analysis and debug logging (`CURSOR_DEBUG_LOG`) aren't yielding a
 - Don't read diffs commit-by-commit and mentally compose them; use the aggregate diff
 - Don't dump entire file histories; scope queries to the relevant path(s)
 
-# Staging→Main Release Gates Are Fail-Closed
-
-Every repo's `Staging->Main` ruleset requires at least one status check whose
-job makes an expensive or conditional run (full pytest matrix, paid LLM smoke
-tests, E2E). Those jobs don't run on every push — they're gated on a
-`[run-tests]`/`[run-flows]`-style commit-message tag, or on the PR event
-itself. As of **2026-07-31**, the required context for that job is published
-**unconditionally** on every push: an explicit pass or fail, never an
-implicit pass from a skip.
-
-## Why: the orchestra incident
-
-Before 2026-07-31, the required context was only published when the gated
-job actually ran; an ordinary push that skipped it published nothing, and
-**GitHub counts a skipped required check as satisfied**. A staging→main
-release PR shares its head SHA with whatever was last pushed to staging, so
-that stale implicit pass could satisfy branch protection before the real
-PR-triggered run finished. In orchestra this let four release PRs (#125,
-#127, #128, #129) merge into main carrying a skipped/failing suite — #125
-merged 83 seconds into an 11-minute test run that later came back failing,
-leaving a broken test on main for thirteen hours.
-
-The fix — "make the gate fail closed" — makes an aggregator job republish the
-required context unconditionally, so a push that didn't run the suite now
-reports that context **red**, not green-by-default.
-
-Rolled out the same week to: orchestra (`pytest`), unillm (`pytest`), unify
-(`Flow smoke`), unify-deploy (`Integration smoke`), console (`Push Gate`).
-Check name and trigger tag differ per repo; the fail-closed shape is the
-same. unisdk, brain, docs, and landing-page have no equivalent
-expensive/conditional gate, so this doesn't currently apply there — but
-treat it as the default shape for any new staging→main required check in
-any repo.
-
-## The `if:`-scoping approach does NOT work — verified 2026-08-03
-
-An earlier version of this rule described scoping the aggregator job's own
-`if:` to `pull_request`/`workflow_dispatch` (unify's `05fbdcce9`) as the
-fix for the fail-closed-on-push problem below. **That is wrong, and left
-orchestra and unify-deploy releases merging on a stale pass again**, plus
-unify itself carrying an unnoticed stale pass on its own staging HEAD.
-
-The reasoning behind that approach assumed an `if:`-scoped job produces *no
-check run at all* when its condition is false. It does not: **GitHub Actions
-still publishes a "skipped" check run for a job whose `if:` evaluates to
-false**, even when that job is the required aggregator itself, and a skipped
-required check is satisfied exactly like a pass. Scoping only the aggregator
-job's `if:` — while the *workflow file* it lives in still triggers on
-`push` — just changes what an ordinary push publishes from an explicit
-failure back to a skip, which is the original 2026-07-31 bug, verbatim.
-
-## The real fix: no `push` trigger on the gate's workflow file at all
-
-The only way to guarantee an ordinary push publishes **nothing** under the
-required context name is for the *workflow file* that defines the
-aggregator to never be triggered by `push` in the first place. A workflow
-with no `push` in its `on:` block simply never runs on a push event, so
-none of its jobs — passing, failing, or skipped — produce a check run for
-that SHA. The context sits genuinely `pending` until the real
-`pull_request`-triggered run supplies an answer.
-
-Concretely: split the gate into two workflow files.
-
-- **The everyday/ad-hoc workflow** (existing file) keeps `push` (gated by
-  the `[run-tests]`/`[run-flows]`/`[run-integration]`-style tag) and
-  `workflow_dispatch`, for ordinary developer feedback. It must **not**
-  define the aggregator job, and its own expensive test job must not share
-  a job id/name with the required context (see the collision gotcha below).
-- **A new, dedicated workflow file** (e.g. `pytest-release-gate.yml`,
-  `flow-smoke-release-gate.yml`, `integration-smoke-release-gate.yml`)
-  triggers **only** on `pull_request: branches: [main]` and
-  `workflow_dispatch`. It contains its own copy of the expensive test job
-  plus the aggregator job that publishes the required context. Because this
-  file has no `push` trigger, an ordinary push can never populate that
-  context under any name defined in it.
-
-Applied 2026-08-03 to orchestra (`pytest-release-gate.yml`), unify
-(`flow-smoke-release-gate.yml`), unillm (`pytest-release-gate.yml`), and
-unify-deploy (`integration-smoke-release-gate.yml`). console's `Push Gate`
-was checked and found **not** vulnerable to this bug: its push-triggered run
-genuinely executes the full suite unconditionally (no tag-gating), so there
-is no skip to exploit — no fix needed there.
-
-## Gotcha: job-id collision reintroduces the same bug
-
-After removing the explicit aggregator from the everyday workflow, check
-that its own expensive test job doesn't accidentally publish the exact same
-context name. In orchestra, the plain development `pytest:` matrix job had
-no explicit `name:`, so its check run defaulted to its job id — which
-happened to be the literal string `pytest`, the required context. A job
-whose matrix never expands (because its own `if:` evaluated false) still
-publishes **one** check run under that bare job id, not per-shard, so this
-silently recreated the stale-skip bug via a different job. Fix: give the
-everyday job a distinct job id and/or explicit `name:` (orchestra renamed it
-to `pytest-dev`). Always verify this when doing this split — confirm the
-everyday workflow's job names don't coincide with any required-check context
-string, matrix or not.
-
-## Gotcha: don't write the trigger tag in prose in a commit message
-
-The `push` gating check on these jobs is a naive substring match against the
-full commit message (subject + body) for `[run-tests]` / `[run-flows]` /
-`[run-integration]`. Writing that literal bracketed tag *anywhere* in a
-commit message — including inside a sentence explaining how the tag
-mechanism works — re-triggers the real (sometimes paid, sometimes
-live-infra) job on that push. This happened twice while rolling out the fix
-above: a commit message explaining unify's ad-hoc `[run-flows]` trigger
-accidentally fired a real paid Flow Smoke run (caught and cancelled before
-much cost), and a commit message explaining unify-deploy's
-`[run-integration]` trigger fired a real live Integration Smoke run against
-staging infra that ran to completion (~18 minutes) before failing on an
-unrelated live-infra teardown timeout — cleanup steps still ran, so no
-resource leak, but wasted CI/infra time. When a commit touches one of these
-workflow files and needs to describe its trigger tag, break up the literal
-bracket sequence (e.g. quote it without brackets) so the substring match
-cannot fire.
-
-## What to do when a release PR is stuck or merges on a stale pass
-
-**Stuck/blocked** — `reviewDecision: APPROVED`, `mergeable: MERGEABLE`,
-`mergeStateStatus: BLOCKED`, and the required context shows both a
-`FAILURE` and a `SUCCESS` entry for the same PR head SHA from two different
-workflow runs (one push-triggered, one pull_request-triggered): this is the
-pre-`if:`-scoping failure mode. Push a small commit carrying the trigger tag
-to give the release PR a fresh head with a single, unambiguous run, and
-apply the real fix above so it stops recurring.
-
-**Merges anyway on a stale pass** — the required context shows `SKIPPED` on
-a push-triggered run for the PR's head SHA, and the PR merges (or already
-merged) before the real `pull_request`-triggered run finished: this is the
-`if:`-scoping-is-insufficient failure mode described above. Apply the real
-fix (dedicated no-`push` workflow file) — do not consider the job's `if:`
-condition alone a fix.
-
-In both cases: do not force-merge, disable the ruleset, or bypass the check
-to route around this — the real fix satisfies the gate on its own terms.
-
-## A gate that tests live infra races its own deploy
-
-Where the gate exercises a deployed stack rather than the checkout, pushing a
-fix does **not** mean the fix is under test. The `pull_request` run starts in
-about ninety seconds; the Cloud Build deploy that ships the change to staging
-takes minutes. Three unify-deploy gate runs on 2026-08-15/16 tested an image
-that predated the commit under test, twice sending the investigation after
-phantom regressions in a diff that was never running.
-
-Before reading a live-infra gate result as a verdict on the change, confirm
-the deploy landed first — the PR's own checks carry it (for unify-deploy,
-`unity-deploy-staging (gcp-project-runtime)`). A red gate whose deploy
-finished *after* the run started is not evidence about the change.
-
-## `repository_dispatch` runs the DEFAULT branch's workflow
-
-Not the ref in the payload, and not the branch that sent it. A dispatch-
-triggered workflow therefore keeps executing `main`'s copy of itself no matter
-what staging says, so a fix to one does nothing until it is promoted — and the
-breakage is entirely invisible from staging, where the push-triggered path
-passes. unify's self-host image publish failed on every dispatch for a day
-this way while staging looked green.
-
-When a dispatch-triggered workflow misbehaves, read the *default branch's*
-copy of it, and treat promotion as part of the fix rather than a follow-up.
-
-## Editing a ruleset: `PUT`, not `PATCH`
-
-`gh api -X PATCH repos/{o}/{r}/rulesets/{id}` returns a bare `404` that reads
-exactly like a permissions problem, and reproduces under a second account with
-`admin:org` — which is what makes it convincing. Use `PUT` with the full
-object (name, target, enforcement, bypass_actors, conditions, rules).
-
 # Python Formatting & Pre-commit
 
-Every first-party Python repo (`orchestra`, `unify`, `unisdk`, `unillm`,
-`unify-deploy`, `docs`) enforces formatting with **black** (plus
-`isort`/`autoflake` where configured), and CI rejects unformatted code. A
-missing local hook or a drifting Black target/Python version is the single
+Every Python repo that includes this rule enforces formatting with **black**
+(plus `isort`/`autoflake` where configured), and CI rejects unformatted code.
+A missing local hook or a drifting Black target/Python version is the single
 most common avoidable CI failure. This rule keeps local and CI identical so
 it stops blocking us — for Cursor, Claude Code, Codex, and humans alike.
 
@@ -594,12 +422,11 @@ locked version:
 pre-commit run black --all-files          # or: uv run black .
 ```
 
-## Release gates
+## The hook is the gate
 
-`black` is a required status check on `staging → main` (ruleset and/or branch
-protection) for the Python repos. Direct pushes to `staging` stay open for
-the worktree workflow — the committed git hook is the staging-side gate.
-CI still runs `black` on every push so failures are visible immediately.
+Work lands on `main` by direct push, so the committed git hook is what keeps
+unformatted code off `main`. CI runs `black` on every push, which shows a
+slip at once, but only after it has landed.
 
 ## Why this matters
 

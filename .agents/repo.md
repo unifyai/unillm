@@ -25,8 +25,5 @@ UniLLM's caching is fundamental to Unify's test strategy. Tests use real LLM cal
 
 ## Related Repositories
 
-- **unify**: Primary consumer—all async tool loops use UniLLM
-- **orchestra**: Independent (Orchestra has its own LLM endpoints)
-- **unisdk**: Parallel SDK (both are consumed by Unify, but independent of each other)
-- **unify-deploy**: Hosted communication stack may use UniLLM for any LLM operations
-- **console**: Uses Orchestra's chat completion endpoint, not UniLLM directly
+- **unify-agent** (the `unify` package): the one consumer. Its async tool loops call UniLLM, and a local checkout links it as a sibling editable install (`../unillm`).
+- **orchestra**, **unisdk**, **unify-deploy** and **console** are archived along with the hosted platform they made up. UniLLM depends on none of them, and CI starts no server.

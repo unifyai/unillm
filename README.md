@@ -4,36 +4,9 @@ Lightweight LLM access layer with provider normalization, caching, and observabi
 
 ## What layer is this?
 
-UniLLM is the model-access layer in the wider Unify stack:
+UniLLM is the model-access layer of [unify](https://github.com/unifyai/unify-agent), a self-improving agent harness: every LLM call the harness makes goes through it. It normalizes requests across providers (OpenAI, Anthropic, Vertex AI, etc.), provides response caching for test determinism, and attaches attribution metadata to each call's events.
 
-```
-         User (Console/Phone/SMS/Email)
-                      │
-    ┌─────────────────┴──────────────────┐
-    │           Communication            │
-    │    (Webhooks, Voice, SMS, Email)   │
-    └────┬───────────────────────────────┘
-         │
-    ┌────┴────┐    ┌─────────┐    ┌─────────┐
-    │  Unify  │    │  Unify  │    │Orchestra│
-    │ (Brain) │───▶│  (SDK)  │───▶│  (API)  │
-    │         │    │         │    │  (DB)   │
-    └────┬────┘    └────┬────┘    └────┬────┘
-         │              ▲              ▲
-         │              │              │
-         │    ┌─────────┴─┐       ┌────┴───────┐
-         └───▶│  UniLLM   │       │  Console   │
-              │ (LLM API) │       │(Interfaces)│
-              └───────────┘       └────────────┘
-```
-
-**This repo (UniLLM)** handles LLM inference for Unify. It normalizes requests across providers (OpenAI, Anthropic, Vertex AI, etc.), provides response caching for test determinism, and carries attribution context for the wider Unify stack.
-
-If you're here from the Unify quickstart, this is the layer that talks to model providers. OpenAI and Anthropic are the simplest documented paths, but the point of UniLLM is that the provider choice is yours, including other supported providers and compatible local endpoints.
-
-Related repositories:
-- [Unify](https://github.com/unifyai/unify) — AI assistant brain (primary consumer)
-- [Orchestra](https://github.com/unifyai/orchestra) — Backend API and database
+If you're here from the unify quickstart, this is the layer that talks to model providers. OpenAI and Anthropic are the simplest documented paths, but the point of UniLLM is that the provider choice is yours, including other supported providers and compatible local endpoints.
 
 ## Installation
 
@@ -68,7 +41,7 @@ export ANTHROPIC_API_KEY=<your-key>
 # ... other provider keys
 ```
 
-You do not need a Unify account for basic inference. `UNIFY_KEY` only matters for the optional gateway routing and observability features that integrate with the wider Unify stack.
+`UNIFY_KEY` is optional: UniLLM reads it only as a fallback auth key for gateway routing, which is off unless `UNILLM_LLM_GATEWAY_URL` is set.
 
 ### Google Cloud / Vertex AI
 
@@ -289,10 +262,10 @@ unillm/
 
 ## Local Development
 
-> `unillm` is the LLM access layer, not a runnable system. To run the whole
-> product locally (Orchestra + Unify + Console), use **`unify stack up`** from
-> the [unify repo](https://github.com/unifyai/unify). The steps below are for
-> developing this library itself.
+> `unillm` is a library, not a runnable system. To run it inside the agent
+> harness, follow the install steps in
+> [unify-agent](https://github.com/unifyai/unify-agent). The steps below are
+> for developing this library itself.
 
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
@@ -338,10 +311,8 @@ Note: The `black` formatting check always runs on every push.
 
 **LLM cache:** CI tests replay cached LLM responses (read-only). Changes that
 invalidate cache keys require refreshing `.github/cache-seed/cache.ndjson` and
-publishing via `llm-cache-refresh.yml` before a `staging → main` promotion PR
-can pass `pytest`. See [CONTRIBUTING.md — LLM cache and CI](CONTRIBUTING.md#llm-cache-and-ci).
-
-Some CI steps (local Orchestra deployment, GCP authentication) are internal infrastructure for the Unify team and are automatically skipped on external forks.
+publishing it via `llm-cache-refresh.yml` before `pytest` can pass in CI. See
+[CONTRIBUTING.md — LLM cache and CI](CONTRIBUTING.md#llm-cache-and-ci).
 
 ### Pre-commit Hooks
 

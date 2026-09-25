@@ -1,10 +1,10 @@
 ---
-description: Refresh or publish the LLM response cache when cache keys change or staging→main pytest fails on cache misses
+description: Refresh or publish the LLM response cache when cache keys change or CI pytest fails on cache misses
 ---
 
 # LLM Cache Invalidation & CI Hydration
 
-UniLLM tests replay LLM responses from `.cache.ndjson`. Normal CI is **read-only** (`UNILLM_CACHE=true`, `UNILLM_CACHE_BACKEND=local_separate` with write disabled): a cache miss fails loudly instead of calling paid APIs.
+UniLLM tests replay LLM responses from `.cache.ndjson`. Normal CI is **read-only** (`UNILLM_CACHE=read-only`, `UNILLM_CACHE_BACKEND=local_separate`): a cache miss fails loudly instead of calling paid APIs.
 
 Backends index `.cache.ndjson` via a `.cache.ndjson.idx` sidecar (sha256 of
 each key → byte offset) so concurrent local sessions do not each hold the
@@ -20,13 +20,17 @@ Refresh (or re-seed) the cache when a change alters cache keys or LLM payloads, 
 - New/changed test prompts, tools, or `response_format` handling
 - New model endpoints exercised by tests
 
-Symptom on a **`staging → main` promotion PR**: `pytest` fails with `Failed to get cache for function chat.completions.create ... from cache at None`.
+Symptom in CI: `pytest` fails with `Failed to get cache for function chat.completions.create ... from cache at None`.
 
-## Why promotion PRs need a separate publish step
+## Where CI gets the cache
 
-GitHub Actions cache for `.cache.ndjson` is **branch-scoped**. A promotion PR runs as `pull_request` with `base=main` and cannot restore the staging-scoped Actions cache.
+`tests.yml` restores `.cache.ndjson` from the GitHub Actions cache, then **hydrates** it from the latest successful **`llm-cache-refresh.yml`** run on the branch under test (fallback: `main`), downloading the `llm-cache-ndjson` artifact. That artifact is the source of truth: the Actions cache drops an entry nobody has read for seven days, and an entry saved on a branch other than `main` is visible only on that branch.
 
-`tests.yml` therefore **hydrates** from the latest successful **`llm-cache-refresh.yml`** run on the PR head branch (fallback: `staging`), downloading the `llm-cache-ndjson` artifact. That artifact is the cross-branch source of truth for promotion pytest.
+The artifact expires 90 days after its run. If CI starts missing everything, check when the last publish on `main` succeeded, and publish again (Path A, steps 4–5) if it is that old:
+
+```bash
+gh run list --repo unifyai/unillm --workflow llm-cache-refresh.yml --branch main --status success --limit 1
+```
 
 ## Path A — Local seed publish (preferred when keys change)
 
@@ -49,25 +53,23 @@ python3 .github/scripts/consolidate_cache.py --artifacts-dir cache-artifacts
 cp .cache.ndjson .github/cache-seed/cache.ndjson
 ```
 
-3. **Commit** `.github/cache-seed/cache.ndjson` to **`staging`** (tracked name avoids `.gitignore` on `.cache.ndjson`).
+3. **Commit** `.github/cache-seed/cache.ndjson` to **`main`** (tracked name avoids `.gitignore` on `.cache.ndjson`).
 
-4. **Publish** the cross-branch artifact on **`staging`**:
+4. **Publish** the artifact on **`main`**:
 
 ```bash
-gh workflow run llm-cache-refresh.yml --repo unifyai/unillm --ref staging \
+gh workflow run llm-cache-refresh.yml --repo unifyai/unillm --ref main \
   -f confirm_llm_spend=skip -f publish_seed=PUBLISH_SEED_OK
 ```
 
-5. **Wait** for that workflow to finish successfully, then **re-run** the promotion PR CI (or push an empty commit). If pytest hydrated before publish completed, it will still use a stale artifact — re-run failed jobs after publish.
-
-6. Merge once **`pytest`** and **`black`** are green on the promotion PR.
+5. **Wait** for that workflow to finish successfully, then **re-run** CI (or push an empty commit). If pytest hydrated before publish completed, it will still use a stale artifact — re-run failed jobs after publish.
 
 ## Path B — Paid CI cache refresh
 
-Dispatch `llm-cache-refresh.yml` on **`staging`** with real LLM spend:
+Dispatch `llm-cache-refresh.yml` on **`main`** with real LLM spend:
 
 ```bash
-gh workflow run llm-cache-refresh.yml --repo unifyai/unillm --ref staging \
+gh workflow run llm-cache-refresh.yml --repo unifyai/unillm --ref main \
   -f test_path=tests/test_clients -f confirm_llm_spend=LLM_SPEND_OK
 ```
 
@@ -79,5 +81,5 @@ A read-only run's misses are its `CacheMissError` messages (`Failed to get cache
 
 ## Verification
 
-- Published artifact should contain hundreds of entries (check workflow logs: `Publishing seeded cache with N entries` or `LLM cache ready: N entries` on promotion pytest).
+- Published artifact should contain hundreds of entries (check workflow logs: `Consolidated entry count: N` in the refresh run, or `LLM cache ready: N entries` in the `tests.yml` hydrate step).
 - Locally, `uv run pytest` with read-only cache should pass before publishing.

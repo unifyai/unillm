@@ -11,7 +11,6 @@ no-test-info-in-production-code.md
 git-commit-safety.md
 worktree-direct-commits.md
 git-history-for-context.md
-staging-main-fail-closed-gates.md
 knowledge-lives-in-the-repo.md
 shared-agent-context.md
 replying-to-the-team.md

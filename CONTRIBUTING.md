@@ -24,13 +24,6 @@ export OPENROUTER_API_KEY=...
 export ANTHROPIC_API_KEY=...
 ```
 
-If you are iterating on a sibling checkout of `unify` as well, override the
-published dependency with an editable install:
-
-```bash
-uv pip install -e ../unify
-```
-
 ## Running tests
 
 Run the local test suite with:
@@ -40,8 +33,7 @@ uv run pytest tests/ -v
 ```
 
 With a populated `.cache.ndjson`, cached responses replay quickly and
-deterministically. Some CI paths that rely on managed infrastructure are
-maintainer-controlled and skipped on external forks.
+deterministically.
 
 ### LLM cache and CI
 
@@ -50,21 +42,21 @@ test instead of calling provider APIs. The only workflows that **write** cache
 entries are `llm-cache-refresh.yml` (paid refresh or seed publish) and local
 runs with `UNILLM_CACHE=true`.
 
-**`staging → main` promotion PRs** hydrate `.cache.ndjson` from the latest
-successful `llm-cache-refresh.yml` artifact on `staging` (the GitHub Actions
-cache alone is branch-scoped and insufficient for promotion pytest).
+CI hydrates `.cache.ndjson` from the latest successful `llm-cache-refresh.yml`
+artifact on the branch under test, falling back to `main`: the GitHub Actions
+cache alone drops entries nobody has read for seven days.
 
 When a change invalidates cache keys (e.g. response-format or caching logic),
 refresh before merging:
 
 1. **Local seed publish (typical)** — run tests locally with cache write enabled,
-   consolidate into `.github/cache-seed/cache.ndjson`, commit to `staging`, then
+   consolidate into `.github/cache-seed/cache.ndjson`, commit to `main`, then
    dispatch `llm-cache-refresh.yml` with `publish_seed=PUBLISH_SEED_OK`.
 2. **CI refresh** — dispatch `llm-cache-refresh.yml` with
    `confirm_llm_spend=LLM_SPEND_OK` and the relevant `test_path`.
 
-After publish completes, re-run promotion PR CI if it started before the artifact
-was ready. See `.agents/rules/llm-cache-invalidation.md` for the full
+After publish completes, re-run CI if it started before the artifact was
+ready. See `.agents/rules/llm-cache-invalidation.md` for the full
 step-by-step playbook.
 
 ## Code style
@@ -83,7 +75,7 @@ uv run pre-commit run --all-files
 
 ## Pull requests
 
-- Open PRs against the `staging` branch.
+- Open PRs against the `main` branch.
 - Keep changes focused and easy to review.
 - Run the relevant tests for the area you changed.
 
