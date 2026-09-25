@@ -451,77 +451,17 @@ def _apply_deepseek_v4_reasoning_effort(kw: dict, model: str) -> None:
     kw["extra_body"] = extra_body
 
 
-# --- LLM gateway (Orchestra broker) -----------------------------------------
-# Opt-in via env so rollout is per-environment and default-off. When
-# ``UNILLM_LLM_GATEWAY_URL`` is set (and an auth key is available), OpenRouter
-# and Anthropic calls are routed through the gateway, which holds the provider
-# credentials so they never have to live in this process.
-_LLM_GATEWAY_URL_ENV = "UNILLM_LLM_GATEWAY_URL"
-_LLM_GATEWAY_KEY_ENVS = ("UNILLM_LLM_GATEWAY_KEY", "UNIFY_KEY")
+def _llm_gateway() -> tuple[str, str] | None:
+    """The LLM gateway's base URL and key, or ``None`` unless both are set.
 
-
-def _llm_gateway_base() -> str | None:
-    base = (os.environ.get(_LLM_GATEWAY_URL_ENV) or "").strip().rstrip("/")
-    return base or None
-
-
-def _llm_gateway_key() -> str | None:
-    for env in _LLM_GATEWAY_KEY_ENVS:
-        value = (os.environ.get(env) or "").strip()
-        if value:
-            return value
-    return None
-
-
-#: Header the broker reads to attribute a brokered call to an assistant.
-#:
-#: The broker sees only provider-shaped bytes, so without carrying this
-#: explicitly the assistant is lost, and with it both per-assistant reporting
-#: and the per-assistant spending caps, which are enforced against exactly
-#: this id. A header rather than a body field: the body is forwarded to the
-#: provider verbatim, so anything added there has to be stripped again before
-#: it reaches a provider that would reject it.
-_ASSISTANT_HEADER = "X-Unify-Assistant-Id"
-
-#: Headers carrying the billing-context action label/source, for the same
-#: reason as ``_ASSISTANT_HEADER`` above: they live in this process's billing
-#: context, and a brokered call needs them to travel explicitly for the
-#: broker's own reporting to say what the spend was for.
-#:
-#: The label is base64url-encoded because it is free-form text (an act label
-#: can be written in any language, e.g. Chinese) and raw HTTP header values
-#: are latin-1 -- sending one unencoded would corrupt or crash on the wire.
-#: The source is a short internal tag (``"chat"``, ``"tool"``, ...) and
-#: travels as plain text.
-_LABEL_HEADER = "X-Unify-Label"
-_SOURCE_HEADER = "X-Unify-Source"
-
-
-def _gateway_attribution_headers() -> dict:
-    """Attribution the broker cannot infer from the request itself."""
-    import base64
-
-    from ..billing_context import get_billing_context
-
-    ctx = get_billing_context()
-    headers: dict[str, str] = {}
-    assistant_id = getattr(ctx, "assistant_id", None)
-    if assistant_id is not None:
-        headers[_ASSISTANT_HEADER] = str(assistant_id)
-    label = getattr(ctx, "label", None)
-    if label:
-        headers[_LABEL_HEADER] = base64.urlsafe_b64encode(
-            label.encode("utf-8"),
-        ).decode("ascii")
-    source = getattr(ctx, "source", None)
-    if source:
-        headers[_SOURCE_HEADER] = source
-    return headers
-
-
-def _llm_gateway_active() -> bool:
-    """Gateway routing is on only when both a base URL and an auth key exist."""
-    return bool(_llm_gateway_base()) and bool(_llm_gateway_key())
+    The gateway is an OpenAI-compatible endpoint that stands in for OpenRouter
+    and authenticates calls with its own key, so the provider key can stay with
+    the gateway rather than in this process. ``UNILLM_LLM_GATEWAY_URL`` and
+    ``UNILLM_LLM_GATEWAY_KEY`` are read on every call, not captured at import.
+    """
+    base = (os.environ.get("UNILLM_LLM_GATEWAY_URL") or "").strip().rstrip("/")
+    key = (os.environ.get("UNILLM_LLM_GATEWAY_KEY") or "").strip()
+    return (base, key) if base and key else None
 
 
 def _prepare_provider_request_kw(
@@ -534,41 +474,15 @@ def _prepare_provider_request_kw(
     model = str(kw.get("model") or "")
     tools = kw.get("tools")
 
-    # LLM gateway: when configured, route OpenRouter traffic through Orchestra's
-    # server-side broker instead of calling OpenRouter directly, so the provider
-    # key never has to live in this process. The gateway is OpenAI-compatible, so
-    # LiteLLM's OpenRouter transport reaches it by overriding api_base/api_key.
+    # LiteLLM's OpenRouter transport reaches the gateway by overriding
+    # api_base/api_key, since the gateway speaks OpenRouter's OpenAI-shaped API.
+    gateway = _llm_gateway()
     if (
-        _llm_gateway_active()
+        gateway
         and model.startswith(_OPENROUTER_MODEL_PREFIX)
         and kw.get("api_base") is None
     ):
-        kw["api_base"] = _llm_gateway_base()
-        kw["api_key"] = _llm_gateway_key()
-        or_headers = dict(kw.get("extra_headers") or {})
-        or_headers.update(_gateway_attribution_headers())
-        if or_headers:
-            kw["extra_headers"] = or_headers
-
-    # Anthropic is brokered too, but over its own protocol rather than the
-    # OpenAI-compatible one: Anthropic publishes no OpenAI-shaped surface, so
-    # the gateway proxies Messages API bytes and this transport must address
-    # that route directly. LiteLLM uses ``api_base`` verbatim for this
-    # provider, so the full path is set here rather than a host to append to.
-    #
-    # The key goes in two places on purpose. LiteLLM sends ``api_key`` as
-    # Anthropic's ``x-api-key``, but the gateway is Orchestra and authenticates
-    # on ``Authorization: Bearer`` like its every other route; sending only the
-    # former would reach the route unauthenticated. The gateway discards both
-    # and substitutes the real provider credential regardless.
-    if _llm_gateway_active() and provider == "anthropic" and kw.get("api_base") is None:
-        gateway_key = _llm_gateway_key()
-        kw["api_base"] = f"{_llm_gateway_base()}/anthropic/v1/messages"
-        kw["api_key"] = gateway_key
-        headers = dict(kw.get("extra_headers") or {})
-        headers.setdefault("Authorization", f"Bearer {gateway_key}")
-        headers.update(_gateway_attribution_headers())
-        kw["extra_headers"] = headers
+        kw["api_base"], kw["api_key"] = gateway
 
     if (
         provider == "minimax"
@@ -579,8 +493,8 @@ def _prepare_provider_request_kw(
 
     _apply_openrouter_hard_provider_pin(kw, model)
     _request_openrouter_usage_accounting(kw, model)
-    # After the gateway branches above, so a brokered call keeps the gateway's
-    # own credential rather than the provider one.
+    # After the gateway branch above, so a call sent to the gateway keeps the
+    # gateway's own credential rather than the provider one.
     _pass_provider_credential_explicitly(kw, model, provider)
 
     if provider == "xiaomi-mimo" and kw.get("api_base") is None:
@@ -605,8 +519,8 @@ def _prepare_provider_request_kw(
 def _request_kw_for_event(kw: dict, accounting_model: str) -> dict:
     """Return JSON-serializable event metadata with the accounting model primary.
 
-    ``LLMEvent.request`` is persisted by downstream JSON sinks (file logs,
-    EventBus/Orchestra), so it must be JSON-serializable end-to-end. A Pydantic
+    ``LLMEvent.request`` is persisted by downstream JSON sinks (file logs, a
+    host's EventBus), so it must be JSON-serializable end-to-end. A Pydantic
     ``response_format`` class is replaced by its JSON schema, which keeps the
     requested output contract visible in analytics without leaking the class
     object (``json.dumps`` cannot encode a ``ModelMetaclass``).

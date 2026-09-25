@@ -39,6 +39,7 @@ UniLLM's caching is fundamental to Unify's test strategy. Tests use real LLM cal
 ## Related Repositories
 
 - **unify-agent** (the `unify` package): the one consumer. Its async tool loops call UniLLM, and a local checkout links it as a sibling editable install (`../unillm`).
+- A private evaluation harness runs unify-agent with `UNILLM_LLM_GATEWAY_URL` and `UNILLM_LLM_GATEWAY_KEY` set, so its OpenRouter calls go through the harness's tracking proxy. The gateway override is therefore in use, not leftover hosted-platform code: search the unifyai org's code for those variables before changing it.
 - **orchestra**, **unisdk**, **unify-deploy** and **console** are archived along with the hosted platform they made up. UniLLM depends on none of them, and CI starts no server.
 
 ---

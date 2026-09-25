@@ -41,7 +41,7 @@ export ANTHROPIC_API_KEY=<your-key>
 # ... other provider keys
 ```
 
-`UNIFY_KEY` is optional: UniLLM reads it only as a fallback auth key for gateway routing, which is off unless `UNILLM_LLM_GATEWAY_URL` is set.
+To send OpenRouter calls to an OpenAI-compatible gateway instead of OpenRouter, set both `UNILLM_LLM_GATEWAY_URL` (its base URL) and `UNILLM_LLM_GATEWAY_KEY` (its key) in the process environment. The gateway then holds the provider key, and other providers are still called directly.
 
 ### Google Cloud / Vertex AI
 
@@ -287,8 +287,6 @@ without making real LLM calls.
 ```bash
 uv run pytest tests/ -v
 ```
-
-`UNIFY_KEY` is optional; the test suite does not need it.
 
 ### Running Tests in CI
 

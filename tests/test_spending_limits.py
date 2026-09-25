@@ -7,8 +7,8 @@ These tests verify:
 3. Error handling (callback failures fail open)
 4. SpendingLimitExceededError exception
 
-The actual limit checking logic (HTTP calls to Orchestra) is implemented in Unify.
-UniLLM simply invokes a registered callback hook and respects its response.
+The limit checking itself belongs to the host application that registers the
+hook. UniLLM simply invokes a registered callback hook and respects its response.
 """
 
 import asyncio

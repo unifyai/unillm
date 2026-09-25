@@ -1,186 +1,69 @@
-"""Tests for LLM-gateway routing in the OpenRouter and Anthropic paths.
+"""Tests for LLM-gateway routing in the OpenRouter path.
 
-When ``UNILLM_LLM_GATEWAY_URL`` (+ an auth key) is set, OpenRouter and
-Anthropic traffic is redirected to the gateway via ``api_base``/``api_key``.
+When ``UNILLM_LLM_GATEWAY_URL`` and ``UNILLM_LLM_GATEWAY_KEY`` are both set,
+OpenRouter traffic is redirected to the gateway via ``api_base``/``api_key``.
 Everything is default-off and must not touch other providers.
 """
 
-import base64
-
 import pytest
 
-from unillm.billing_context import set_billing_context
-from unillm.clients.uni_llm import (
-    _ASSISTANT_HEADER,
-    _LABEL_HEADER,
-    _SOURCE_HEADER,
-    _gateway_attribution_headers,
-    _llm_gateway_active,
-    _prepare_provider_request_kw,
-)
+from unillm.clients.uni_llm import _llm_gateway, _prepare_provider_request_kw
 
-_GATEWAY = "https://internal.example.com/v0/llm"
+_GATEWAY = "https://gateway.example/v0/llm"
 
 
-def _enable_gateway(monkeypatch, url=_GATEWAY + "/", key="unify-key"):
+def _enable_gateway(monkeypatch, url=_GATEWAY + "/", key="gateway-key"):
     monkeypatch.setenv("UNILLM_LLM_GATEWAY_URL", url)
-    monkeypatch.setenv("UNIFY_KEY", key)
+    monkeypatch.setenv("UNILLM_LLM_GATEWAY_KEY", key)
 
 
 class TestGatewayRouting:
     def test_inactive_by_default(self, monkeypatch):
         """With no gateway configured the call goes straight to the provider.
 
-        ``api_key`` is no longer proof of redirection: the provider credential
-        travels with every request now, so the gateway is distinguished by
-        ``api_base`` and by the key being the provider's rather than the
-        gateway's.
+        The provider credential travels with every request, so the gateway is
+        distinguished by ``api_base`` and by the key not being the gateway's.
         """
         monkeypatch.delenv("UNILLM_LLM_GATEWAY_URL", raising=False)
-        monkeypatch.setenv("UNIFY_KEY", "unify-key")
-        assert _llm_gateway_active() is False
+        monkeypatch.setenv("UNILLM_LLM_GATEWAY_KEY", "gateway-key")
+        assert _llm_gateway() is None
         kw = {"model": "openrouter/openai/gpt-5.6-sol"}
         _prepare_provider_request_kw(kw=kw, provider="openrouter", stream=False)
         assert kw.get("api_base") is None
-        assert kw.get("api_key") != "unify-key"
+        assert kw.get("api_key") != "gateway-key"
 
     def test_active_requires_both_url_and_key(self, monkeypatch):
         monkeypatch.setenv("UNILLM_LLM_GATEWAY_URL", _GATEWAY)
-        monkeypatch.delenv("UNIFY_KEY", raising=False)
         monkeypatch.delenv("UNILLM_LLM_GATEWAY_KEY", raising=False)
-        assert _llm_gateway_active() is False
+        assert _llm_gateway() is None
 
     def test_openrouter_redirected_when_active(self, monkeypatch):
         _enable_gateway(monkeypatch)
         kw = {"model": "openrouter/openai/gpt-5.6-sol"}
         _prepare_provider_request_kw(kw=kw, provider="openrouter", stream=False)
-        # Trailing slash trimmed; key taken from UNIFY_KEY.
+        # Trailing slash trimmed.
         assert kw["api_base"] == _GATEWAY
-        assert kw["api_key"] == "unify-key"
+        assert kw["api_key"] == "gateway-key"
 
-    def test_an_unbrokered_provider_is_not_redirected_when_active(self, monkeypatch):
-        """The gateway carries OpenRouter and Anthropic; others go direct.
-
-        This previously asserted Anthropic was left alone, which was true
-        while the gateway had no Anthropic leg. It has one now, so the case
-        is made with a provider the gateway genuinely does not carry --
-        otherwise nothing pins that enabling the gateway stops being
-        opt-in per provider.
-        """
+    @pytest.mark.parametrize(
+        ("model", "provider"),
+        [("claude-opus-5", "anthropic"), ("deepseek-chat@deepseek", "deepseek")],
+    )
+    def test_other_providers_go_direct_when_active(
+        self,
+        monkeypatch,
+        model,
+        provider,
+    ):
+        """The gateway speaks OpenRouter's API, so only OpenRouter calls go to it."""
         _enable_gateway(monkeypatch)
-        kw = {"model": "deepseek-chat@deepseek"}
-        _prepare_provider_request_kw(kw=kw, provider="deepseek", stream=False)
+        kw = {"model": model}
+        _prepare_provider_request_kw(kw=kw, provider=provider, stream=False)
         assert kw.get("api_base") is None
-        assert kw.get("api_key") is None
+        assert kw.get("api_key") != "gateway-key"
 
     def test_existing_api_base_not_overridden(self, monkeypatch):
         _enable_gateway(monkeypatch)
         kw = {"model": "openrouter/openai/gpt-5.6-sol", "api_base": "https://x"}
         _prepare_provider_request_kw(kw=kw, provider="openrouter", stream=False)
         assert kw["api_base"] == "https://x"
-
-    def test_dedicated_gateway_key_env(self, monkeypatch):
-        monkeypatch.setenv("UNILLM_LLM_GATEWAY_URL", _GATEWAY)
-        monkeypatch.delenv("UNIFY_KEY", raising=False)
-        monkeypatch.setenv("UNILLM_LLM_GATEWAY_KEY", "dedicated")
-        kw = {"model": "openrouter/openai/gpt-5.6-sol"}
-        _prepare_provider_request_kw(kw=kw, provider="openrouter", stream=False)
-        assert kw["api_key"] == "dedicated"
-
-
-class TestAnthropicRouting:
-    """Anthropic is brokered over its own protocol, not the OpenAI-shaped one."""
-
-    def test_anthropic_addresses_the_messages_route_directly(self, monkeypatch):
-        """LiteLLM uses api_base verbatim here, so the full path is set."""
-        _enable_gateway(monkeypatch)
-        kw = {"model": "claude-opus-5"}
-        _prepare_provider_request_kw(kw=kw, provider="anthropic", stream=False)
-        assert kw["api_base"] == _GATEWAY + "/anthropic/v1/messages"
-
-    def test_the_key_is_sent_on_both_headers(self, monkeypatch):
-        """LiteLLM sends x-api-key; Orchestra reads Authorization: Bearer.
-
-        Sending only what the provider expects would reach the gateway
-        unauthenticated, which reads as a broken credential rather than a
-        missing header.
-        """
-        _enable_gateway(monkeypatch)
-        kw = {"model": "claude-opus-5"}
-        _prepare_provider_request_kw(kw=kw, provider="anthropic", stream=False)
-        assert kw["api_key"] == "unify-key"
-        assert kw["extra_headers"]["Authorization"] == "Bearer unify-key"
-
-    def test_anthropic_untouched_when_the_gateway_is_off(self, monkeypatch):
-        monkeypatch.delenv("UNILLM_LLM_GATEWAY_URL", raising=False)
-        kw = {"model": "claude-opus-5"}
-        _prepare_provider_request_kw(kw=kw, provider="anthropic", stream=False)
-        assert kw.get("api_base") is None
-        assert kw.get("extra_headers") is None
-
-    def test_an_explicit_api_base_still_wins(self, monkeypatch):
-        _enable_gateway(monkeypatch)
-        kw = {"model": "claude-opus-5", "api_base": "https://x"}
-        _prepare_provider_request_kw(kw=kw, provider="anthropic", stream=False)
-        assert kw["api_base"] == "https://x"
-
-
-@pytest.fixture(autouse=True)
-def _reset_billing_context():
-    """Billing context is a ContextVar, not per-test state; clear it either side."""
-    set_billing_context()
-    yield
-    set_billing_context()
-
-
-class TestGatewayAttributionHeaders:
-    """The billing-context read that lets a brokered call carry its origin.
-
-    This is what threads assistant id, label and source to the broker -- as
-    headers, since the request body is provider-shaped and forwarded to the
-    provider verbatim.
-    """
-
-    def test_no_context_produces_no_headers(self):
-        assert _gateway_attribution_headers() == {}
-
-    def test_assistant_id_alone(self):
-        set_billing_context(assistant_id=7366)
-        assert _gateway_attribution_headers() == {_ASSISTANT_HEADER: "7366"}
-
-    def test_source_is_sent_as_plain_text(self):
-        set_billing_context(source="tool")
-        assert _gateway_attribution_headers() == {_SOURCE_HEADER: "tool"}
-
-    def test_an_empty_source_produces_no_header(self):
-        set_billing_context(source="")
-        assert _SOURCE_HEADER not in _gateway_attribution_headers()
-
-    def test_an_ascii_label_is_base64url_encoded(self):
-        set_billing_context(label="Researching leads")
-        headers = _gateway_attribution_headers()
-        assert headers[_LABEL_HEADER] == base64.urlsafe_b64encode(
-            b"Researching leads",
-        ).decode("ascii")
-
-    def test_a_chinese_label_is_base64url_encoded_as_utf8(self):
-        """Raw HTTP headers are latin-1; an unencoded Chinese label would break them."""
-        label = "研究客户需求"
-        set_billing_context(label=label)
-        headers = _gateway_attribution_headers()
-        decoded = base64.urlsafe_b64decode(headers[_LABEL_HEADER]).decode("utf-8")
-        assert decoded == label
-
-    def test_an_empty_label_produces_no_header(self):
-        set_billing_context(label="")
-        assert _LABEL_HEADER not in _gateway_attribution_headers()
-
-    def test_all_three_together(self):
-        set_billing_context(assistant_id=1, source="chat", label="客户研究")
-        headers = _gateway_attribution_headers()
-        assert headers[_ASSISTANT_HEADER] == "1"
-        assert headers[_SOURCE_HEADER] == "chat"
-        assert (
-            base64.urlsafe_b64decode(headers[_LABEL_HEADER]).decode("utf-8")
-            == "客户研究"
-        )

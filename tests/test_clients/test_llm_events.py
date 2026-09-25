@@ -265,10 +265,10 @@ class TestLLMEventEmissionMocked:
     def test_structured_output_event_request_is_json_serializable(self):
         """A Pydantic ``response_format`` class must not leak into the event.
 
-        Downstream sinks (EventBus -> Orchestra, file logs) persist the request
+        Downstream sinks (a host's EventBus, file logs) persist the request
         with ``json.dumps``; a raw model class raised ``TypeError: Object of
         type ModelMetaclass is not JSON serializable`` and silently dropped the
-        Events/LLM row for every structured-output call.
+        event for every structured-output call.
         """
         import json
 

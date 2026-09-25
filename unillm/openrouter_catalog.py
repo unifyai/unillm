@@ -1,10 +1,11 @@
-"""OpenRouter model catalog snapshot for listing, pricing fallback, and Orchestra sync.
+"""OpenRouter model catalog snapshot for listing, pricing and model registration.
 
 Any ``<openrouter-id>@openrouter`` endpoint is callable without being in this
 catalog. The snapshot is used for:
 - ``list_endpoints`` / ``list_models("openrouter")`` enrichment
 - cost fallback when a response omits ``usage.cost``
-- downstream product catalogs (Orchestra) that need modalities / pricing
+- registering OpenRouter models LiteLLM does not know, with their pricing,
+  context length and tool / reasoning / image support
 """
 
 from __future__ import annotations
