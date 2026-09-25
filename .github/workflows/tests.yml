@@ -327,7 +327,7 @@ jobs:
           cache-ndjson-${{ runner.os }}-
 
     - name: Download cache artifacts from current run
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         pattern: cache-diff-*
         path: cache-artifacts
@@ -371,7 +371,7 @@ jobs:
     if: always() && needs.should-run-tests.outputs.run_tests == 'true' && needs.pytest-run.result != 'cancelled'
     steps:
     - name: Download logs from pytest job
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         pattern: logs-*
         path: all-logs
