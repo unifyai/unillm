@@ -579,6 +579,10 @@ pre-commit run --files <changed-files>   # or: pre-commit run --all-files
 
 3. Never bypass hooks: do not use `git commit -n` / `--no-verify`.
 
+On newly wrapped code, `black` and `add-trailing-comma` each rewrite the
+other's output once, so the hooks can fail twice before they pass. Re-stage
+and run them again until they pass.
+
 ## Formatting across multiple repos
 
 When juggling several repos, do not invoke a globally-installed `black` —
