@@ -1243,7 +1243,8 @@ class _UniClient(_Client, abc.ABC):
                     {"role": "system", "content": system_message},
                 ] + messages
             if user_message is not None:
-                messages += [{"role": "user", "content": user_message}]
+                # A new list: ``+=`` would append to the caller's own list.
+                messages = [*messages, {"role": "user", "content": user_message}]
             self._messages = list(messages)  # Copy to avoid mutating user's list
         else:
             messages = list()

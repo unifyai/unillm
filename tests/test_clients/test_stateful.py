@@ -1,6 +1,9 @@
 """Tests for stateful client behavior - ensuring full message is stored in history."""
 
 import pytest
+from unittest.mock import MagicMock, patch
+
+import unillm
 from .helpers import new_llm_client
 
 
@@ -135,3 +138,63 @@ class TestStatefulFullMessageStorage:
         assistant_msg = messages[-1]
         assert assistant_msg["role"] == "assistant"
         assert "content" in assistant_msg
+
+
+class TestCallerMessagesUntouched:
+    """``generate(user_message, messages=...)`` must not append to the caller's list."""
+
+    @pytest.fixture(autouse=True)
+    def mock_logging(self):
+        with patch("unillm.clients.uni_llm.write_request_pending", return_value=None):
+            with patch("unillm.clients.uni_llm.append_response_and_finalize"):
+                yield
+
+    @staticmethod
+    def _completion():
+        completion = MagicMock()
+        completion.choices = [MagicMock()]
+        completion.choices[0].message.content = "ok"
+        completion.choices[0].message.tool_calls = None
+        completion.choices[0].message.model_dump.return_value = {
+            "role": "assistant",
+            "content": "ok",
+        }
+        completion.model_dump.return_value = {}
+        completion.usage = None
+        return completion
+
+    def test_sync_generate_leaves_caller_messages_unchanged(self):
+        sent = []
+
+        def completion(**kw):
+            sent.append([m["content"] for m in kw["messages"]])
+            return self._completion()
+
+        base = [{"role": "system", "content": "be brief"}]
+        with patch("unillm.clients.uni_llm.litellm.completion", side_effect=completion):
+            client = unillm.Unify("openai/gpt-4o@openrouter", cache=False)
+            client.generate("q1", messages=base)
+            client.generate("q2", messages=base)
+
+        assert base == [{"role": "system", "content": "be brief"}]
+        assert sent == [["be brief", "q1"], ["be brief", "q2"]]
+
+    @pytest.mark.asyncio
+    async def test_async_generate_leaves_caller_messages_unchanged(self):
+        sent = []
+
+        async def acompletion(**kw):
+            sent.append([m["content"] for m in kw["messages"]])
+            return self._completion()
+
+        base = [{"role": "system", "content": "be brief"}]
+        with patch(
+            "unillm.clients.uni_llm.litellm.acompletion",
+            side_effect=acompletion,
+        ):
+            client = unillm.AsyncUnify("openai/gpt-4o@openrouter", cache=False)
+            await client.generate("q1", messages=base)
+            await client.generate("q2", messages=base)
+
+        assert base == [{"role": "system", "content": "be brief"}]
+        assert sent == [["be brief", "q1"], ["be brief", "q2"]]
