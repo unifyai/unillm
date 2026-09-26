@@ -423,6 +423,79 @@ class TestCostEventEmissionMocked:
         # Just verify it completed without error
         assert response is not None
 
+    @staticmethod
+    def _cached_stream_chunks():
+        """A two-chunk stream whose final chunk reports mostly cache-read input."""
+        import litellm
+
+        usage = litellm.Usage(
+            prompt_tokens=100_000,
+            completion_tokens=1_000,
+            prompt_tokens_details={"cached_tokens": 90_000},
+            cache_read_input_tokens=90_000,
+        )
+        text = MagicMock()
+        text.choices = [MagicMock()]
+        text.choices[0].delta.content = "Hello"
+        text.usage = None
+        final = MagicMock()
+        final.choices = [MagicMock()]
+        final.choices[0].delta.content = None
+        final.usage = usage
+        return [text, final], usage
+
+    @staticmethod
+    def _non_stream_cost(model, usage):
+        from unillm.costs import compute_cost_from_response
+
+        completion = MagicMock()
+        completion.usage = usage
+        return compute_cost_from_response(model, completion)
+
+    def test_sync_stream_prices_cached_prompt_tokens_at_cache_read_rate(self):
+        """A streamed call costs what the same usage costs when not streamed."""
+        chunks, usage = self._cached_stream_chunks()
+        with patch(
+            "unillm.clients.uni_llm.litellm.completion",
+            side_effect=lambda **kw: iter(chunks),
+        ):
+            client = unillm.Unify("claude-4.8-opus@anthropic", stream=True)
+            with capture_costs() as events:
+                list(client.generate(messages=[{"role": "user", "content": "Hi"}]))
+
+        assert len(events) == 1
+        expected = self._non_stream_cost(events[0].model, usage)
+        assert expected is not None and expected > 0
+        assert events[0].provider_cost == pytest.approx(expected)
+
+    @pytest.mark.asyncio
+    async def test_async_stream_prices_cached_prompt_tokens_at_cache_read_rate(self):
+        chunks, usage = self._cached_stream_chunks()
+
+        async def mock_acompletion(**kw):
+            async def gen():
+                for chunk in chunks:
+                    yield chunk
+
+            return gen()
+
+        with patch(
+            "unillm.clients.uni_llm.litellm.acompletion",
+            side_effect=mock_acompletion,
+        ):
+            client = unillm.AsyncUnify("claude-4.8-opus@anthropic", stream=True)
+            async with acapture_costs() as events:
+                stream = await client.generate(
+                    messages=[{"role": "user", "content": "Hi"}],
+                )
+                async for _ in stream:
+                    pass
+
+        assert len(events) == 1
+        expected = self._non_stream_cost(events[0].model, usage)
+        assert expected is not None and expected > 0
+        assert events[0].provider_cost == pytest.approx(expected)
+
 
 class TestCostEventEmissionIntegration:
     """Integration tests for cost events with real LLM calls."""

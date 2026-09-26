@@ -290,10 +290,13 @@ def _provider_cost_from_stream_usage(
     """Price a stream's usage blob.
 
     Prefers OpenRouter's authoritative ``usage.cost`` when present; otherwise
-    prices tokens via LiteLLM / catalog fallback.
+    prices tokens via LiteLLM / catalog fallback, with cache-read prompt tokens
+    at the cache-read rate exactly as ``compute_cost_from_response`` does for
+    a non-streamed call.
     """
 
     from ..costs import (
+        _get_nested_attr,
         compute_cost,
         extract_openrouter_usage_cost,
     )
@@ -311,8 +314,19 @@ def _provider_cost_from_stream_usage(
     if prompt_tokens <= 0 and completion_tokens <= 0:
         return None
 
+    cached_tokens = _get_nested_attr(
+        usage_info,
+        "prompt_tokens_details",
+        "cached_tokens",
+    ) or _get_nested_attr(usage_info, "cache_read_input_tokens")
+
     try:
-        return compute_cost(accounting_model, prompt_tokens, completion_tokens)
+        return compute_cost(
+            accounting_model,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens=cached_tokens,
+        )
     except ValueError:
         return None
 
