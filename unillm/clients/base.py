@@ -848,8 +848,11 @@ class _Client(ABC):
         prefix is only reused when the next request reaches the replica that
         holds it. Requests sharing this key are asked to go to the same place,
         through whatever mechanism the transport offers (OpenRouter's
-        ``session_id``, for one). The key is a routing hint only: it never
-        changes the prompt, and a transport with no such mechanism ignores it.
+        ``session_id``, for one). A transport with no such mechanism ignores
+        it. The key is otherwise a routing hint, with one exception: Claude
+        behind OpenRouter receives the ``prompt_caching`` breakpoints only
+        when a key is set, so a client without one sends exactly what it
+        always did.
 
         Args:
             value: A stable, short identifier for one conversation or agent

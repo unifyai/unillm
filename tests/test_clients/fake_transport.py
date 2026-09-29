@@ -15,6 +15,7 @@ import contextlib
 import copy
 import os
 from json import loads
+from pathlib import Path
 from typing import Any, Iterator
 from unittest.mock import patch
 
@@ -60,6 +61,13 @@ ENDPOINTS = (
     "mimo-v2.5@xiaomi-mimo",
     "llama-3.3-70b-chat@groq",
     "mistral-large@mistral",
+)
+
+# Claude behind OpenRouter: requested markers are placed only once the
+# client also has an affinity key.
+CLAUDE_ON_OPENROUTER = (
+    "anthropic/claude-sonnet-4.6@openrouter",
+    "claude-4.5-sonnet@bedrock",
 )
 
 PROMPT_CACHING_VARIANTS = {
@@ -155,3 +163,11 @@ def record_off_path() -> dict[str, list[dict[str, Any]]]:
         for endpoint in ENDPOINTS
         for variant, prompt_caching in PROMPT_CACHING_VARIANTS.items()
     }
+
+
+_RECORDING = Path(__file__).parent / "recorded" / "off_path_requests.json"
+
+
+def recorded(endpoint: str, variant: str = "no-markers") -> list[dict[str, Any]]:
+    """What ``send`` put on the wire for this case at b1dced7, before the key."""
+    return loads(_RECORDING.read_text())[f"{endpoint}|{variant}"]

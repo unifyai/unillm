@@ -777,8 +777,10 @@ class _UniClient(_Client, abc.ABC):
             cache_affinity: An optional key, stable across one conversation or
             agent run, that asks the transport to send every request carrying it
             to the provider replica holding that conversation's prompt cache. It
-            is a routing hint and leaves the prompt, and the response cache key,
-            unchanged. None (the default) sends no hint.
+            is a routing hint and leaves the response cache key unchanged, except
+            that Claude behind OpenRouter also gets the ``prompt_caching``
+            breakpoints only once a key is set. None (the default) sends no hint
+            and changes nothing.
 
             origin: An optional string tag for identifying the origin of LLM
             calls in log files, OTel spans, and events. Useful when multiple
@@ -1368,7 +1370,12 @@ class Unify(_UniClient):
             stream_options=stream_options,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider, prompt_caching)
+        apply_provider_preprocessing(
+            kw,
+            self._provider,
+            prompt_caching,
+            cache_affinity=self._cache_affinity,
+        )
         accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
             provider=self._provider,
@@ -1556,7 +1563,12 @@ class Unify(_UniClient):
         original_request_messages = copy.deepcopy(kw.get("messages"))
 
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider, prompt_caching)
+        apply_provider_preprocessing(
+            kw,
+            self._provider,
+            prompt_caching,
+            cache_affinity=self._cache_affinity,
+        )
         accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
             provider=self._provider,
@@ -1871,7 +1883,12 @@ class AsyncUnify(_UniClient):
             stream_options=stream_options,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider, prompt_caching)
+        apply_provider_preprocessing(
+            kw,
+            self._provider,
+            prompt_caching,
+            cache_affinity=self._cache_affinity,
+        )
         accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
             provider=self._provider,
@@ -2099,7 +2116,12 @@ class AsyncUnify(_UniClient):
         original_request_messages = copy.deepcopy(kw.get("messages"))
 
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider, prompt_caching)
+        apply_provider_preprocessing(
+            kw,
+            self._provider,
+            prompt_caching,
+            cache_affinity=self._cache_affinity,
+        )
         accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
             provider=self._provider,

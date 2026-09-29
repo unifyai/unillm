@@ -7,7 +7,6 @@ made and no real key is used.
 
 import copy
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 import litellm
@@ -17,17 +16,16 @@ import unillm
 from unillm.clients.uni_llm import _prepare_provider_request_kw
 
 from .fake_transport import (
+    CLAUDE_ON_OPENROUTER,
     ENDPOINTS,
     PROMPT_CACHING_VARIANTS,
     WEATHER_TOOL,
     captured_requests,
+    recorded,
     send,
 )
 
 KEY = "run-7f3a"
-_RECORDED = json.loads(
-    (Path(__file__).parent / "recorded" / "off_path_requests.json").read_text(),
-)
 
 # Behind OpenRouter with no fixed host list, so OpenRouter chooses the
 # provider and can keep choosing the one holding the conversation's cache.
@@ -51,10 +49,6 @@ _PINNED_OPENROUTER = (
 )
 
 
-def _recorded(endpoint: str, variant: str = "no-markers") -> list[dict]:
-    return _RECORDED[f"{endpoint}|{variant}"]
-
-
 def test_the_endpoint_groups_cover_every_recorded_endpoint():
     assert sorted(
         (*_UNPINNED_OPENROUTER, *_PINNED_OPENROUTER, "claude-opus-5@anthropic"),
@@ -68,7 +62,14 @@ class TestWithoutAKeyRequestsAreUnchanged:
     @pytest.mark.parametrize("endpoint", ENDPOINTS)
     def test_request_matches_the_recording(self, endpoint, variant):
         sent = send(endpoint, prompt_caching=PROMPT_CACHING_VARIANTS[variant])
-        assert sent == _recorded(endpoint, variant)
+        assert sent == recorded(endpoint, variant)
+
+    @pytest.mark.parametrize("endpoint", CLAUDE_ON_OPENROUTER)
+    def test_claude_behind_openrouter_ignores_prompt_caching(self, endpoint):
+        """Callers pass ``prompt_caching`` by default; only the key opts in."""
+        sent = send(endpoint, prompt_caching=["system", "tools", "messages"])
+        assert sent == recorded(endpoint, "all-markers") == recorded(endpoint)
+        assert "cache_control" not in json.dumps(sent)
 
 
 def test_markers_for_one_request_do_not_reach_the_next():
@@ -88,7 +89,7 @@ def test_markers_for_one_request_do_not_reach_the_next():
         ).generate(**turn)
     with captured_requests() as sent:
         unillm.Unify("gemini-2.5-pro@vertex-ai", cache=False).generate(**turn)
-    assert sent == _recorded("gemini-2.5-pro@vertex-ai")
+    assert sent == recorded("gemini-2.5-pro@vertex-ai")
 
 
 class TestTheKeyIsClientState:
@@ -120,27 +121,27 @@ class TestOpenRouterStickiness:
     )
     def test_unpinned_models_carry_session_id_and_nothing_else(self, endpoint):
         (sent,) = send(endpoint, cache_affinity=KEY)
-        (recorded,) = _recorded(endpoint)
+        (before,) = recorded(endpoint)
         assert sent["body"].pop("session_id") == KEY
-        assert sent == recorded
+        assert sent == before
 
     def test_openai_models_also_carry_openai_prompt_cache_key(self):
         endpoint = "openai/gpt-5.6-sol@openrouter"
         (sent,) = send(endpoint, cache_affinity=KEY)
-        (recorded,) = _recorded(endpoint)
+        (before,) = recorded(endpoint)
         assert sent["body"].pop("session_id") == KEY
         assert sent["body"].pop("prompt_cache_key") == KEY
-        assert sent == recorded
+        assert sent == before
 
     @pytest.mark.parametrize("endpoint", _PINNED_OPENROUTER)
     def test_pinned_models_keep_the_pin_and_send_no_session_id(self, endpoint):
         """The pin decides the host, and OpenRouter does not stick on top of it."""
         sent = send(endpoint, cache_affinity=KEY)
-        assert sent == _recorded(endpoint)
+        assert sent == recorded(endpoint)
         assert sent[0]["body"]["provider"]["only"]
 
     def test_direct_anthropic_has_no_routing_hint_to_send(self):
-        assert send("claude-opus-5@anthropic", cache_affinity=KEY) == _recorded(
+        assert send("claude-opus-5@anthropic", cache_affinity=KEY) == recorded(
             "claude-opus-5@anthropic",
         )
 
