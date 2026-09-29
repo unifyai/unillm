@@ -5,6 +5,7 @@ assertions are about the bytes a provider would receive. No network call is
 made and no real key is used.
 """
 
+import copy
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -15,7 +16,13 @@ import pytest
 import unillm
 from unillm.clients.uni_llm import _prepare_provider_request_kw
 
-from .fake_transport import ENDPOINTS, PROMPT_CACHING_VARIANTS, captured_requests, send
+from .fake_transport import (
+    ENDPOINTS,
+    PROMPT_CACHING_VARIANTS,
+    WEATHER_TOOL,
+    captured_requests,
+    send,
+)
 
 KEY = "run-7f3a"
 _RECORDED = json.loads(
@@ -62,6 +69,26 @@ class TestWithoutAKeyRequestsAreUnchanged:
     def test_request_matches_the_recording(self, endpoint, variant):
         sent = send(endpoint, prompt_caching=PROMPT_CACHING_VARIANTS[variant])
         assert sent == _recorded(endpoint, variant)
+
+
+def test_markers_for_one_request_do_not_reach_the_next():
+    """One tool list, shared by a marked Claude call and an unmarked one."""
+    tools = [copy.deepcopy(WEATHER_TOOL)]
+    turn = dict(
+        system_message="You answer weather questions briefly.",
+        user_message="What is the weather in Paris?",
+        tools=tools,
+        tool_choice="auto",
+    )
+    with captured_requests():
+        unillm.Unify(
+            "claude-opus-5@anthropic",
+            cache=False,
+            prompt_caching=["tools"],
+        ).generate(**turn)
+    with captured_requests() as sent:
+        unillm.Unify("gemini-2.5-pro@vertex-ai", cache=False).generate(**turn)
+    assert sent == _recorded("gemini-2.5-pro@vertex-ai")
 
 
 class TestTheKeyIsClientState:

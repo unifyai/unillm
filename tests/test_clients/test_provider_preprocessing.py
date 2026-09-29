@@ -409,6 +409,25 @@ class TestApplyAnthropicCachingTools:
         assert "cache_control" not in kw["tools"][0]
         assert kw["tools"][1]["cache_control"] == CACHE_CONTROL_EPHEMERAL
 
+    def test_the_callers_tools_are_not_marked(self):
+        """The marker belongs to this request, not to the caller's tool list.
+
+        Tool lists are reused across turns and across clients, so a marker
+        written into the caller's dict would ride along on every later
+        request, including ones that asked for no markers or go to a model
+        whose transport keeps ``cache_control`` (Gemini, GLM and MiniMax on
+        OpenRouter).
+        """
+        tools = [
+            {"name": "tool1", "description": "First tool"},
+            {"name": "tool2", "description": "Second tool"},
+        ]
+        kw = {"tools": tools, "messages": []}
+        _apply_anthropic_caching(kw, ["tools"])
+
+        assert kw["tools"][-1]["cache_control"] == CACHE_CONTROL_EPHEMERAL
+        assert all("cache_control" not in tool for tool in tools)
+
     def test_empty_tools_no_error(self):
         """Empty tools list doesn't cause errors."""
         kw = {"tools": [], "messages": []}

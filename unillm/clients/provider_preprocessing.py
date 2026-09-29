@@ -529,11 +529,16 @@ def _apply_anthropic_caching(
     Apply Anthropic prompt caching breakpoints to tools, system, and/or user messages.
 
     Mutates kw in-place to add cache_control markers at specified locations.
+    Messages are already this request's own copy; the tool list is still the
+    caller's, so the marked tool is replaced rather than written into.
     """
     if "tools" in prompt_caching:
         tools = kw.get("tools")
-        if tools and len(tools) > 0:
-            tools[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+        if tools:
+            kw["tools"] = [
+                *tools[:-1],
+                {**tools[-1], "cache_control": CACHE_CONTROL_EPHEMERAL},
+            ]
 
     messages = kw.get("messages")
     if not messages:
