@@ -32,6 +32,7 @@ from ..costs import compute_cost_from_response
 _LOGGER = logging.getLogger("unillm")
 
 _OPENROUTER_MODEL_PREFIX = "openrouter/"
+_OPENROUTER_OPENAI_PREFIX = f"{_OPENROUTER_MODEL_PREFIX}openai/"
 
 # OpenRouter catalog id -> ordered hard-enforcement hosts (tool_choice +
 # json_schema under adversarial prompts). allow_fallbacks is always false.
@@ -195,11 +196,15 @@ def _apply_openrouter_cache_affinity(kw: dict, model: str, key: str) -> None:
 
     OpenRouter otherwise derives stickiness by hashing a conversation's opening
     messages, which drifts whenever those change between calls, and it offers
-    ``session_id`` as the explicit routing key. A model pinned to a fixed host
-    list keeps its pin and gets no key: the pin exists so tool and schema
-    enforcement hold, and OpenRouter does not apply sticky routing on top of a
-    caller-chosen provider list anyway. A ``session_id`` the caller already
-    set wins.
+    ``session_id`` as the explicit routing key. OpenAI models also get the key
+    as ``prompt_cache_key``, which OpenAI combines with the prefix hash to pick
+    the machine inside its own fleet, a level below OpenRouter's choice of
+    provider.
+
+    A model pinned to a fixed host list keeps its pin and gets no key: the pin
+    exists so tool and schema enforcement hold, OpenRouter does not apply
+    sticky routing on top of a caller-chosen provider list, and the pinned
+    hosts are not OpenAI's. Keys the caller already set win.
     """
     if not model.startswith(_OPENROUTER_MODEL_PREFIX):
         return
@@ -208,6 +213,8 @@ def _apply_openrouter_cache_affinity(kw: dict, model: str, key: str) -> None:
     if hosts.get("only") or hosts.get("order"):
         return
     extra_body.setdefault("session_id", key)
+    if model.startswith(_OPENROUTER_OPENAI_PREFIX):
+        extra_body.setdefault("prompt_cache_key", key)
     kw["extra_body"] = extra_body
 
 

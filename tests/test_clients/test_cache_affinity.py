@@ -87,11 +87,22 @@ class TestTheKeyIsClientState:
 
 
 class TestOpenRouterStickiness:
-    @pytest.mark.parametrize("endpoint", _UNPINNED_OPENROUTER)
+    @pytest.mark.parametrize(
+        "endpoint",
+        [e for e in _UNPINNED_OPENROUTER if not e.startswith("openai/")],
+    )
     def test_unpinned_models_carry_session_id_and_nothing_else(self, endpoint):
         (sent,) = send(endpoint, cache_affinity=KEY)
         (recorded,) = _recorded(endpoint)
         assert sent["body"].pop("session_id") == KEY
+        assert sent == recorded
+
+    def test_openai_models_also_carry_openai_prompt_cache_key(self):
+        endpoint = "openai/gpt-5.6-sol@openrouter"
+        (sent,) = send(endpoint, cache_affinity=KEY)
+        (recorded,) = _recorded(endpoint)
+        assert sent["body"].pop("session_id") == KEY
+        assert sent["body"].pop("prompt_cache_key") == KEY
         assert sent == recorded
 
     @pytest.mark.parametrize("endpoint", _PINNED_OPENROUTER)
@@ -123,11 +134,19 @@ class TestOpenRouterRequestPreparation:
         kw = self._prepare({"model": self.MODEL}, key=None)
         assert "session_id" not in kw["extra_body"]
 
-    def test_a_session_id_the_caller_chose_wins(self):
+    def test_keys_the_caller_chose_win(self):
+        chosen = {"session_id": "caller", "prompt_cache_key": "caller"}
         kw = self._prepare(
-            {"model": self.MODEL, "extra_body": {"session_id": "caller"}},
+            {"model": "openrouter/openai/gpt-5.6-sol", "extra_body": dict(chosen)},
         )
-        assert kw["extra_body"]["session_id"] == "caller"
+        assert {name: kw["extra_body"][name] for name in chosen} == chosen
+
+    def test_only_openai_models_get_prompt_cache_key(self):
+        assert (
+            "prompt_cache_key" not in self._prepare({"model": self.MODEL})["extra_body"]
+        )
+        kw = self._prepare({"model": "openrouter/openai/gpt-5.6-sol"})
+        assert kw["extra_body"]["prompt_cache_key"] == KEY
 
     @pytest.mark.parametrize("hosts", ["only", "order"])
     def test_a_caller_host_list_suppresses_the_key(self, hosts):
