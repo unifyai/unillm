@@ -1,0 +1,1519 @@
+{
+  "anthropic/claude-sonnet-4.6@openrouter|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "anthropic/claude-sonnet-4.6",
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "anthropic/claude-sonnet-4.6@openrouter|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "anthropic/claude-sonnet-4.6",
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "claude-4.5-sonnet@bedrock|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "anthropic/claude-sonnet-4.5",
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "claude-4.5-sonnet@bedrock|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "anthropic/claude-sonnet-4.5",
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "claude-opus-5@anthropic|all-markers": [
+    {
+      "body": {
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "content": [
+              {
+                "cache_control": {
+                  "type": "ephemeral"
+                },
+                "text": "What is the weather in Paris?",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "claude-opus-5",
+        "system": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "text": "You answer weather questions briefly.",
+            "type": "text"
+          }
+        ],
+        "tool_choice": {
+          "type": "auto"
+        },
+        "tools": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "description": "Get the current weather for a city.",
+            "input_schema": {
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ],
+              "type": "object"
+            },
+            "name": "get_weather",
+            "type": "custom"
+          }
+        ]
+      },
+      "headers": {
+        "accept": "application/json",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+      },
+      "url": "https://api.anthropic.com/v1/messages"
+    }
+  ],
+  "claude-opus-5@anthropic|no-markers": [
+    {
+      "body": {
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "What is the weather in Paris?",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "claude-opus-5",
+        "system": [
+          {
+            "text": "You answer weather questions briefly.",
+            "type": "text"
+          }
+        ],
+        "tool_choice": {
+          "type": "auto"
+        },
+        "tools": [
+          {
+            "description": "Get the current weather for a city.",
+            "input_schema": {
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ],
+              "type": "object"
+            },
+            "name": "get_weather",
+            "type": "custom"
+          }
+        ]
+      },
+      "headers": {
+        "accept": "application/json",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+      },
+      "url": "https://api.anthropic.com/v1/messages"
+    }
+  ],
+  "deepseek-v4-max@deepseek|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "deepseek/deepseek-v4-pro",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "together",
+            "fireworks",
+            "digitalocean",
+            "siliconflow",
+            "wandb",
+            "parasail"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "deepseek-v4-max@deepseek|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "deepseek/deepseek-v4-pro",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "together",
+            "fireworks",
+            "digitalocean",
+            "siliconflow",
+            "wandb",
+            "parasail"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "gemini-2.5-pro@vertex-ai|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "google/gemini-2.5-pro",
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "gemini-2.5-pro@vertex-ai|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "google/gemini-2.5-pro",
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "glm-5.2@zai|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "z-ai/glm-5.2",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "together",
+            "fireworks",
+            "streamlake",
+            "decart",
+            "venice"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "glm-5.2@zai|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "z-ai/glm-5.2",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "together",
+            "fireworks",
+            "streamlake",
+            "decart",
+            "venice"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "gpt-oss-120b@togetherai|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "openai/gpt-oss-120b",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "baseten",
+            "together"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "gpt-oss-120b@togetherai|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "openai/gpt-oss-120b",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "baseten",
+            "together"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "grok-4@xai|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "x-ai/grok-4.20",
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "grok-4@xai|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "x-ai/grok-4.20",
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "kimi-k3@moonshotai|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "moonshotai/kimi-k3",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "moonshotai"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "kimi-k3@moonshotai|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "moonshotai/kimi-k3",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "moonshotai"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "llama-3.3-70b-chat@groq|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "meta-llama/llama-3.3-70b-instruct",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "nebius",
+            "akashml",
+            "wandb",
+            "together"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "llama-3.3-70b-chat@groq|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "meta-llama/llama-3.3-70b-instruct",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "nebius",
+            "akashml",
+            "wandb",
+            "together"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "mimo-v2.5@xiaomi-mimo|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "xiaomi/mimo-v2.5",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "digitalocean",
+            "deepinfra"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "thinking": {
+          "type": "disabled"
+        },
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "mimo-v2.5@xiaomi-mimo|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "xiaomi/mimo-v2.5",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "digitalocean",
+            "deepinfra"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "thinking": {
+          "type": "disabled"
+        },
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "minimax-v3@minimax|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "minimax/minimax-m3",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "together"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "minimax-v3@minimax|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "minimax/minimax-m3",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "together"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "mistral-large@mistral|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "mistralai/mistral-large",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "mistral"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "mistral-large@mistral|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "mistralai/mistral-large",
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "mistral"
+          ]
+        },
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "openai/gpt-5.6-sol@openrouter|all-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "openai/gpt-5.6-sol",
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ],
+  "openai/gpt-5.6-sol@openrouter|no-markers": [
+    {
+      "body": {
+        "messages": [
+          {
+            "content": "You answer weather questions briefly.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Paris?",
+            "role": "user"
+          }
+        ],
+        "model": "openai/gpt-5.6-sol",
+        "stream": false,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Get the current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://litellm.ai",
+        "X-Title": "liteLLM"
+      },
+      "url": "https://openrouter.ai/api/v1/chat/completions"
+    }
+  ]
+}

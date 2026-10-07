@@ -32,6 +32,7 @@ from ..costs import compute_cost_from_response
 _LOGGER = logging.getLogger("unillm")
 
 _OPENROUTER_MODEL_PREFIX = "openrouter/"
+_OPENROUTER_OPENAI_PREFIX = f"{_OPENROUTER_MODEL_PREFIX}openai/"
 
 # OpenRouter catalog id -> ordered hard-enforcement hosts (tool_choice +
 # json_schema under adversarial prompts). allow_fallbacks is always false.
@@ -187,6 +188,33 @@ def _request_openrouter_usage_accounting(kw: dict, model: str) -> None:
     usage = dict(extra_body.get("usage") or {})
     usage.setdefault("include", True)
     extra_body["usage"] = usage
+    kw["extra_body"] = extra_body
+
+
+def _apply_openrouter_cache_affinity(kw: dict, model: str, key: str) -> None:
+    """Keep requests sharing *key* on the OpenRouter provider holding their cache.
+
+    OpenRouter otherwise derives stickiness by hashing a conversation's opening
+    messages, which drifts whenever those change between calls, and it offers
+    ``session_id`` as the explicit routing key. OpenAI models also get the key
+    as ``prompt_cache_key``, which OpenAI combines with the prefix hash to pick
+    the machine inside its own fleet, a level below OpenRouter's choice of
+    provider.
+
+    A model pinned to a fixed host list keeps its pin and gets no key: the pin
+    exists so tool and schema enforcement hold, OpenRouter does not apply
+    sticky routing on top of a caller-chosen provider list, and the pinned
+    hosts are not OpenAI's. Keys the caller already set win.
+    """
+    if not model.startswith(_OPENROUTER_MODEL_PREFIX):
+        return
+    extra_body = dict(kw.get("extra_body") or {})
+    hosts = extra_body.get("provider") or {}
+    if hosts.get("only") or hosts.get("order"):
+        return
+    extra_body.setdefault("session_id", key)
+    if model.startswith(_OPENROUTER_OPENAI_PREFIX):
+        extra_body.setdefault("prompt_cache_key", key)
     kw["extra_body"] = extra_body
 
 
@@ -449,6 +477,7 @@ def _prepare_provider_request_kw(
     kw: dict,
     provider: str,
     stream: bool,
+    cache_affinity: str | None = None,
 ) -> str:
     """Apply provider transport adaptations and return the accounting model."""
     model = str(kw.get("model") or "")
@@ -473,6 +502,8 @@ def _prepare_provider_request_kw(
 
     _apply_openrouter_hard_provider_pin(kw, model)
     _request_openrouter_usage_accounting(kw, model)
+    if cache_affinity is not None:
+        _apply_openrouter_cache_affinity(kw, model, cache_affinity)
     # After the gateway branch above, so a call sent to the gateway keeps the
     # gateway's own credential rather than the provider one.
     _pass_provider_credential_explicitly(kw, model, provider)
@@ -540,6 +571,7 @@ def _prepare_request_models(
     provider: str,
     transport_model: str,
     stream: bool,
+    cache_affinity: str | None,
 ) -> tuple[str, dict]:
     public_model = str(kw.get("model") or "")
     accounting_model = _canonical_model_for_accounting(public_model)
@@ -548,6 +580,7 @@ def _prepare_request_models(
         kw=request_kw,
         provider=provider,
         stream=stream,
+        cache_affinity=cache_affinity,
     )
     return accounting_model, request_kw
 
@@ -620,6 +653,7 @@ class _UniClient(_Client, abc.ABC):
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
         prompt_caching: Optional[PromptCacheParam] = UNSET,  # type: ignore[assignment]
+        cache_affinity: Optional[str] = None,
         origin: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
@@ -740,6 +774,14 @@ class _UniClient(_Client, abc.ABC):
             cache, else an exception will be raised. This argument only has any effect
             when stream=False.
 
+            cache_affinity: An optional key, stable across one conversation or
+            agent run, that asks the transport to send every request carrying it
+            to the provider replica holding that conversation's prompt cache. It
+            is a routing hint and leaves the response cache key unchanged, except
+            that Claude behind OpenRouter also gets the ``prompt_caching``
+            breakpoints only once a key is set. None (the default) sends no hint
+            and changes nothing.
+
             origin: An optional string tag for identifying the origin of LLM
             calls in log files, OTel spans, and events. Useful when multiple
             agents or subsystems share the same process and you need to tell
@@ -785,6 +827,7 @@ class _UniClient(_Client, abc.ABC):
             cache=cache,
             cache_backend=cache_backend,
             prompt_caching=None if prompt_caching is UNSET else prompt_caching,
+            cache_affinity=cache_affinity,
             origin=origin,
             # passthrough arguments
             extra_headers=extra_headers,
@@ -1327,12 +1370,18 @@ class Unify(_UniClient):
             stream_options=stream_options,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider, prompt_caching)
+        apply_provider_preprocessing(
+            kw,
+            self._provider,
+            prompt_caching,
+            cache_affinity=self._cache_affinity,
+        )
         accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
             provider=self._provider,
             transport_model=self._transport_model_alias,
             stream=True,
+            cache_affinity=self._cache_affinity,
         )
 
         # Track usage from the stream for cost deduction
@@ -1417,6 +1466,7 @@ class Unify(_UniClient):
             provider=self._provider,
             transport_model=transport_model,
             stream=False,
+            cache_affinity=self._cache_affinity,
         )
         try:
             with llm_span(
@@ -1513,12 +1563,18 @@ class Unify(_UniClient):
         original_request_messages = copy.deepcopy(kw.get("messages"))
 
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider, prompt_caching)
+        apply_provider_preprocessing(
+            kw,
+            self._provider,
+            prompt_caching,
+            cache_affinity=self._cache_affinity,
+        )
         accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
             provider=self._provider,
             transport_model=self._transport_model_alias,
             stream=False,
+            cache_affinity=self._cache_affinity,
         )
 
         # Write request to log file (before LLM call) so we don't lose it if call hangs
@@ -1827,12 +1883,18 @@ class AsyncUnify(_UniClient):
             stream_options=stream_options,
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider, prompt_caching)
+        apply_provider_preprocessing(
+            kw,
+            self._provider,
+            prompt_caching,
+            cache_affinity=self._cache_affinity,
+        )
         accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
             provider=self._provider,
             transport_model=self._transport_model_alias,
             stream=True,
+            cache_affinity=self._cache_affinity,
         )
 
         # Write request to log file (before LLM call) so we don't lose it if call hangs
@@ -1955,6 +2017,7 @@ class AsyncUnify(_UniClient):
             provider=self._provider,
             transport_model=transport_model,
             stream=False,
+            cache_affinity=self._cache_affinity,
         )
         try:
             with llm_span(
@@ -2053,12 +2116,18 @@ class AsyncUnify(_UniClient):
         original_request_messages = copy.deepcopy(kw.get("messages"))
 
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
-        apply_provider_preprocessing(kw, self._provider, prompt_caching)
+        apply_provider_preprocessing(
+            kw,
+            self._provider,
+            prompt_caching,
+            cache_affinity=self._cache_affinity,
+        )
         accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
             provider=self._provider,
             transport_model=self._transport_model_alias,
             stream=False,
+            cache_affinity=self._cache_affinity,
         )
 
         # Write request to log file (before LLM call) so we don't lose it if call hangs

@@ -439,6 +439,144 @@ class TestTieredLongContextPricing:
         ), f"Expected ${expected:.4f} (tiered) but got ${cost:.4f}"
 
 
+class TestCacheWritePricing:
+    """Cache-write tokens are billed at the model's cache-write rate.
+
+    Writing a prefix to cache costs more than reading it as plain input
+    (1.25x input for Anthropic's 5-minute cache and for GPT-5.6), and the
+    written tokens are already counted in ``prompt_tokens``. Each case prices
+    a 1,000-token prompt: 600 read from cache, 300 written to it, 100 plain.
+    """
+
+    MODEL = "fake-caching-model"
+    RATES = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": 1e-7,
+        "cache_creation_input_token_cost": 1.25e-6,
+    }
+    PRICED = 100 * 1e-6 + 600 * 1e-7 + 300 * 1.25e-6 + 10 * 2e-6
+    # The same prompt with the 300 written tokens billed as plain input.
+    UNPRICED = 400 * 1e-6 + 600 * 1e-7 + 10 * 2e-6
+
+    OPENROUTER_USAGE = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 10,
+        "prompt_tokens_details": {"cached_tokens": 600, "cache_write_tokens": 300},
+    }
+
+    @pytest.fixture
+    def rates(self):
+        rates = dict(self.RATES)
+        with patch("unillm.costs._get_model_info", return_value=rates):
+            yield rates
+
+    def test_openrouter_cache_write_tokens(self, rates):
+        usage = self.OPENROUTER_USAGE
+        assert compute_full_cost_from_usage(self.MODEL, usage) == pytest.approx(
+            self.PRICED,
+            rel=1e-12,
+        )
+        assert compute_cost_from_response(
+            self.MODEL,
+            {"usage": usage},
+        ) == pytest.approx(self.PRICED, rel=1e-12)
+
+    def test_anthropic_usage_as_litellm_maps_it(self, rates):
+        """LiteLLM folds Anthropic's cache counts into ``prompt_tokens``."""
+        usage = litellm.Usage(
+            prompt_tokens=1000,
+            completion_tokens=10,
+            cache_read_input_tokens=600,
+            cache_creation_input_tokens=300,
+        )
+        assert compute_full_cost_from_usage(self.MODEL, usage) == pytest.approx(
+            self.PRICED,
+            rel=1e-12,
+        )
+
+    def test_anthropic_cache_creation_tokens_detail_alone(self, rates):
+        usage = {
+            "prompt_tokens": 1000,
+            "completion_tokens": 10,
+            "prompt_tokens_details": {
+                "cached_tokens": 600,
+                "cache_creation_tokens": 300,
+            },
+        }
+        assert compute_full_cost_from_usage(self.MODEL, usage) == pytest.approx(
+            self.PRICED,
+            rel=1e-12,
+        )
+
+    def test_compute_cost_takes_the_counts_directly(self, rates):
+        cost = compute_cost(
+            self.MODEL,
+            prompt_tokens=1000,
+            completion_tokens=10,
+            cached_tokens=600,
+            cache_write_tokens=300,
+        )
+        assert cost == pytest.approx(self.PRICED, rel=1e-12)
+
+    def test_without_a_write_field_the_cost_is_unchanged(self, rates):
+        usage = {
+            "prompt_tokens": 1000,
+            "completion_tokens": 10,
+            "prompt_tokens_details": {"cached_tokens": 600},
+        }
+        assert compute_full_cost_from_usage(self.MODEL, usage) == (
+            400 * 1e-6 + 600 * 1e-7 + 10 * 2e-6
+        )
+
+    @pytest.mark.parametrize("unpriced", [None, 0.0])
+    def test_writes_stay_plain_input_when_the_model_prices_none(
+        self,
+        rates,
+        unpriced,
+    ):
+        """No rate, or the catalog's 0 for "no separate price", is not free."""
+        rates["cache_creation_input_token_cost"] = unpriced
+        assert compute_full_cost_from_usage(
+            self.MODEL,
+            self.OPENROUTER_USAGE,
+        ) == pytest.approx(self.UNPRICED, rel=1e-12)
+
+    def test_openrouter_charged_cost_still_wins(self, rates):
+        usage = {**self.OPENROUTER_USAGE, "cost": 0.000777}
+        assert compute_full_cost_from_usage("openrouter/fake/model", usage) == 0.000777
+        assert (
+            compute_cost_from_response("openrouter/fake/model", {"usage": usage})
+            == 0.000777
+        )
+
+    def test_long_context_write_rate(self, rates):
+        rates["input_cost_per_token_above_200k_tokens"] = 2e-6
+        rates["cache_creation_input_token_cost_above_200k_tokens"] = 2.5e-6
+        cost = compute_cost(
+            self.MODEL,
+            prompt_tokens=300_000,
+            completion_tokens=0,
+            cache_write_tokens=100_000,
+        )
+        assert cost == pytest.approx(
+            200_000 * 1e-6 + 100_000 * 2.5e-6,
+            rel=1e-12,
+        )
+
+    def test_priced_from_the_bundled_map(self):
+        """Claude Opus 4.8 writes at $6.25/M against $5/M plain input."""
+        usage = litellm.Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            cache_creation_input_tokens=1000,
+        )
+        assert compute_full_cost_from_usage(
+            "claude-4.8-opus@anthropic",
+            usage,
+        ) == pytest.approx(1000 * 6.25e-6, rel=1e-12)
+
+
 class TestComputeFullCostFromUsage:
     """Tests for compute_full_cost_from_usage with audio tokens."""
 

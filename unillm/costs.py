@@ -162,20 +162,73 @@ def _get_cache_read_rate(
     return 0, None
 
 
+def _get_cache_write_rate(
+    model_info: dict,
+    prompt_tokens: int,
+) -> float | None:
+    """Return the cache-write prompt token rate, or None when none is priced.
+
+    A zero rate counts as unpriced: the OpenRouter catalog writes 0 for a model
+    with no separate write price (DeepSeek, for one), whose writes are billed
+    as ordinary input.
+    """
+
+    if not model_info.get("cache_creation_input_token_cost"):
+        return None
+    rate, _ = _get_tiered_rate(
+        model_info,
+        "cache_creation_input_token_cost",
+        prompt_tokens,
+    )
+    return rate
+
+
+def _cache_token_counts(usage: Union[dict, object]) -> tuple[int, int]:
+    """Return the prompt tokens a provider reports as read from and written to cache.
+
+    Both counts are already inside ``prompt_tokens``. Reads arrive as
+    ``prompt_tokens_details.cached_tokens`` (OpenAI, OpenRouter, and Anthropic
+    as LiteLLM maps it) or Anthropic's ``cache_read_input_tokens``. Writes
+    arrive as ``prompt_tokens_details.cache_write_tokens`` (OpenRouter),
+    ``prompt_tokens_details.cache_creation_tokens`` or
+    ``cache_creation_input_tokens`` (Anthropic, as LiteLLM maps it).
+    """
+    read = _get_nested_attr(
+        usage,
+        "prompt_tokens_details",
+        "cached_tokens",
+    ) or _get_nested_attr(usage, "cache_read_input_tokens")
+    write = (
+        _get_nested_attr(usage, "prompt_tokens_details", "cache_write_tokens")
+        or _get_nested_attr(usage, "prompt_tokens_details", "cache_creation_tokens")
+        or _get_nested_attr(usage, "cache_creation_input_tokens")
+    )
+    return read, write
+
+
 def _compute_text_token_cost(
     model_info: dict,
     prompt_tokens: int,
     completion_tokens: int,
     cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> float:
     """Compute text token cost with tiered long-context pricing.
 
     Some providers charge higher rates when the prompt exceeds a threshold
     (e.g. Anthropic at 200k tokens).  This function discovers tier
     boundaries from the model_info keys automatically.
+
+    Cache reads and writes are both part of ``prompt_tokens``. Reads are
+    billed at the cache-read rate. Writes are billed at the cache-write rate
+    when the model has one, and otherwise stay in the ordinary input.
     """
     cached_tokens = max(0, min(cached_tokens, prompt_tokens))
-    billable_input_tokens = prompt_tokens - cached_tokens
+    cache_write_rate = _get_cache_write_rate(model_info, prompt_tokens)
+    if cache_write_rate is None:
+        cache_write_tokens, cache_write_rate = 0, 0
+    cache_write_tokens = max(0, min(cache_write_tokens, prompt_tokens - cached_tokens))
+    billable_input_tokens = prompt_tokens - cached_tokens - cache_write_tokens
 
     input_rate = model_info.get("input_cost_per_token", 0)
     input_rate_tier, input_threshold = _get_tiered_rate(
@@ -200,10 +253,11 @@ def _compute_text_token_cost(
         input_cost = billable_input_tokens * input_rate
 
     cache_read_cost = cached_tokens * cache_read_rate
+    cache_write_cost = cache_write_tokens * cache_write_rate
 
     output_cost = completion_tokens * output_rate_tier
 
-    return input_cost + cache_read_cost + output_cost
+    return input_cost + cache_read_cost + cache_write_cost + output_cost
 
 
 def compute_cost(
@@ -211,14 +265,18 @@ def compute_cost(
     prompt_tokens: int,
     completion_tokens: int,
     cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> float:
     """
     Compute the cost of an LLM request using LiteLLM's pricing data.
 
     Args:
         model: The model identifier (e.g., 'gpt-4o', 'claude-3-5-sonnet-20241022').
-        prompt_tokens: Number of input/prompt tokens.
+        prompt_tokens: Number of input/prompt tokens, cache reads and writes
+            included.
         completion_tokens: Number of output/completion tokens.
+        cached_tokens: Prompt tokens read from the provider's cache.
+        cache_write_tokens: Prompt tokens written to the provider's cache.
 
     Returns:
         The cost in USD.
@@ -232,6 +290,7 @@ def compute_cost(
         prompt_tokens,
         completion_tokens,
         cached_tokens=cached_tokens,
+        cache_write_tokens=cache_write_tokens,
     )
 
 
@@ -280,11 +339,7 @@ def compute_cost_from_response(
     else:
         return None
 
-    cached_tokens = _get_nested_attr(
-        usage,
-        "prompt_tokens_details",
-        "cached_tokens",
-    ) or _get_nested_attr(usage, "cache_read_input_tokens")
+    cached_tokens, cache_write_tokens = _cache_token_counts(usage)
 
     if prompt_tokens == 0 and completion_tokens == 0:
         # Still allow OpenRouter zero-token responses with an explicit cost.
@@ -300,6 +355,7 @@ def compute_cost_from_response(
             prompt_tokens,
             completion_tokens,
             cached_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
         )
     except ValueError:
         # The generation consumed tokens and the provider charged for it, so an
@@ -445,15 +501,12 @@ def compute_full_cost_from_usage(model: str, usage: Union[dict, object]) -> floa
         prompt_tokens = _get_nested_attr(usage, "input_tokens")
         completion_tokens = _get_nested_attr(usage, "output_tokens")
 
-    cached_tokens = _get_nested_attr(
-        usage,
-        "prompt_tokens_details",
-        "cached_tokens",
-    ) or _get_nested_attr(usage, "cache_read_input_tokens")
+    cached_tokens, cache_write_tokens = _cache_token_counts(usage)
 
     return _compute_text_token_cost(
         model_info,
         prompt_tokens,
         completion_tokens,
         cached_tokens=cached_tokens,
+        cache_write_tokens=cache_write_tokens,
     )

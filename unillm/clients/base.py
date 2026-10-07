@@ -55,6 +55,7 @@ class _Client(ABC):
         cache: Union[bool, str],
         cache_backend: str,
         prompt_caching: PromptCacheParam,
+        cache_affinity: Optional[str],
         origin: Optional[str],
         # passthrough arguments
         extra_headers: Optional[Headers],
@@ -90,6 +91,7 @@ class _Client(ABC):
         self._cache = None
         self._cache_backend = None
         self._prompt_caching = None
+        self._cache_affinity = None
         self._origin = None
         self._on_log_file = None
         self._on_log_file_pending = None
@@ -131,6 +133,7 @@ class _Client(ABC):
         self.set_cache(cache)
         self.set_cache_backend(cache_backend)
         self.set_prompt_caching(prompt_caching)
+        self.set_cache_affinity(cache_affinity)
         self.set_origin(origin)
         # passthrough arguments
         self.set_extra_headers(extra_headers)
@@ -414,6 +417,16 @@ class _Client(ABC):
             List of cache breakpoint locations, or None if not set.
         """
         return self._prompt_caching
+
+    @property
+    def cache_affinity(self) -> Optional[str]:
+        """
+        Get the key that keeps related requests on the same provider cache.
+
+        Returns:
+            The cache affinity key, or None if not set.
+        """
+        return self._cache_affinity
 
     @property
     def origin(self) -> Optional[str]:
@@ -827,6 +840,30 @@ class _Client(ABC):
         self._prompt_caching = value
         return self
 
+    def set_cache_affinity(self, value: Optional[str]) -> Self:
+        """
+        Set the key that keeps related requests on the same provider cache.
+
+        Providers cache byte-identical prompt prefixes on their own, but a
+        prefix is only reused when the next request reaches the replica that
+        holds it. Requests sharing this key are asked to go to the same place,
+        through whatever mechanism the transport offers (OpenRouter's
+        ``session_id``, for one). A transport with no such mechanism ignores
+        it. The key is otherwise a routing hint, with one exception: Claude
+        behind OpenRouter receives the ``prompt_caching`` breakpoints only
+        when a key is set, so a client without one sends exactly what it
+        always did.
+
+        Args:
+            value: A stable, short identifier for one conversation or agent
+                   run (a UUID or a hash), or None to send no hint.
+
+        Returns:
+            This client, useful for chaining inplace calls.
+        """
+        self._cache_affinity = value
+        return self
+
     def set_origin(self, value: Optional[str]) -> Self:
         """
         Set the origin tag for identifying LLM call sites in logs and spans.
@@ -1158,6 +1195,7 @@ class _Client(ABC):
                         return_full_completion=self._return_full_completion,
                         cache=self._cache,
                         prompt_caching=self._prompt_caching,
+                        cache_affinity=self._cache_affinity,
                         # passthrough arguments
                         extra_headers=self._extra_headers,
                     ),
@@ -1199,6 +1237,7 @@ class _Client(ABC):
                     return_full_completion=self._return_full_completion,
                     cache=self._cache,
                     prompt_caching=self._prompt_caching,
+                    cache_affinity=self._cache_affinity,
                     # passthrough arguments
                     extra_headers=self._extra_headers,
                 ),

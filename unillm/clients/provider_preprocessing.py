@@ -529,11 +529,16 @@ def _apply_anthropic_caching(
     Apply Anthropic prompt caching breakpoints to tools, system, and/or user messages.
 
     Mutates kw in-place to add cache_control markers at specified locations.
+    Messages are already this request's own copy; the tool list is still the
+    caller's, so the marked tool is replaced rather than written into.
     """
     if "tools" in prompt_caching:
         tools = kw.get("tools")
-        if tools and len(tools) > 0:
-            tools[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+        if tools:
+            kw["tools"] = [
+                *tools[:-1],
+                {**tools[-1], "cache_control": CACHE_CONTROL_EPHEMERAL},
+            ]
 
     messages = kw.get("messages")
     if not messages:
@@ -572,6 +577,23 @@ def _apply_anthropic_caching(
                 else:
                     msg["cache_control"] = CACHE_CONTROL_EPHEMERAL
                 break
+
+
+def _is_anthropic_model_on_openrouter(model: Optional[str]) -> bool:
+    """Whether *model* is a Claude model reached through OpenRouter.
+
+    Claude caches only up to an explicit breakpoint, whatever the transport,
+    and OpenRouter passes ``cache_control`` through to it; the Bedrock,
+    Vertex and Replicate Claude endpoints ride OpenRouter too. Such a model
+    takes the same breakpoints as direct Anthropic but none of the direct
+    API's message rewriting, which OpenRouter does itself.
+
+    The breakpoints are placed only for a client with a ``cache_affinity``
+    key. Callers pass ``prompt_caching`` by default, so honouring it alone
+    would change every such Claude request, and its response-cache key, for
+    callers that never opted into cache discipline.
+    """
+    return bool(model) and model.startswith("openrouter/anthropic/")
 
 
 def _strip_internal_annotations(kw: Dict[str, Any]) -> None:
@@ -690,6 +712,7 @@ def apply_provider_preprocessing(
     kw: Dict[str, Any],
     provider: Optional[str],
     prompt_caching: Optional[PromptCacheParam] = None,
+    cache_affinity: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Apply provider-specific preprocessing to messages in kw dict (mutates kw)."""
     ensure_response_format_spec(kw)
@@ -719,6 +742,12 @@ def apply_provider_preprocessing(
         return kw
 
     if provider != "anthropic":
+        if (
+            prompt_caching
+            and cache_affinity is not None
+            and _is_anthropic_model_on_openrouter(kw.get("model"))
+        ):
+            _apply_anthropic_caching(kw, prompt_caching)
         _strip_internal_annotations(kw)
         return kw
 
