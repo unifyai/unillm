@@ -19,7 +19,7 @@ classifiers = [
 dependencies = [
     "google-cloud-secret-manager>=2.20.0",
     "jsonschema>=4.25.0",
-    "litellm==1.92.0",
+    "litellm==1.92.2",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
 ]
