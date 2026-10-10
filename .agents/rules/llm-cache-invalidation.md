@@ -79,6 +79,10 @@ Requires the `unillm-llm-cache-refresh` environment secrets. Tests may still fai
 
 A read-only run's misses are its `CacheMissError` messages (`Failed to get cache for function ... with kwargs ...`) in the test log. `.cache_write.ndjson` is not a list of misses: the `local_separate` backend promotes every hit into it, so it holds everything the run served. To find the part of a missed request that drifted, parse the nearest stored key with `parse_raw_key`, pass both requests' kwargs through `canonical_kw` (both in `unillm/caching/canonical.py`) and diff the results.
 
+## When the LLM Cache Check fails but pytest passes
+
+The `LLM Cache Check` job counts the `.cache_miss.txt` files in the pytest job's `logs-<run id>` artifact, under `unillm/`. In read-only CI a real miss raises `CacheMissError`, is logged as `.cache_error.txt` and fails pytest, so a `.cache_miss.txt` beside a green pytest is a call answered without the cache. Either a test passes `cache=True`, which overrides `UNILLM_CACHE` and sends a miss to the paid provider, or a test patches `_get_cache` and fakes the provider. Read the miss files: a faked one carries the fake's reply (`gen-fake`, `msg_fake`). A faked call must write no log file. Send it through `captured_requests()` in `tests/test_clients/fake_transport.py`, which writes none, or patch `unillm.clients.uni_llm.write_request_pending` to return `None`, as the tests that mock `litellm.completion` do. The two misses that failed the check from 7 to 10 October 2026 came from a test that patched `_get_cache` inside the fake transport before it wrote no logs.
+
 ## Verification
 
 - Published artifact should contain hundreds of entries (check workflow logs: `Consolidated entry count: N` in the refresh run, or `LLM cache ready: N entries` in the `tests.yml` hydrate step).
