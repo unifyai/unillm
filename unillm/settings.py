@@ -17,7 +17,6 @@ from unillm.types.cache import CACHE_KEYINGS, CACHE_MODES, CacheParam
 PROVIDER_KEYS = (
     "OPENROUTER_API_KEY",
     "OPENROUTER_MANAGEMENT_API_KEY",
-    "TOGETHER_API_KEY",
     "ANTHROPIC_API_KEY",
 )
 SERVICE_ACCOUNT_KEY = Path("~/.config/gcloud/automation.json").expanduser()
@@ -101,11 +100,6 @@ class Settings(BaseSettings):
     # account-level BYOK provider credentials via POST /api/v1/byok. Regular
     # completion keys cannot register BYOK.
     OPENROUTER_MANAGEMENT_API_KEY: SecretStr = SecretStr("")
-
-    # Together AI — used as OpenRouter BYOK for Together-pinned open-weight
-    # models (e.g. MiniMax-M3). Register on the OpenRouter workspace with
-    # scripts/register_openrouter_together_byok.py or the Integrations UI.
-    TOGETHER_API_KEY: SecretStr = SecretStr("")
 
     # Anthropic
     ANTHROPIC_API_KEY: SecretStr = SecretStr("")
