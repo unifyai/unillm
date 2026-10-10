@@ -9,6 +9,11 @@ with a minimal, well-formed completion in the provider's own shape.
 Provider keys are swapped for a placeholder for the duration, and credential
 headers are dropped from what is recorded, so neither a real key nor the
 placeholder ends up in an assertion message or a recording.
+
+No LLM I/O log file is written for a faked call. CI's cache check counts the
+``.cache_miss.txt`` files in the log directory as uncached provider calls,
+and a test that fakes the transport with caching on would otherwise add one
+for a call no provider ever answered.
 """
 
 import contextlib
@@ -139,6 +144,7 @@ def captured_requests() -> Iterator[list[dict[str, Any]]]:
         patch.object(SETTINGS, "OPENROUTER_API_KEY", placeholder),
         patch.object(SETTINGS, "ANTHROPIC_API_KEY", placeholder),
         patch.object(HTTPHandler, "post", post),
+        patch("unillm.clients.uni_llm.write_request_pending", return_value=None),
     ):
         yield sent
 
