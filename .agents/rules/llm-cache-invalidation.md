@@ -73,7 +73,16 @@ gh workflow run llm-cache-refresh.yml --repo unifyai/unillm --ref main \
   -f test_path=tests/test_clients -f confirm_llm_spend=LLM_SPEND_OK
 ```
 
-Requires the `unillm-llm-cache-refresh` environment secrets. Tests may still fail assertions while writing cache; the workflow uses `set +e` so misses are captured. Prefer Path A when refresh runs consistently miss OpenRouter-routed entries.
+The refresh reads `ANTHROPIC_API_KEY` and `OPENROUTER_API_KEY` from the `unillm-llm-cache-refresh` environment, which holds neither since its dead copies were deleted on 10 October 2026. Set both from Secret Manager before dispatching, as the team service account:
+
+```bash
+for k in ANTHROPIC_API_KEY OPENROUTER_API_KEY; do
+  CLOUDSDK_ACTIVE_CONFIG_NAME=automation gcloud secrets versions access latest --secret "$k" --project saas-368716 \
+    | gh secret set "$k" --repo unifyai/unillm --env unillm-llm-cache-refresh
+done
+```
+
+Tests may still fail assertions while writing cache; the workflow uses `set +e` so misses are captured. Prefer Path A when refresh runs consistently miss OpenRouter-routed entries.
 
 ## Finding why a request missed
 
