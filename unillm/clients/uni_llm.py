@@ -5,6 +5,8 @@ import copy
 import inspect
 import logging
 import os
+import re
+from collections.abc import Mapping
 
 from typing import (
     Any,
@@ -527,11 +529,62 @@ def _prepare_provider_request_kw(
     return _canonical_model_for_accounting(str(kw.get("model") or model))
 
 
+_REDACTED = "[REDACTED]"
+
+# Request fields and header names that carry a credential. Names are compared
+# lower-cased with "-" folded to "_", so ``x-api-key`` matches ``x_api_key``,
+# and any ``*_api_key`` field counts too.
+_CREDENTIAL_FIELDS = frozenset(
+    {
+        "api_key",
+        "authorization",
+        "proxy_authorization",
+        "cookie",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "vertex_credentials",
+    },
+)
+_URL_FIELDS = frozenset({"api_base", "base_url"})
+_URL_USERINFO = re.compile(r"(?<=://)[^/?#@\s]+@")
+# Provider key formats wherever they appear: OpenAI, OpenRouter (``sk-or-``)
+# and Anthropic (``sk-ant-``) keys, and Google ``AIza`` keys. The ``sk-`` form
+# needs a run of 20 alphanumerics, which hyphenated words never have.
+_KEY_SHAPED = re.compile(
+    r"\bsk-[A-Za-z0-9_-]*[A-Za-z0-9]{20}[A-Za-z0-9_-]*|\bAIza[0-9A-Za-z_-]{30,}",
+)
+
+
+def _without_credentials(value: Any, field: str = "") -> Any:
+    """Return a copy of *value* with every credential replaced by ``[REDACTED]``.
+
+    Containers are rebuilt rather than modified, so nested structures shared
+    with the request that is actually sent (``extra_headers``, say) keep their
+    credentials.
+    """
+    folded = field.lower().replace("-", "_")
+    if value and (folded in _CREDENTIAL_FIELDS or folded.endswith("_api_key")):
+        return _REDACTED
+    if isinstance(value, Mapping):
+        return {
+            key: _without_credentials(item, str(key)) for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_without_credentials(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    if folded in _URL_FIELDS:
+        value = _URL_USERINFO.sub(f"{_REDACTED}@", value)
+    return _KEY_SHAPED.sub(_REDACTED, value)
+
+
 def _request_kw_for_event(kw: dict, accounting_model: str) -> dict:
     """Return JSON-serializable event metadata with the accounting model primary.
 
     ``LLMEvent.request`` is persisted by downstream JSON sinks (file logs, a
-    host's EventBus), so it must be JSON-serializable end-to-end. A Pydantic
+    host's EventBus), so it must be JSON-serializable end-to-end and must not
+    carry the credentials the transport request holds (``api_key``, auth
+    headers, userinfo in ``api_base``, key-shaped values). A Pydantic
     ``response_format`` class is replaced by its JSON schema, which keeps the
     requested output contract visible in analytics without leaking the class
     object (``json.dumps`` cannot encode a ``ModelMetaclass``).
@@ -550,7 +603,7 @@ def _request_kw_for_event(kw: dict, accounting_model: str) -> dict:
     if transport_model != accounting_model:
         event_kw["model"] = accounting_model
         event_kw["transport_model"] = transport_model
-    return event_kw
+    return _without_credentials(event_kw)
 
 
 def _request_kw_for_transport(kw: dict, transport_model: str) -> dict:
