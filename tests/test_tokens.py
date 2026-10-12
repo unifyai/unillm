@@ -56,6 +56,28 @@ class TestGetMaxInputTokens:
         monkeypatch.setattr(litellm, "get_model_info", fake_get_model_info)
         assert get_max_input_tokens(endpoint) == 1_050_000
 
+    @pytest.mark.parametrize("model", ["openai/gpt-6-sol", "openai/gpt-6-luna"])
+    def test_registered_window_without_litellm_or_catalog(self, model, monkeypatch):
+        """The window holds when neither LiteLLM nor the catalog can describe the id."""
+        import litellm
+
+        import unillm.openrouter_catalog as catalog
+
+        real_get_model_info = litellm.get_model_info
+
+        def fake_get_model_info(name, *args, **kwargs):
+            if name.endswith(model):
+                raise Exception("unknown to the pinned litellm")
+            return real_get_model_info(name, *args, **kwargs)
+
+        monkeypatch.setattr(litellm, "get_model_info", fake_get_model_info)
+        monkeypatch.setattr(
+            catalog,
+            "catalog_pricing_as_litellm_info",
+            lambda _id: None,
+        )
+        assert get_max_input_tokens(f"{model}@openrouter") == 1_050_000
+
 
 class TestCountTokens:
     """Tests for the count_tokens function."""

@@ -6,7 +6,7 @@ newly released model needs no entry here. Add one only to correct the catalog
 or to cover a model the catalog omits.
 """
 
-from .utils import register_openrouter_model_info
+from .utils import register_model_info, register_openrouter_model_info
 
 
 def _pricing(
@@ -214,5 +214,23 @@ register_openrouter_model_info(
             cache_read=0.275 / 1_000_000,
             supports_reasoning=True,
         ),
+    },
+)
+
+
+# Context windows only, for models whose pricing and capability flags must keep
+# coming from the catalog. ``get_max_input_tokens`` reads these through
+# ``get_model_info``; costs and request preparation read LiteLLM's registry,
+# which an entry here leaves untouched. (A ``register_openrouter_model_info``
+# entry would also make the model known to LiteLLM, so the catalog would no
+# longer register its prices and reasoning support.) Without a window the
+# caller's compaction never triggers when the catalog is unreachable.
+# Values: ``context_length`` in OpenRouter's /api/v1/models, used as is, as
+# for the entries above.
+register_model_info(
+    "openrouter",
+    {
+        "openai/gpt-6-sol": {"max_input_tokens": 1_050_000},
+        "openai/gpt-6-luna": {"max_input_tokens": 1_050_000},
     },
 )
