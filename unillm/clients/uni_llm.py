@@ -26,6 +26,7 @@ import litellm
 litellm.suppress_debug_info = True
 
 # local
+from litellm.types.utils import Message as LiteLLMMessage
 from openai._types import Headers
 from ..costs import compute_cost_from_response
 
@@ -352,30 +353,159 @@ def _canonical_model_for_accounting(model: str | None) -> str:
     return model
 
 
+# Message keys LiteLLM models itself. A whole reply's other keys are filed
+# under the message's ``provider_specific_fields``; a stream's deltas carry
+# them as plain attributes, which ``stream_chunk_builder`` ignores.
+_MESSAGE_FIELDS = frozenset(LiteLLMMessage.model_fields)
+
+
+def _joined_reasoning_details(pieces: list) -> list:
+    """Join a stream's ``reasoning_details`` pieces into a whole reply's items.
+
+    Pieces of one item share an ``index``: their ``text`` and ``summary`` are
+    concatenated in arrival order and every other key keeps its last value,
+    so an encrypted item, which arrives whole, is kept as it came. Items stay
+    in the order they first appeared.
+    """
+    items: list[dict] = []
+    by_index: dict[Any, dict] = {}
+    for piece in pieces:
+        index = piece.get("index")
+        item = by_index.get(index) if index is not None else None
+        if item is None:
+            item = dict(piece)
+            items.append(item)
+            if index is not None:
+                by_index[index] = item
+            continue
+        for key, value in piece.items():
+            if key in ("text", "summary") and isinstance(value, str):
+                item[key] = (item.get(key) or "") + value
+            elif value is not None:
+                item[key] = value
+    return items
+
+
+def _streamed_message_fields(chunks: list) -> dict:
+    """The message keys outside LiteLLM's model, joined from a stream's deltas.
+
+    OpenRouter streams ``reasoning`` (and ``refusal``) as text in pieces and
+    ``reasoning_details`` as item pieces (see ``_joined_reasoning_details``).
+    """
+    fields: dict = {}
+    details: list = []
+    for chunk in chunks:
+        if not chunk.choices:
+            continue
+        for key, value in chunk.choices[0].delta.model_dump().items():
+            if key in _MESSAGE_FIELDS:
+                continue
+            if key == "reasoning_details":
+                details.extend(value or ())
+            elif isinstance(value, str) and isinstance(fields.get(key), str):
+                fields[key] += value
+            elif value is not None or key not in fields:
+                fields[key] = value
+    if details:
+        fields["reasoning_details"] = _joined_reasoning_details(details)
+    return fields
+
+
+def _completion_from_stream(chunks: list) -> Any:
+    """Assemble a stream read to its end into the reply an unstreamed call returns.
+
+    *chunks* is the stream wrapper's own record (``CustomStreamWrapper.chunks``)
+    rather than what iteration yielded: it keeps the provider's usage chunk,
+    which iteration replaces with usage rebuilt from token counts.
+
+    ``stream_chunk_builder`` assembles content, tool calls and
+    ``reasoning_content``. What it drops is put back: the usage the provider
+    last reported, parsed as an unstreamed reply's is (OpenRouter's charged
+    ``cost``, cache read and write tokens, reasoning tokens), and the message
+    keys outside LiteLLM's model, under ``provider_specific_fields`` as for
+    an unstreamed reply.
+    """
+    completion = litellm.stream_chunk_builder(chunks)
+    usage = next(
+        (
+            chunk.usage
+            for chunk in reversed(chunks)
+            if getattr(chunk, "usage", None) is not None
+        ),
+        None,
+    )
+    if usage is not None:
+        completion.usage = usage
+    fields = _streamed_message_fields(chunks)
+    if fields:
+        message = completion.choices[0].message
+        message.provider_specific_fields = {
+            **(message.provider_specific_fields or {}),
+            **fields,
+        }
+    return completion
+
+
 async def _acompletion_with_transient_retry(
     *,
     shared_session: Any,
     client: Any,
     **kw: Any,
 ) -> Any:
-    """Call ``litellm.acompletion`` with UniLLM's transient retry policy."""
+    """Call ``litellm.acompletion`` with UniLLM's transient retry policy.
+
+    A streamed call (``stream=True``) is read to its end inside the attempt
+    and returned as one completion, so a stream that fails part-way, from an
+    error the provider sends in it or a dropped connection, is retried as a
+    call that failed outright is. As for any failed attempt, what the
+    provider charged for it never reaches unillm; a proxy metering the
+    connection still records it.
+
+    LiteLLM raises a failure part-way through a stream as a
+    ``MidStreamFallbackError`` for its router's fallbacks, which unillm does
+    not use. The error it wraps is the one the same failure raises for an
+    unstreamed call, so that is what is raised.
+    """
     from ..helpers import retry_transient_llm_async
 
     async def _call() -> Any:
-        return await litellm.acompletion(
+        response = await litellm.acompletion(
             shared_session=shared_session,
             client=client,
             **kw,
         )
+        if not kw.get("stream"):
+            return response
+        try:
+            async for _ in response:
+                pass
+        except litellm.exceptions.MidStreamFallbackError as e:
+            raise e.original_exception from e
+        return _completion_from_stream(response.chunks)
 
     return await retry_transient_llm_async(_call)
 
 
 def _completion_with_transient_retry(**kw: Any) -> Any:
-    """Call ``litellm.completion`` with UniLLM's transient retry policy."""
+    """Call ``litellm.completion`` with UniLLM's transient retry policy.
+
+    A streamed call is read and assembled inside the attempt, as in
+    ``_acompletion_with_transient_retry``.
+    """
     from ..helpers import retry_transient_llm_sync
 
-    return retry_transient_llm_sync(lambda: litellm.completion(**kw))
+    def _call() -> Any:
+        response = litellm.completion(**kw)
+        if not kw.get("stream"):
+            return response
+        try:
+            for _ in response:
+                pass
+        except litellm.exceptions.MidStreamFallbackError as e:
+            raise e.original_exception from e
+        return _completion_from_stream(response.chunks)
+
+    return retry_transient_llm_sync(_call)
 
 
 def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
@@ -655,6 +785,7 @@ class _UniClient(_Client, abc.ABC):
         prompt_caching: Optional[PromptCacheParam] = UNSET,  # type: ignore[assignment]
         cache_affinity: Optional[str] = None,
         origin: Optional[str] = None,
+        stream_transport: bool = False,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         **kwargs,
@@ -787,6 +918,14 @@ class _UniClient(_Client, abc.ABC):
             agents or subsystems share the same process and you need to tell
             their logs apart (e.g. ``"AgentA"``, ``"planner"``).
 
+            stream_transport: If True, a request that returns one completion
+            (stream=False) is sent as a stream, read to its end and reassembled
+            into the completion the same request returns unstreamed. Bytes then
+            arrive while the model is still generating, so a long call does not
+            look idle to a proxy or host that judges a connection by its
+            traffic. Caching, retries, cost accounting and postprocessing are
+            unchanged. Defaults to False.
+
             extra_headers: Additional "passthrough" headers for the request which are
             provider-specific, and are not part of the OpenAI standard. They are handled
             by the provider-specific API.
@@ -829,6 +968,7 @@ class _UniClient(_Client, abc.ABC):
             prompt_caching=None if prompt_caching is UNSET else prompt_caching,
             cache_affinity=cache_affinity,
             origin=origin,
+            stream_transport=stream_transport,
             # passthrough arguments
             extra_headers=extra_headers,
             **kwargs,
@@ -893,6 +1033,21 @@ class _UniClient(_Client, abc.ABC):
             stream_options=stream_options,
         )
         return {k: v for k, v in kw.items() if v is not None}
+
+    def _single_completion_kw(self, transport_kw: dict) -> dict:
+        """The arguments a request for one completion is sent with.
+
+        With ``stream_transport`` it goes out as a stream that reports usage
+        at its end, and the retry wrapper reads it whole and reassembles the
+        completion, so nothing after the call can tell the difference.
+        """
+        if not self._stream_transport:
+            return transport_kw
+        return {
+            **transport_kw,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
 
     # Representation #
     # ---------------#
@@ -1476,7 +1631,7 @@ class Unify(_UniClient):
                 origin=origin,
             ):
                 completion = _completion_with_transient_retry(
-                    **transport_kw,
+                    **self._single_completion_kw(transport_kw),
                 )
                 _normalize_assistant_message_content(completion)
         finally:
@@ -1616,7 +1771,7 @@ class Unify(_UniClient):
                 if chat_completion is None:
                     try:
                         chat_completion = _completion_with_transient_retry(
-                            **transport_kw,
+                            **self._single_completion_kw(transport_kw),
                         )
                         _normalize_assistant_message_content(chat_completion)
                     except litellm.exceptions.APIError as e:
@@ -2029,7 +2184,7 @@ class AsyncUnify(_UniClient):
                 completion = await _acompletion_with_transient_retry(
                     shared_session=get_shared_session(),
                     client=self._get_async_http_client(),
-                    **transport_kw,
+                    **self._single_completion_kw(transport_kw),
                 )
                 _normalize_assistant_message_content(completion)
         finally:
@@ -2174,7 +2329,7 @@ class AsyncUnify(_UniClient):
                         _acompletion_with_transient_retry(
                             shared_session=get_shared_session(),
                             client=self._get_async_http_client(),
-                            **transport_kw,
+                            **self._single_completion_kw(transport_kw),
                         ),
                         name="llm_call",
                     )
