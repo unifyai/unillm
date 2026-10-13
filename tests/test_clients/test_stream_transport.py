@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import copy
 from json import loads
+from types import SimpleNamespace
 from typing import Callable, Iterator
 from unittest.mock import patch
 
@@ -35,8 +36,12 @@ from .openrouter_stream import (
     EVENTS,
     FORMAT,
     REASONING,
+    SUMMARY_EVENTS,
+    SUMMARY_ITEM,
+    SUMMARY_REPLY,
     USAGE,
     error_event,
+    events,
     sse,
 )
 
@@ -161,12 +166,19 @@ async def test_text_and_tool_calls_are_assembled():
     assert reply.choices[0].finish_reason == "tool_calls"
 
 
-async def test_reasoning_details_are_joined_in_order():
-    """Text pieces of one item are joined; the encrypted item is kept whole."""
-    with provider(streamed(sse(EVENTS))):
+@pytest.mark.parametrize("encrypted_in", ["content", "alone", "finish"])
+async def test_reasoning_details_are_joined_in_order(encrypted_in):
+    """Text pieces of one item are joined; the encrypted item is kept whole.
+
+    LiteLLM's stream wrapper passes on no delta whose only payload is
+    ``reasoning_details`` (``alone``) and empties the finish chunk's delta
+    (``finish``), so the item must come from the provider's parsed chunks.
+    """
+    with provider(streamed(sse(events(encrypted_in)))):
         reply = await ask()
 
     message = reply.choices[0].message
+    assert message.content == CONTENT
     assert message.reasoning_content == REASONING
     fields = message.provider_specific_fields
     assert fields["reasoning"] == REASONING
@@ -174,6 +186,35 @@ async def test_reasoning_details_are_joined_in_order():
         {"type": "reasoning.text", "text": REASONING, "format": FORMAT, "index": 0},
         ENCRYPTED,
     ]
+
+
+async def test_reasoning_details_match_the_unstreamed_reply():
+    """A summary in pieces and an encrypted item alone, streamed or not."""
+    with provider(streamed(sse(SUMMARY_EVENTS))):
+        streamed_reply = await ask()
+    with provider(whole(SUMMARY_REPLY)):
+        unstreamed_reply = await ask(stream_transport=False)
+
+    streamed_details, unstreamed_details = (
+        reply.choices[0].message.provider_specific_fields["reasoning_details"]
+        for reply in (streamed_reply, unstreamed_reply)
+    )
+    assert unstreamed_details == [SUMMARY_ITEM, ENCRYPTED]
+    assert streamed_details == unstreamed_details
+
+
+def test_a_stream_with_no_provider_stream_to_record_is_refused():
+    """The parsed chunks are read from LiteLLM's ``completion_stream``.
+
+    A wrapper without one fails loudly instead of losing the keys outside
+    LiteLLM's model: one LiteLLM opens lazily is refused by name, and a
+    LiteLLM that renamed the attribute raises ``AttributeError``.
+    """
+    lazy = SimpleNamespace(completion_stream=None, custom_llm_provider="bedrock")
+    with pytest.raises(TypeError, match="bedrock"):
+        uni_llm._record_parsed_chunks(lazy)
+    with pytest.raises(AttributeError):
+        uni_llm._record_parsed_chunks(object())
 
 
 async def test_usage_is_the_one_the_provider_reported(llm_events):

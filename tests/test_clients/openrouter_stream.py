@@ -1,18 +1,21 @@
 """A synthetic OpenRouter chat-completion stream, as server-sent events.
 
 Written by hand after OpenRouter's documented streaming format, not captured
-from a real call; a recorded real stream will replace it or join it. One
-reply that reasons, says a few words and calls a tool:
+from a real call; a recorded real stream will replace it or join it.
+
+``events`` is one reply that reasons, says a few words and calls a tool:
 
 - ``reasoning`` text arrives in pieces, each with a ``reasoning_details``
   piece of the same item (``index`` 0);
-- an encrypted reasoning item (``index`` 1) arrives whole, with the first
-  piece of content (LiteLLM passes on no delta whose only payload is
-  ``reasoning_details``, so a recording that sends one alone would show it
-  lost);
+- an encrypted reasoning item (``index`` 1) arrives whole: with the first
+  piece of content, in a delta of its own (no content and no reasoning
+  text), or in the finish chunk's delta;
 - the tool call's arguments arrive in pieces;
 - the last event has no choices and carries usage: the charged ``cost``,
   cache read and write tokens and reasoning tokens.
+
+``SUMMARY_EVENTS`` is a reply whose reasoning is a summary item in pieces
+and an encrypted item, and ``SUMMARY_REPLY`` the same reply unstreamed.
 
 It holds no credential and no key-shaped string.
 """
@@ -91,30 +94,89 @@ def _arguments(text: str, **call: Any) -> dict:
     )
 
 
-EVENTS = [
-    _reasoning("The user wants "),
-    _reasoning("the weather in Paris. "),
-    _reasoning("Call the tool."),
-    _event({"content": "Checking ", "reasoning_details": [ENCRYPTED]}),
-    _event({"content": "now."}),
-    _event(
-        {
-            "content": "",
-            "tool_calls": [
-                {
-                    "index": 0,
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "get_weather", "arguments": ""},
-                },
-            ],
-        },
-    ),
-    _arguments('{"city": '),
-    _arguments('"Paris"}'),
-    _event({"content": ""}, finish_reason="tool_calls"),
+def events(encrypted_in: str = "content") -> list[dict]:
+    """The reply's events, with the encrypted item in the first ``content``
+    piece's delta, ``alone`` in a delta of its own, or in the ``finish``
+    chunk's delta."""
+
+    def encrypted(where: str) -> dict:
+        return {"reasoning_details": [ENCRYPTED]} if encrypted_in == where else {}
+
+    alone = _event({"content": "", **encrypted("alone")})
+    return [
+        _reasoning("The user wants "),
+        _reasoning("the weather in Paris. "),
+        _reasoning("Call the tool."),
+        *([alone] if encrypted_in == "alone" else []),
+        _event({"content": "Checking ", **encrypted("content")}),
+        _event({"content": "now."}),
+        _event(
+            {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""},
+                    },
+                ],
+            },
+        ),
+        _arguments('{"city": '),
+        _arguments('"Paris"}'),
+        _event({"content": "", **encrypted("finish")}, finish_reason="tool_calls"),
+        _event(usage=USAGE),
+    ]
+
+
+EVENTS = events()
+
+SUMMARY = "Look up the weather, then answer."
+SUMMARY_ITEM = {
+    "type": "reasoning.summary",
+    "summary": SUMMARY,
+    "format": FORMAT,
+    "index": 0,
+}
+
+
+def _summary(text: str) -> dict:
+    piece = {**SUMMARY_ITEM, "summary": text}
+    return _event({"content": "", "reasoning": text, "reasoning_details": [piece]})
+
+
+SUMMARY_EVENTS = [
+    _summary("Look up the weather, "),
+    _summary("then answer."),
+    _event({"content": "", "reasoning_details": [ENCRYPTED]}),
+    _event({"content": "Sunny."}),
+    _event({"content": ""}, finish_reason="stop"),
     _event(usage=USAGE),
 ]
+
+SUMMARY_REPLY = {
+    "id": "gen-whole",
+    "provider": "OpenAI",
+    "model": MODEL,
+    "object": "chat.completion",
+    "created": 1760000000,
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "Sunny.",
+                "reasoning": SUMMARY,
+                "reasoning_details": [SUMMARY_ITEM, ENCRYPTED],
+            },
+            "finish_reason": "stop",
+            "native_finish_reason": "stop",
+            "logprobs": None,
+        },
+    ],
+    "usage": USAGE,
+}
 
 
 def error_event(code: int) -> dict:

@@ -26,7 +26,7 @@ import litellm
 litellm.suppress_debug_info = True
 
 # local
-from litellm.types.utils import Message as LiteLLMMessage
+from litellm.types.utils import Message as LiteLLMMessage, ModelResponseStream
 from openai._types import Headers
 from ..costs import compute_cost_from_response
 
@@ -389,13 +389,15 @@ def _joined_reasoning_details(pieces: list) -> list:
 def _streamed_message_fields(chunks: list) -> dict:
     """The message keys outside LiteLLM's model, joined from a stream's deltas.
 
+    *chunks* are what the provider's parser yielded (see ``_ParsedChunks``).
     OpenRouter streams ``reasoning`` (and ``refusal``) as text in pieces and
     ``reasoning_details`` as item pieces (see ``_joined_reasoning_details``).
     """
     fields: dict = {}
     details: list = []
     for chunk in chunks:
-        if not chunk.choices:
+        # The parser yields a ``GenericStreamingChunk`` dict for ``[DONE]``.
+        if not isinstance(chunk, ModelResponseStream) or not chunk.choices:
             continue
         for key, value in chunk.choices[0].delta.model_dump().items():
             if key in _MESSAGE_FIELDS:
@@ -411,12 +413,69 @@ def _streamed_message_fields(chunks: list) -> dict:
     return fields
 
 
-def _completion_from_stream(chunks: list) -> Any:
+class _ParsedChunks:
+    """A provider stream that keeps every chunk its parser yields.
+
+    It stands in for a ``CustomStreamWrapper``'s ``completion_stream``, which
+    the wrapper reads chunk by chunk. Whatever else the wrapper asks of that
+    stream (``aclose``, for one) is the stream's own.
+    """
+
+    def __init__(self, source: Any) -> None:
+        self.source = source
+        self.chunks: list = []
+        self._iterator: Any = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.source, name)
+
+    def __iter__(self) -> "_ParsedChunks":
+        return self
+
+    def __next__(self) -> Any:
+        chunk = next(self.source)
+        self.chunks.append(chunk)
+        return chunk
+
+    def __aiter__(self) -> "_ParsedChunks":
+        if self._iterator is None:
+            self._iterator = self.source.__aiter__()
+        return self
+
+    async def __anext__(self) -> Any:
+        chunk = await self._iterator.__anext__()
+        self.chunks.append(chunk)
+        return chunk
+
+
+def _record_parsed_chunks(stream: Any) -> _ParsedChunks:
+    """Have *stream* keep the chunks its provider's parser yields.
+
+    The wrapper passes on no delta it judges empty, such as one carrying only
+    ``reasoning_details``, and replaces the finish chunk's delta, so the
+    message keys outside LiteLLM's model are read from the parsed chunks. A
+    provider stream LiteLLM opens only once iteration starts (Bedrock, Vertex
+    AI) is not there to record yet, and is refused rather than read without
+    those keys.
+    """
+    if stream.completion_stream is None:
+        raise TypeError(
+            f"stream_transport cannot read {stream.custom_llm_provider} "
+            "streams: LiteLLM opens them lazily, so their parsed chunks "
+            "cannot be kept",
+        )
+    parsed = _ParsedChunks(stream.completion_stream)
+    stream.completion_stream = parsed
+    return parsed
+
+
+def _completion_from_stream(chunks: list, parsed: list) -> Any:
     """Assemble a stream read to its end into the reply an unstreamed call returns.
 
     *chunks* is the stream wrapper's own record (``CustomStreamWrapper.chunks``)
     rather than what iteration yielded: it keeps the provider's usage chunk,
-    which iteration replaces with usage rebuilt from token counts.
+    which iteration replaces with usage rebuilt from token counts. *parsed*
+    is every chunk the provider's parser yielded (``_record_parsed_chunks``).
 
     ``stream_chunk_builder`` assembles content, tool calls and
     ``reasoning_content``. What it drops is put back: the usage the provider
@@ -436,7 +495,7 @@ def _completion_from_stream(chunks: list) -> Any:
     )
     if usage is not None:
         completion.usage = usage
-    fields = _streamed_message_fields(chunks)
+    fields = _streamed_message_fields(parsed)
     if fields:
         message = completion.choices[0].message
         message.provider_specific_fields = {
@@ -476,12 +535,13 @@ async def _acompletion_with_transient_retry(
         )
         if not kw.get("stream"):
             return response
+        parsed = _record_parsed_chunks(response)
         try:
             async for _ in response:
                 pass
         except litellm.exceptions.MidStreamFallbackError as e:
             raise e.original_exception from e
-        return _completion_from_stream(response.chunks)
+        return _completion_from_stream(response.chunks, parsed.chunks)
 
     return await retry_transient_llm_async(_call)
 
@@ -498,12 +558,13 @@ def _completion_with_transient_retry(**kw: Any) -> Any:
         response = litellm.completion(**kw)
         if not kw.get("stream"):
             return response
+        parsed = _record_parsed_chunks(response)
         try:
             for _ in response:
                 pass
         except litellm.exceptions.MidStreamFallbackError as e:
             raise e.original_exception from e
-        return _completion_from_stream(response.chunks)
+        return _completion_from_stream(response.chunks, parsed.chunks)
 
     return retry_transient_llm_sync(_call)
 
