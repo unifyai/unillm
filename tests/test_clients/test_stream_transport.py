@@ -314,7 +314,9 @@ async def test_a_close_that_fails_past_the_deadline_still_tries_once_more(
     async def failing_close(self):
         raise RuntimeError("close failed")
 
-    monkeypatch.setattr(litellm.CustomStreamWrapper, "aclose", failing_close)
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    monkeypatch.setattr(CustomStreamWrapper, "aclose", failing_close)
     with provider(kept_alive, streamed(sse(EVENTS))) as sent:
         reply = await ask()
 
