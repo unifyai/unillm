@@ -305,6 +305,23 @@ async def test_a_stream_past_its_deadline_is_tried_once_more(
     assert [event.provider_cost for event in llm_events] == [COST]
 
 
+async def test_a_close_that_fails_past_the_deadline_still_tries_once_more(
+    short_deadline,
+    monkeypatch,
+):
+    """Closing the stuck stream may fail or hang; the expiry still gets its one more try."""
+
+    async def failing_close(self):
+        raise RuntimeError("close failed")
+
+    monkeypatch.setattr(litellm.CustomStreamWrapper, "aclose", failing_close)
+    with provider(kept_alive, streamed(sse(EVENTS))) as sent:
+        reply = await ask()
+
+    assert len(sent) == 2
+    assert reply.choices[0].message.content == CONTENT
+
+
 async def test_a_second_expiry_raises_a_timeout_to_the_caller(short_deadline):
     """One more try only, however many the transient policy would allow."""
     with provider(kept_alive, kept_alive, kept_alive, retries=3) as sent:

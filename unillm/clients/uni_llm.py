@@ -578,8 +578,13 @@ async def _acompletion_with_transient_retry(
                 STREAM_CALL_DEADLINE_S,
             )
         except asyncio.TimeoutError:
+            # Closing is bounded and never replaces the expiry: a close that
+            # raised would otherwise skip the one-more-try rule below.
             for response in opened:
-                await response.aclose()
+                try:
+                    await asyncio.wait_for(response.aclose(), 10)
+                except Exception as e:  # noqa: BLE001
+                    _LOGGER.warning(f"closing a stream past its deadline failed: {e!r}")
             raise _StreamDeadlineExpired(
                 f"the stream did not finish within {STREAM_CALL_DEADLINE_S:g} s",
             ) from None
