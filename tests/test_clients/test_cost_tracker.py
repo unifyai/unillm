@@ -106,14 +106,26 @@ class TestCostEventFromCompletion:
         assert event.provider_cost == 0.001
 
     def test_none_costs_treated_as_zero(self):
-        """A None provider_cost becomes 0.0."""
+        """A None provider_cost of a reply (a cache hit, say) becomes 0.0."""
+        completion = MagicMock(spec=["usage"])
+        completion.usage = None
+        event = CostEvent.from_completion(
+            model="gpt-4",
+            provider_cost=None,
+            completion=completion,
+            cache_status="hit",
+        )
+        assert event.provider_cost == 0.0
+
+    def test_a_call_that_returned_nothing_has_an_unknown_cost(self):
+        """A failed call's cost is unknown (None), never 0.0."""
         event = CostEvent.from_completion(
             model="gpt-4",
             provider_cost=None,
             completion=None,
-            cache_status="hit",
+            cache_status="error",
         )
-        assert event.provider_cost == 0.0
+        assert event.provider_cost is None
 
     def test_completion_with_none_usage(self):
         """Completion object where .usage is None yields zero tokens."""

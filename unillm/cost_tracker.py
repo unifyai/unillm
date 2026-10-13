@@ -41,14 +41,16 @@ class CostEvent:
     Attributes:
         model: The model identifier used for the request (e.g., "gpt-4o").
         provider_cost: What the call cost, as charged by the LLM provider
-            (in USD). 0.0 for cache hits or when cost cannot be determined.
+            (in USD). 0.0 for cache hits or when a reply's cost cannot be
+            determined. None when the call returned nothing (it failed), so
+            what the provider charged for it is unknown.
         prompt_tokens: Number of input/prompt tokens used. 0 for cache hits.
         completion_tokens: Number of output/completion tokens used. 0 for cache hits.
         cache_status: Whether the request was a cache "hit", "miss", or "disabled".
     """
 
     model: str
-    provider_cost: float = 0.0
+    provider_cost: Optional[float] = 0.0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cache_status: str = "disabled"
@@ -69,10 +71,14 @@ class CostEvent:
 
         Args:
             model: The model identifier.
-            provider_cost: Provider cost in USD (None treated as 0.0).
+            provider_cost: Provider cost in USD. None is taken as 0.0 when
+                there is a completion, and kept as unknown when there is none.
             completion: A ChatCompletion, a usage object, or None.
             cache_status: Cache status string ("hit", "miss", or "disabled").
         """
+        if provider_cost is None and completion is None:
+            # Nothing came back, so what the call was charged is unknown.
+            return cls(model=model, provider_cost=None, cache_status=cache_status)
         pt = ct = 0
         if completion is not None:
             # Full completion object: completion.usage.prompt_tokens

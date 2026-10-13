@@ -505,6 +505,23 @@ def _completion_from_stream(chunks: list, parsed: list) -> Any:
     return completion
 
 
+# The longest one streamed attempt may take, from opening the call to its
+# last chunk. An unstreamed call ends once its connection has been quiet for
+# httpx's read timeout, but a stream is never quiet while the provider sends
+# keep-alive comments (OpenRouter's ``: OPENROUTER PROCESSING``), which
+# LiteLLM does not pass on as chunks, so a stuck provider could otherwise
+# hold a call open indefinitely. Completed calls take well under a minute.
+STREAM_CALL_DEADLINE_S = 900.0
+
+
+class _StreamDeadlineExpired(Exception):
+    """A streamed attempt ran past ``STREAM_CALL_DEADLINE_S``.
+
+    It is not a provider error, so the transient retry policy passes it
+    through untouched and ``_acompletion_with_transient_retry`` retries it.
+    """
+
+
 async def _acompletion_with_transient_retry(
     *,
     shared_session: Any,
@@ -524,10 +541,17 @@ async def _acompletion_with_transient_retry(
     ``MidStreamFallbackError`` for its router's fallbacks, which unillm does
     not use. The error it wraps is the one the same failure raises for an
     unstreamed call, so that is what is raised.
+
+    A streamed attempt has ``STREAM_CALL_DEADLINE_S`` to open and finish.
+    One past it is aborted and tried once more, outside the transient policy,
+    which would retry a timeout up to UNILLM_TRANSIENT_RETRY_COUNT times and
+    so hold a stuck call for that many deadlines. A second expiry raises
+    ``litellm.exceptions.Timeout``, the error an unstreamed call's read
+    timeout raises.
     """
     from ..helpers import retry_transient_llm_async
 
-    async def _call() -> Any:
+    async def _open_and_read(opened: list) -> Any:
         response = await litellm.acompletion(
             shared_session=shared_session,
             client=client,
@@ -535,6 +559,7 @@ async def _acompletion_with_transient_retry(
         )
         if not kw.get("stream"):
             return response
+        opened.append(response)
         parsed = _record_parsed_chunks(response)
         try:
             async for _ in response:
@@ -543,14 +568,44 @@ async def _acompletion_with_transient_retry(
             raise e.original_exception from e
         return _completion_from_stream(response.chunks, parsed.chunks)
 
-    return await retry_transient_llm_async(_call)
+    async def _call() -> Any:
+        if not kw.get("stream"):
+            return await _open_and_read([])
+        opened: list = []
+        try:
+            return await asyncio.wait_for(
+                _open_and_read(opened),
+                STREAM_CALL_DEADLINE_S,
+            )
+        except asyncio.TimeoutError:
+            for response in opened:
+                await response.aclose()
+            raise _StreamDeadlineExpired(
+                f"the stream did not finish within {STREAM_CALL_DEADLINE_S:g} s",
+            ) from None
+
+    try:
+        return await retry_transient_llm_async(_call)
+    except _StreamDeadlineExpired as e:
+        _LOGGER.warning(f"trying once more: {e}")
+    try:
+        return await retry_transient_llm_async(_call)
+    except _StreamDeadlineExpired as e:
+        raise litellm.exceptions.Timeout(
+            message=str(e),
+            model=kw.get("model"),
+            llm_provider="",
+        ) from e
 
 
 def _completion_with_transient_retry(**kw: Any) -> Any:
     """Call ``litellm.completion`` with UniLLM's transient retry policy.
 
     A streamed call is read and assembled inside the attempt, as in
-    ``_acompletion_with_transient_retry``.
+    ``_acompletion_with_transient_retry``. It has no deadline: a blocking
+    read cannot be bounded from the thread doing it, and the keep-alive
+    comments that keep a stuck stream open are not chunks a check between
+    chunks would see. The async client has one.
     """
     from ..helpers import retry_transient_llm_sync
 

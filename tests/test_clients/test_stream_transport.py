@@ -9,6 +9,7 @@ through LiteLLM's own parsing, and nothing leaves the process.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import copy
 from json import loads
@@ -25,6 +26,7 @@ from pydantic import SecretStr
 
 import unillm
 from unillm.clients import uni_llm
+from unillm.cost_tracker import acapture_costs
 from unillm.settings import SETTINGS
 
 from .fake_transport import PLACEHOLDER_KEY, WEATHER_TOOL
@@ -101,11 +103,30 @@ def dropped(body: bytes) -> Reply:
     )
 
 
+class _KeptAlive(httpx.AsyncByteStream):
+    """An event stream that sends only OpenRouter's keep-alive comments."""
+
+    async def __aiter__(self):
+        while True:
+            yield b": OPENROUTER PROCESSING\n\n"
+            await asyncio.sleep(0.05)
+
+
+def kept_alive(url: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        stream=_KeptAlive(),
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", url),
+    )
+
+
 @contextlib.contextmanager
-def provider(*replies: Reply) -> Iterator[list[dict]]:
+def provider(*replies: Reply, retries: int = 1) -> Iterator[list[dict]]:
     """Answer each request with the next of *replies*; yield the bodies sent.
 
-    One transient retry, with no backoff, so a retried failure costs no time.
+    *retries* transient retries, with no backoff, so a retried failure costs
+    no time.
     """
     sent: list[dict] = []
     queue = list(replies)
@@ -116,7 +137,7 @@ def provider(*replies: Reply) -> Iterator[list[dict]]:
 
     with (
         patch.object(SETTINGS, "OPENROUTER_API_KEY", SecretStr(PLACEHOLDER_KEY)),
-        patch.object(SETTINGS, "UNILLM_TRANSIENT_RETRY_COUNT", 1),
+        patch.object(SETTINGS, "UNILLM_TRANSIENT_RETRY_COUNT", retries),
         patch("unillm.helpers._BACKOFF_BASE_SECONDS", 0),
         patch.object(AsyncHTTPHandler, "post", post),
     ):
@@ -264,6 +285,44 @@ async def test_a_dropped_stream_is_retried_and_only_the_finished_call_is_costed(
     assert len(sent) == 2
     assert reply.choices[0].message.content == CONTENT
     assert [event.provider_cost for event in llm_events] == [COST]
+
+
+@pytest.fixture
+def short_deadline(monkeypatch):
+    monkeypatch.setattr(uni_llm, "STREAM_CALL_DEADLINE_S", 0.3)
+
+
+async def test_a_stream_past_its_deadline_is_tried_once_more(
+    short_deadline,
+    llm_events,
+):
+    """Keep-alive comments alone never end a stream; the deadline does."""
+    with provider(kept_alive, streamed(sse(EVENTS))) as sent:
+        reply = await ask()
+
+    assert len(sent) == 2
+    assert reply.choices[0].message.content == CONTENT
+    assert [event.provider_cost for event in llm_events] == [COST]
+
+
+async def test_a_second_expiry_raises_a_timeout_to_the_caller(short_deadline):
+    """One more try only, however many the transient policy would allow."""
+    with provider(kept_alive, kept_alive, kept_alive, retries=3) as sent:
+        with pytest.raises(litellm.exceptions.Timeout):
+            await ask()
+
+    assert len(sent) == 2
+
+
+async def test_an_expired_call_is_costed_as_unknown(short_deadline, llm_events):
+    """Neither the LLM event nor the cost event says it cost nothing."""
+    async with acapture_costs() as costs:
+        with provider(kept_alive, kept_alive):
+            with pytest.raises(litellm.exceptions.Timeout):
+                await ask()
+
+    assert [event.provider_cost for event in llm_events] == [None]
+    assert [event.provider_cost for event in costs] == [None]
 
 
 async def test_without_the_flag_the_request_is_not_streamed():
