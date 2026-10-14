@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import inspect
+import logging
 from json import loads
 from types import SimpleNamespace
 from typing import Callable, Iterator
@@ -133,7 +135,8 @@ def provider(*replies: Reply, retries: int = 1) -> Iterator[list[dict]]:
 
     async def post(self, url, data=None, json=None, **_):  # noqa: A002
         sent.append(loads(data) if data is not None else json)
-        return queue.pop(0)(url)
+        reply = queue.pop(0)(url)
+        return await reply if inspect.isawaitable(reply) else reply
 
     with (
         patch.object(SETTINGS, "OPENROUTER_API_KEY", SecretStr(PLACEHOLDER_KEY)),
@@ -148,6 +151,7 @@ def provider(*replies: Reply, retries: int = 1) -> Iterator[list[dict]]:
 def _no_gateway(monkeypatch):
     monkeypatch.delenv("UNILLM_LLM_GATEWAY_URL", raising=False)
     monkeypatch.delenv("UNILLM_LLM_GATEWAY_KEY", raising=False)
+    monkeypatch.delenv(uni_llm.STREAM_IDLE_ENV, raising=False)
 
 
 @pytest.fixture
@@ -382,3 +386,158 @@ def test_the_flag_is_off_by_default_and_copies_keep_it():
     assert unillm.AsyncUnify(ENDPOINT, cache=False).stream_transport is False
     client = unillm.AsyncUnify(ENDPOINT, cache=False, stream_transport=True)
     assert client.copy().stream_transport is True
+
+
+# ── silence: no byte for UNILLM_STREAM_IDLE_S ─────────────────────────────────
+
+IDLE_S = 0.25
+KEEP_ALIVE = b": OPENROUTER PROCESSING\n\n"
+
+
+class _Paced(httpx.AsyncByteStream):
+    """An event stream sent piece by piece, *gap* seconds apart.
+
+    *keep_alive_for* seconds of keep-alive comments come first; with
+    *stall_after* the connection then goes silent, for good, after that
+    many pieces.
+    """
+
+    def __init__(
+        self,
+        pieces: list[bytes],
+        *,
+        gap: float = 0.05,
+        keep_alive_for: float = 0.0,
+        stall_after: int | None = None,
+    ) -> None:
+        self._pieces = pieces
+        self._gap = gap
+        self._keep_alive_for = keep_alive_for
+        self._stall_after = stall_after
+
+    async def __aiter__(self):
+        loop = asyncio.get_running_loop()
+        until = loop.time() + self._keep_alive_for
+        while loop.time() < until:
+            yield KEEP_ALIVE
+            await asyncio.sleep(self._gap)
+        for n, piece in enumerate(self._pieces):
+            if n == self._stall_after:
+                await asyncio.sleep(3600)
+            yield piece
+            await asyncio.sleep(self._gap)
+
+
+def paced(**options) -> Reply:
+    pieces = [sse([event], done=False) for event in EVENTS] + [b"data: [DONE]\n\n"]
+    return lambda url: httpx.Response(
+        200,
+        stream=_Paced(pieces, **options),
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", url),
+    )
+
+
+def unanswered(url: str):
+    """A provider that never answers the request: not even its headers."""
+
+    async def wait() -> httpx.Response:
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
+
+    return wait()
+
+
+@pytest.fixture
+def idle_limit(monkeypatch):
+    monkeypatch.setenv(uni_llm.STREAM_IDLE_ENV, str(IDLE_S))
+
+
+async def test_a_stream_that_goes_silent_after_its_first_bytes_is_aborted_and_retried(
+    idle_limit,
+    llm_events,
+    caplog,
+):
+    """Silent past the limit: the attempt is closed and retried in the same call."""
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with caplog.at_level(logging.WARNING, logger="unillm"):
+        with provider(paced(stall_after=2), paced()) as sent:
+            reply = await ask()
+
+    assert len(sent) == 2
+    assert reply.choices[0].message.content == CONTENT
+    assert [event.provider_cost for event in llm_events] == [COST]
+    assert loop.time() - started < 10 * IDLE_S
+    assert "streamed call aborted, no byte arrived for" in caplog.text
+
+
+async def test_keep_alive_comments_alone_longer_than_the_limit_are_not_silence(
+    idle_limit,
+    llm_events,
+):
+    """A provider still working sends comments only; every byte counts."""
+    with provider(paced(keep_alive_for=4 * IDLE_S)) as sent:
+        reply = await ask()
+
+    assert len(sent) == 1
+    assert reply.choices[0].message.content == CONTENT
+    assert [event.provider_cost for event in llm_events] == [COST]
+
+
+async def test_a_healthy_stream_with_gaps_under_the_limit_is_unchanged(idle_limit):
+    with provider(paced(gap=IDLE_S / 3)) as sent:
+        paced_reply = await ask()
+    with provider(streamed(sse(EVENTS))):
+        whole_reply = await ask()
+
+    assert len(sent) == 1
+    assert paced_reply.choices[0].message == whole_reply.choices[0].message
+    assert paced_reply.usage.model_dump() == whole_reply.usage.model_dump()
+
+
+async def test_a_request_never_answered_is_silence_too(idle_limit):
+    with provider(unanswered, paced()) as sent:
+        reply = await ask()
+
+    assert len(sent) == 2
+    assert reply.choices[0].message.content == CONTENT
+
+
+async def test_silence_on_every_attempt_raises_a_timeout_costed_as_unknown(
+    idle_limit,
+    llm_events,
+):
+    """The transient policy's retries, then the timeout an unstreamed call raises."""
+    async with acapture_costs() as costs:
+        with provider(paced(stall_after=1), paced(stall_after=0), retries=1) as sent:
+            with pytest.raises(litellm.exceptions.Timeout, match="silent"):
+                await ask()
+
+    assert len(sent) == 2
+    assert [event.provider_cost for event in llm_events] == [None]
+    assert [event.provider_cost for event in costs] == [None]
+
+
+async def test_with_the_limit_off_only_the_deadline_ends_a_silent_stream(
+    monkeypatch,
+    short_deadline,
+):
+    monkeypatch.setenv(uni_llm.STREAM_IDLE_ENV, "off")
+    with provider(paced(stall_after=1), paced(gap=0.0)) as sent:
+        reply = await ask()
+
+    assert len(sent) == 2
+    assert reply.choices[0].message.content == CONTENT
+
+
+def test_the_limit_is_read_from_the_environment(monkeypatch):
+    monkeypatch.delenv(uni_llm.STREAM_IDLE_ENV, raising=False)
+    assert uni_llm._stream_idle_s() == uni_llm.STREAM_IDLE_DEFAULT_S == 120.0
+    for raw, value in [("90", 90.0), (" 0.5 ", 0.5), ("0", None), ("OFF", None), ("", 120.0)]:
+        monkeypatch.setenv(uni_llm.STREAM_IDLE_ENV, raw)
+        assert uni_llm._stream_idle_s() == value
+    for raw in ["-1", "soon", "nan", "inf"]:
+        monkeypatch.setenv(uni_llm.STREAM_IDLE_ENV, raw)
+        with pytest.raises(ValueError, match=uni_llm.STREAM_IDLE_ENV):
+            uni_llm._stream_idle_s()

@@ -4,6 +4,7 @@ import asyncio
 import copy
 import inspect
 import logging
+import math
 import os
 
 from typing import (
@@ -513,6 +514,40 @@ def _completion_from_stream(chunks: list, parsed: list) -> Any:
 # hold a call open indefinitely. Completed calls take well under a minute.
 STREAM_CALL_DEADLINE_S = 900.0
 
+# How long a streamed attempt may go without receiving a single byte before
+# it is aborted and retried under the transient retry policy. Every byte read
+# from the connection counts, keep-alive comments included, so a provider that
+# is still working (and says so with ``: OPENROUTER PROCESSING``) is never
+# cut; only a connection on which nothing at all arrives is. Read from the
+# environment on every call, as seconds; ``0`` or ``off`` turns it off.
+STREAM_IDLE_ENV = "UNILLM_STREAM_IDLE_S"
+STREAM_IDLE_DEFAULT_S = 120.0
+# The longest pause between two looks at the byte count.
+_STREAM_IDLE_TICK_S = 1.0
+
+
+def _stream_idle_s() -> float | None:
+    """The silence, in seconds, after which a streamed attempt is aborted.
+
+    ``None`` when it is turned off. A value that is not a number of seconds
+    is refused, naming the variable, rather than read as something else.
+    """
+    raw = (os.environ.get(STREAM_IDLE_ENV) or "").strip().lower()
+    if not raw:
+        return STREAM_IDLE_DEFAULT_S
+    if raw == "off":
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        value = float("nan")
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(
+            f"{STREAM_IDLE_ENV} must be a number of seconds (0 or 'off' turns "
+            f"it off), not {raw!r}",
+        )
+    return value or None
+
 
 class _StreamDeadlineExpired(Exception):
     """A streamed attempt ran past ``STREAM_CALL_DEADLINE_S``.
@@ -520,6 +555,85 @@ class _StreamDeadlineExpired(Exception):
     It is not a provider error, so the transient retry policy passes it
     through untouched and ``_acompletion_with_transient_retry`` retries it.
     """
+
+
+class _StreamWentSilent(Exception):
+    """No byte of a streamed attempt arrived for ``UNILLM_STREAM_IDLE_S``."""
+
+
+class _Wire:
+    """What a streamed attempt has received so far, counted in bytes.
+
+    Before the provider answers, nothing has arrived. Once it has, the count
+    is the HTTP response's own (``httpx.Response.num_bytes_downloaded``):
+    every byte read from the connection, whether or not the provider's
+    parser makes a chunk of it. A provider stream that does not expose its
+    HTTP response cannot be watched, and is never aborted for silence.
+    """
+
+    def __init__(self) -> None:
+        self.opened = False
+        self.response: Any = None
+
+    def open(self, stream: Any) -> None:
+        response = getattr(getattr(stream, "completion_stream", None), "http_response", None)
+        if isinstance(getattr(response, "num_bytes_downloaded", None), int):
+            self.response = response
+        self.opened = True
+
+    @property
+    def watched(self) -> bool:
+        return not self.opened or self.response is not None
+
+    def mark(self) -> tuple[bool, int]:
+        if self.response is None:
+            return (self.opened, 0)
+        return (self.opened, self.response.num_bytes_downloaded)
+
+
+async def _read_unless_silent(read: Any, wire: _Wire, idle_s: float | None) -> Any:
+    """Await *read*, a streamed attempt, unless *wire* stays silent for *idle_s*.
+
+    Raises ``_StreamWentSilent`` (after cancelling *read*) when no byte has
+    arrived for *idle_s* seconds, counted from the request being sent.
+    """
+    task = asyncio.ensure_future(read)
+    if idle_s is None:
+        return await task
+    loop = asyncio.get_running_loop()
+    tick = min(_STREAM_IDLE_TICK_S, idle_s / 4)
+    seen, last = wire.mark(), loop.time()
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=tick)
+            if done:
+                return task.result()
+            now, mark = loop.time(), wire.mark()
+            if mark != seen:
+                seen, last = mark, now
+            elif wire.watched and now - last >= idle_s:
+                raise _StreamWentSilent(
+                    f"no byte arrived for {now - last:.1f} s "
+                    + (
+                        f"after {mark[1]} bytes of the stream"
+                        if mark[0]
+                        else "after the request was sent"
+                    ),
+                )
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+async def _close_streams(opened: list, why: str) -> None:
+    """Close each opened stream, each close bounded to 10 s; a close that
+    fails is logged and never replaces why the attempt ended."""
+    for response in opened:
+        try:
+            await asyncio.wait_for(response.aclose(), 10)
+        except Exception as e:  # noqa: BLE001
+            _LOGGER.warning(f"closing a stream {why} failed: {e!r}")
 
 
 async def _acompletion_with_transient_retry(
@@ -548,10 +662,18 @@ async def _acompletion_with_transient_retry(
     so hold a stuck call for that many deadlines. A second expiry raises
     ``litellm.exceptions.Timeout``, the error an unstreamed call's read
     timeout raises.
+
+    Within that, a streamed attempt on which no byte arrives for
+    ``UNILLM_STREAM_IDLE_S`` seconds (see ``_stream_idle_s``) is aborted: its
+    stream is closed, the abort is logged, and it fails with
+    ``litellm.exceptions.Timeout``, which the transient policy retries as it
+    retries any timeout. Keep-alive comments are bytes, so a provider that
+    keeps sending them is never aborted for silence. What the provider bills
+    for the aborted attempt never reaches unillm, as for any failed attempt.
     """
     from ..helpers import retry_transient_llm_async
 
-    async def _open_and_read(opened: list) -> Any:
+    async def _open_and_read(opened: list, wire: _Wire | None = None) -> Any:
         response = await litellm.acompletion(
             shared_session=shared_session,
             client=client,
@@ -560,6 +682,8 @@ async def _acompletion_with_transient_retry(
         if not kw.get("stream"):
             return response
         opened.append(response)
+        if wire is not None:
+            wire.open(response)
         parsed = _record_parsed_chunks(response)
         try:
             async for _ in response:
@@ -572,21 +696,27 @@ async def _acompletion_with_transient_retry(
         if not kw.get("stream"):
             return await _open_and_read([])
         opened: list = []
+        wire = _Wire()
+        idle_s = _stream_idle_s()
         try:
             return await asyncio.wait_for(
-                _open_and_read(opened),
+                _read_unless_silent(_open_and_read(opened, wire), wire, idle_s),
                 STREAM_CALL_DEADLINE_S,
             )
         except asyncio.TimeoutError:
             # Closing is bounded and never replaces the expiry: a close that
             # raised would otherwise skip the one-more-try rule below.
-            for response in opened:
-                try:
-                    await asyncio.wait_for(response.aclose(), 10)
-                except Exception as e:  # noqa: BLE001
-                    _LOGGER.warning(f"closing a stream past its deadline failed: {e!r}")
+            await _close_streams(opened, "past its deadline")
             raise _StreamDeadlineExpired(
                 f"the stream did not finish within {STREAM_CALL_DEADLINE_S:g} s",
+            ) from None
+        except _StreamWentSilent as e:
+            await _close_streams(opened, "gone silent")
+            _LOGGER.warning(f"streamed call aborted, {e} (limit {idle_s:g} s)")
+            raise litellm.exceptions.Timeout(
+                message=f"the stream went silent: {e}",
+                model=kw.get("model"),
+                llm_provider="",
             ) from None
 
     try:
