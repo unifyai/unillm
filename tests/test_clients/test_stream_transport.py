@@ -584,6 +584,11 @@ PLAIN_EVENTS = SUMMARY_EVENTS[3:]
 FIRST, SECOND = "What is the weather in Paris?", "And tomorrow?"
 
 
+def second(stream_transport: bool) -> Reply:
+    """The second turn's reply, in the form the request asks for."""
+    return streamed(sse(PLAIN_EVENTS)) if stream_transport else whole(WHOLE)
+
+
 async def two_turns(first: Reply, *, stream_transport: bool = True):
     """One stateful conversation: *first* answers the first turn.
 
@@ -595,7 +600,7 @@ async def two_turns(first: Reply, *, stream_transport: bool = True):
         stateful=True,
         stream_transport=stream_transport,
     )
-    with provider(first, whole(WHOLE)) as sent:
+    with provider(first, second(stream_transport)) as sent:
         reply = await client.generate(
             user_message=FIRST,
             tools=[copy.deepcopy(WEATHER_TOOL)],
@@ -612,7 +617,7 @@ def two_turns_sync(first: Reply, *, stream_transport: bool = True):
         stateful=True,
         stream_transport=stream_transport,
     )
-    with provider(first, whole(WHOLE)) as sent:
+    with provider(first, second(stream_transport)) as sent:
         reply = client.generate(user_message=FIRST, tools=[copy.deepcopy(WEATHER_TOOL)])
         client.generate(user_message=SECOND, tools=[copy.deepcopy(WEATHER_TOOL)])
     return reply, sent
