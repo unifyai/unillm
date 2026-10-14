@@ -752,3 +752,46 @@ async def test_a_reply_without_reasoning_goes_back_exactly_as_before(
         "role": "assistant",
         "content": "Sunny.",
     }
+
+
+THIRD = "And the day after?"
+
+
+@pytest.mark.parametrize(
+    "first, stream_transport",
+    [
+        *(pytest.param(*p.values[:2], id=p.id) for p in TWO_TURNS_WITH_REASONING),
+        pytest.param(streamed(sse(PLAIN_EVENTS)), True, id="streamed-plain"),
+        pytest.param(whole(WHOLE), False, id="unstreamed-plain"),
+    ],
+)
+async def test_a_message_goes_out_the_same_on_every_later_request(
+    first,
+    stream_transport,
+):
+    """Sending a request leaves the history it read unchanged: the first
+    reply's message goes out byte for byte the same on the third request as
+    on the second, its reasoning still at the top level."""
+    client = unillm.AsyncUnify(
+        ENDPOINT,
+        cache=False,
+        stateful=True,
+        stream_transport=stream_transport,
+    )
+    with provider(first, whole(WHOLE), whole(WHOLE)) as sent:
+        for text in (FIRST, SECOND, THIRD):
+            await client.generate(user_message=text, tools=[copy.deepcopy(WEATHER_TOOL)])
+
+    second, third = (
+        [m for m in body["messages"] if m["role"] == "assistant"][0] for body in sent[1:]
+    )
+    assert dumps(third, sort_keys=True) == dumps(second, sort_keys=True)
+    assert body_prefix(sent[2], len(sent[1]["messages"]) - 1) == body_prefix(
+        sent[1],
+        len(sent[1]["messages"]) - 1,
+    )
+
+
+def body_prefix(body: dict, n: int) -> str:
+    """The first *n* messages of a request *body*, as JSON."""
+    return dumps(body["messages"][:n], sort_keys=True)
