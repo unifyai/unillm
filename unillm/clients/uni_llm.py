@@ -506,6 +506,30 @@ def _completion_from_stream(chunks: list, parsed: list) -> Any:
     return completion
 
 
+def _history_message(message: Any) -> dict:
+    """The assistant message a stateful client keeps and sends on its next call.
+
+    LiteLLM files a reply's ``reasoning_details`` (an unstreamed reply's, and
+    a streamed one's as ``_completion_from_stream`` puts them back) under the
+    message's ``provider_specific_fields``, and sends that key as it is, where
+    no provider reads it. The list goes back at the top level instead, where
+    the provider that returned it reads it on the next request, so the model
+    continues its reasoning rather than starting it again: the same items in
+    the same order, encrypted ones included. A reply without reasoning
+    details is kept as before.
+    """
+    entry = message.model_dump(warnings=False)
+    fields = entry.get("provider_specific_fields")
+    if not isinstance(fields, dict) or not fields.get("reasoning_details"):
+        return entry
+    fields = dict(fields)
+    details = fields.pop("reasoning_details")
+    entry["provider_specific_fields"] = fields or None
+    if entry.get("reasoning_details") is None:
+        entry["reasoning_details"] = details
+    return entry
+
+
 # The longest one streamed attempt may take, from opening the call to its
 # last chunk. An unstreamed call ends once its connection has been quiet for
 # httpx's read timeout, but a stream is never quiet while the provider sends
@@ -1482,7 +1506,7 @@ class _UniClient(_Client, abc.ABC):
                     # Always store full message (preserves thinking blocks for Claude, etc.)
                     self._messages.insert(
                         placeholder_idx,
-                        res.choices[0].message.model_dump(warnings=False),
+                        _history_message(res.choices[0].message),
                     )
                 elif self._messages:
                     self._messages.clear()
@@ -1498,7 +1522,7 @@ class _UniClient(_Client, abc.ABC):
         # ---------- non-streaming path ----------
         if stateful:
             # Always store full message (preserves thinking blocks for Claude, etc.)
-            assistant_dict = response.choices[0].message.model_dump(warnings=False)
+            assistant_dict = _history_message(response.choices[0].message)
             self._append_to_history(assistant_dict)
         elif self._messages:
             self._messages.clear()

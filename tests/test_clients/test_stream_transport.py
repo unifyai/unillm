@@ -14,7 +14,7 @@ import contextlib
 import copy
 import inspect
 import logging
-from json import loads
+from json import dumps, loads
 from types import SimpleNamespace
 from typing import Callable, Iterator
 from unittest.mock import patch
@@ -22,7 +22,7 @@ from unittest.mock import patch
 import httpx
 import litellm
 import pytest
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 from pydantic import SecretStr
 
@@ -133,16 +133,23 @@ def provider(*replies: Reply, retries: int = 1) -> Iterator[list[dict]]:
     sent: list[dict] = []
     queue = list(replies)
 
-    async def post(self, url, data=None, json=None, **_):  # noqa: A002
+    def answer(url, data, json):  # noqa: A002
         sent.append(loads(data) if data is not None else json)
-        reply = queue.pop(0)(url)
+        return queue.pop(0)(url)
+
+    async def post(self, url, data=None, json=None, **_):  # noqa: A002
+        reply = answer(url, data, json)
         return await reply if inspect.isawaitable(reply) else reply
+
+    def sync_post(self, url, data=None, json=None, **_):  # noqa: A002
+        return answer(url, data, json)
 
     with (
         patch.object(SETTINGS, "OPENROUTER_API_KEY", SecretStr(PLACEHOLDER_KEY)),
         patch.object(SETTINGS, "UNILLM_TRANSIENT_RETRY_COUNT", retries),
         patch("unillm.helpers._BACKOFF_BASE_SECONDS", 0),
         patch.object(AsyncHTTPHandler, "post", post),
+        patch.object(HTTPHandler, "post", sync_post),
     ):
         yield sent
 
@@ -541,3 +548,202 @@ def test_the_limit_is_read_from_the_environment(monkeypatch):
         monkeypatch.setenv(uni_llm.STREAM_IDLE_ENV, raw)
         with pytest.raises(ValueError, match=uni_llm.STREAM_IDLE_ENV):
             uni_llm._stream_idle_s()
+
+
+# ── the reply's reasoning, sent back on the next request ─────────────────────
+
+# The joined items of ``EVENTS``: its reasoning text pieces as one item, then
+# the encrypted item as it came.
+EVENTS_ITEMS = [
+    {"type": "reasoning.text", "text": REASONING, "format": FORMAT, "index": 0},
+    ENCRYPTED,
+]
+SUMMARY_ITEMS = [SUMMARY_ITEM, ENCRYPTED]
+
+# A reply whose only reasoning is the encrypted item: no reasoning text, so
+# LiteLLM gives its message no ``reasoning_content`` and, streamed, no
+# ``provider_specific_fields`` of its own.
+ENCRYPTED_ONLY_EVENTS = SUMMARY_EVENTS[2:]
+ENCRYPTED_ONLY_REPLY = {
+    **SUMMARY_REPLY,
+    "choices": [
+        {
+            **SUMMARY_REPLY["choices"][0],
+            "message": {
+                "role": "assistant",
+                "content": "Sunny.",
+                "reasoning_details": [ENCRYPTED],
+            },
+        },
+    ],
+}
+
+# A reply with no reasoning at all.
+PLAIN_EVENTS = SUMMARY_EVENTS[3:]
+
+FIRST, SECOND = "What is the weather in Paris?", "And tomorrow?"
+
+
+async def two_turns(first: Reply, *, stream_transport: bool = True):
+    """One stateful conversation: *first* answers the first turn.
+
+    Returns the first reply and the bodies of both requests.
+    """
+    client = unillm.AsyncUnify(
+        ENDPOINT,
+        cache=False,
+        stateful=True,
+        stream_transport=stream_transport,
+    )
+    with provider(first, whole(WHOLE)) as sent:
+        reply = await client.generate(
+            user_message=FIRST,
+            tools=[copy.deepcopy(WEATHER_TOOL)],
+        )
+        await client.generate(user_message=SECOND, tools=[copy.deepcopy(WEATHER_TOOL)])
+    return reply, sent
+
+
+def two_turns_sync(first: Reply, *, stream_transport: bool = True):
+    """``two_turns`` with the synchronous client."""
+    client = unillm.Unify(
+        ENDPOINT,
+        cache=False,
+        stateful=True,
+        stream_transport=stream_transport,
+    )
+    with provider(first, whole(WHOLE)) as sent:
+        reply = client.generate(user_message=FIRST, tools=[copy.deepcopy(WEATHER_TOOL)])
+        client.generate(user_message=SECOND, tools=[copy.deepcopy(WEATHER_TOOL)])
+    return reply, sent
+
+
+def sent_back(body: dict) -> dict:
+    """The one assistant message of the second request's *body*."""
+    [message] = [m for m in body["messages"] if m["role"] == "assistant"]
+    assert body["messages"][-1] == {"role": "user", "content": SECOND}
+    return message
+
+
+def as_sent(message) -> dict:
+    """What *message* went out as before its reasoning was sent back: its
+    dump, as JSON, without the keys LiteLLM drops for being ``None``."""
+    dumped = loads(dumps(message.model_dump(warnings=False), default=str))
+    return {key: value for key, value in dumped.items() if value is not None}
+
+
+TWO_TURNS_WITH_REASONING = [
+    pytest.param(streamed(sse(EVENTS)), True, EVENTS_ITEMS, id="streamed-tool-call"),
+    pytest.param(
+        streamed(sse(events("alone"))),
+        True,
+        EVENTS_ITEMS,
+        id="streamed-encrypted-alone",
+    ),
+    pytest.param(
+        streamed(sse(events("finish"))),
+        True,
+        EVENTS_ITEMS,
+        id="streamed-encrypted-at-finish",
+    ),
+    pytest.param(streamed(sse(SUMMARY_EVENTS)), True, SUMMARY_ITEMS, id="streamed-summary"),
+    pytest.param(whole(SUMMARY_REPLY), False, SUMMARY_ITEMS, id="unstreamed-summary"),
+]
+
+
+@pytest.mark.parametrize("first, stream_transport, items", TWO_TURNS_WITH_REASONING)
+async def test_the_next_request_sends_the_reasoning_details_back_at_the_top_level(
+    first,
+    stream_transport,
+    items,
+):
+    """The provider reads them back from the message itself, item for item."""
+    _reply, sent = await two_turns(first, stream_transport=stream_transport)
+
+    message = sent_back(sent[1])
+    assert dumps(message["reasoning_details"]) == dumps(items)
+    assert "reasoning_details" not in (message.get("provider_specific_fields") or {})
+
+
+@pytest.mark.parametrize("first, stream_transport, items", TWO_TURNS_WITH_REASONING)
+def test_the_sync_client_sends_them_back_too(first, stream_transport, items):
+    _reply, sent = two_turns_sync(first, stream_transport=stream_transport)
+
+    assert dumps(sent_back(sent[1])["reasoning_details"]) == dumps(items)
+
+
+@pytest.mark.parametrize("first, stream_transport, items", TWO_TURNS_WITH_REASONING)
+async def test_everything_else_in_the_message_goes_back_as_before(
+    first,
+    stream_transport,
+    items,
+):
+    """Content, tool calls and the other provider fields are not touched."""
+    reply, sent = await two_turns(first, stream_transport=stream_transport)
+
+    before = as_sent(reply.choices[0].message)
+    fields = before.pop("provider_specific_fields")
+    assert fields.pop("reasoning_details") == items
+    message = sent_back(sent[1])
+    assert message.pop("reasoning_details") == items
+    assert message.pop("provider_specific_fields", None) == (fields or None)
+    assert message == before
+    assert message["content"] == reply.choices[0].message.content
+
+
+async def test_streamed_and_unstreamed_replies_are_sent_back_the_same():
+    """The equality of the assembled items holds on the next request too."""
+    _reply, streamed_sent = await two_turns(streamed(sse(SUMMARY_EVENTS)))
+    _reply, unstreamed_sent = await two_turns(
+        whole(SUMMARY_REPLY),
+        stream_transport=False,
+    )
+
+    streamed_message, unstreamed_message = (
+        sent_back(sent[1]) for sent in (streamed_sent, unstreamed_sent)
+    )
+    assert dumps(streamed_message["reasoning_details"]) == dumps(
+        unstreamed_message["reasoning_details"],
+    )
+    assert streamed_message["content"] == unstreamed_message["content"] == "Sunny."
+
+
+@pytest.mark.parametrize(
+    "first, stream_transport",
+    [
+        pytest.param(streamed(sse(ENCRYPTED_ONLY_EVENTS)), True, id="streamed"),
+        pytest.param(whole(ENCRYPTED_ONLY_REPLY), False, id="unstreamed"),
+    ],
+)
+async def test_reasoning_with_no_other_provider_field_is_sent_back(
+    first,
+    stream_transport,
+):
+    """An encrypted item alone, with no reasoning text beside it, still goes back."""
+    _reply, sent = await two_turns(first, stream_transport=stream_transport)
+
+    message = sent_back(sent[1])
+    assert dumps(message["reasoning_details"]) == dumps([ENCRYPTED])
+    assert message["content"] == "Sunny."
+    assert "reasoning_details" not in (message.get("provider_specific_fields") or {})
+
+
+@pytest.mark.parametrize(
+    "first, stream_transport",
+    [
+        pytest.param(streamed(sse(PLAIN_EVENTS)), True, id="streamed"),
+        pytest.param(whole(WHOLE), False, id="unstreamed"),
+    ],
+)
+async def test_a_reply_without_reasoning_goes_back_exactly_as_before(
+    first,
+    stream_transport,
+):
+    reply, sent = await two_turns(first, stream_transport=stream_transport)
+
+    message = reply.choices[0].message
+    assert uni_llm._history_message(message) == message.model_dump(warnings=False)
+    assert sent_back(sent[1]) == as_sent(message) == {
+        "role": "assistant",
+        "content": "Sunny.",
+    }
