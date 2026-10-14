@@ -778,7 +778,8 @@ async def test_a_message_goes_out_the_same_on_every_later_request(
         stateful=True,
         stream_transport=stream_transport,
     )
-    with provider(first, whole(WHOLE), whole(WHOLE)) as sent:
+    later = second(stream_transport), second(stream_transport)
+    with provider(first, *later) as sent:
         for text in (FIRST, SECOND, THIRD):
             await client.generate(user_message=text, tools=[copy.deepcopy(WEATHER_TOOL)])
 
