@@ -34,7 +34,7 @@ Issues = "https://github.com/unifyai/unillm/issues"
 # pre-commit both run. Keep them here (locked in uv.lock), not duplicated in the
 # pre-commit hook.
 lint = [
-    "black==26.5.1",
+    "black==26.10.1",
     "autoflake>=2.3.1",
 ]
 dev = [
