@@ -4,6 +4,7 @@ import asyncio
 import copy
 import inspect
 import logging
+import math
 import os
 
 from typing import (
@@ -26,6 +27,7 @@ import litellm
 litellm.suppress_debug_info = True
 
 # local
+from litellm.types.utils import Message as LiteLLMMessage, ModelResponseStream
 from openai._types import Headers
 from ..costs import compute_cost_from_response
 
@@ -352,30 +354,435 @@ def _canonical_model_for_accounting(model: str | None) -> str:
     return model
 
 
+# Message keys LiteLLM models itself. A whole reply's other keys are filed
+# under the message's ``provider_specific_fields``; a stream's deltas carry
+# them as plain attributes, which ``stream_chunk_builder`` ignores.
+_MESSAGE_FIELDS = frozenset(LiteLLMMessage.model_fields)
+
+
+def _joined_reasoning_details(pieces: list) -> list:
+    """Join a stream's ``reasoning_details`` pieces into a whole reply's items.
+
+    Pieces of one item share an ``index``: their ``text`` and ``summary`` are
+    concatenated in arrival order and every other key keeps its last value,
+    so an encrypted item, which arrives whole, is kept as it came. Items stay
+    in the order they first appeared.
+    """
+    items: list[dict] = []
+    by_index: dict[Any, dict] = {}
+    for piece in pieces:
+        index = piece.get("index")
+        item = by_index.get(index) if index is not None else None
+        if item is None:
+            item = dict(piece)
+            items.append(item)
+            if index is not None:
+                by_index[index] = item
+            continue
+        for key, value in piece.items():
+            if key in ("text", "summary") and isinstance(value, str):
+                item[key] = (item.get(key) or "") + value
+            elif value is not None:
+                item[key] = value
+    return items
+
+
+def _streamed_message_fields(chunks: list) -> dict:
+    """The message keys outside LiteLLM's model, joined from a stream's deltas.
+
+    *chunks* are what the provider's parser yielded (see ``_ParsedChunks``).
+    OpenRouter streams ``reasoning`` (and ``refusal``) as text in pieces and
+    ``reasoning_details`` as item pieces (see ``_joined_reasoning_details``).
+    """
+    fields: dict = {}
+    details: list = []
+    for chunk in chunks:
+        # The parser yields a ``GenericStreamingChunk`` dict for ``[DONE]``.
+        if not isinstance(chunk, ModelResponseStream) or not chunk.choices:
+            continue
+        for key, value in chunk.choices[0].delta.model_dump().items():
+            if key in _MESSAGE_FIELDS:
+                continue
+            if key == "reasoning_details":
+                details.extend(value or ())
+            elif isinstance(value, str) and isinstance(fields.get(key), str):
+                fields[key] += value
+            elif value is not None or key not in fields:
+                fields[key] = value
+    if details:
+        fields["reasoning_details"] = _joined_reasoning_details(details)
+    return fields
+
+
+class _ParsedChunks:
+    """A provider stream that keeps every chunk its parser yields.
+
+    It stands in for a ``CustomStreamWrapper``'s ``completion_stream``, which
+    the wrapper reads chunk by chunk. Whatever else the wrapper asks of that
+    stream (``aclose``, for one) is the stream's own.
+    """
+
+    def __init__(self, source: Any) -> None:
+        self.source = source
+        self.chunks: list = []
+        self._iterator: Any = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.source, name)
+
+    def __iter__(self) -> "_ParsedChunks":
+        return self
+
+    def __next__(self) -> Any:
+        chunk = next(self.source)
+        self.chunks.append(chunk)
+        return chunk
+
+    def __aiter__(self) -> "_ParsedChunks":
+        if self._iterator is None:
+            self._iterator = self.source.__aiter__()
+        return self
+
+    async def __anext__(self) -> Any:
+        chunk = await self._iterator.__anext__()
+        self.chunks.append(chunk)
+        return chunk
+
+
+def _record_parsed_chunks(stream: Any) -> _ParsedChunks:
+    """Have *stream* keep the chunks its provider's parser yields.
+
+    The wrapper passes on no delta it judges empty, such as one carrying only
+    ``reasoning_details``, and replaces the finish chunk's delta, so the
+    message keys outside LiteLLM's model are read from the parsed chunks. A
+    provider stream LiteLLM opens only once iteration starts (Bedrock, Vertex
+    AI) is not there to record yet, and is refused rather than read without
+    those keys.
+    """
+    if stream.completion_stream is None:
+        raise TypeError(
+            f"stream_transport cannot read {stream.custom_llm_provider} "
+            "streams: LiteLLM opens them lazily, so their parsed chunks "
+            "cannot be kept",
+        )
+    parsed = _ParsedChunks(stream.completion_stream)
+    stream.completion_stream = parsed
+    return parsed
+
+
+def _completion_from_stream(chunks: list, parsed: list) -> Any:
+    """Assemble a stream read to its end into the reply an unstreamed call returns.
+
+    *chunks* is the stream wrapper's own record (``CustomStreamWrapper.chunks``)
+    rather than what iteration yielded: it keeps the provider's usage chunk,
+    which iteration replaces with usage rebuilt from token counts. *parsed*
+    is every chunk the provider's parser yielded (``_record_parsed_chunks``).
+
+    ``stream_chunk_builder`` assembles content, tool calls and
+    ``reasoning_content``. What it drops is put back: the usage the provider
+    last reported, parsed as an unstreamed reply's is (OpenRouter's charged
+    ``cost``, cache read and write tokens, reasoning tokens), and the message
+    keys outside LiteLLM's model, under ``provider_specific_fields`` as for
+    an unstreamed reply.
+    """
+    completion = litellm.stream_chunk_builder(chunks)
+    usage = next(
+        (
+            chunk.usage
+            for chunk in reversed(chunks)
+            if getattr(chunk, "usage", None) is not None
+        ),
+        None,
+    )
+    if usage is not None:
+        completion.usage = usage
+    fields = _streamed_message_fields(parsed)
+    if fields:
+        message = completion.choices[0].message
+        message.provider_specific_fields = {
+            **(message.provider_specific_fields or {}),
+            **fields,
+        }
+    return completion
+
+
+def _history_message(message: Any) -> dict:
+    """The assistant message a stateful client keeps and sends on its next call.
+
+    LiteLLM files a reply's ``reasoning_details`` (an unstreamed reply's, and
+    a streamed one's as ``_completion_from_stream`` puts them back) under the
+    message's ``provider_specific_fields``, and sends that key as it is, where
+    no provider reads it. The list goes back at the top level instead, where
+    the provider that returned it reads it on the next request, so the model
+    continues its reasoning rather than starting it again: the same items in
+    the same order, encrypted ones included. A reply without reasoning
+    details is kept as before.
+    """
+    entry = message.model_dump(warnings=False)
+    fields = entry.get("provider_specific_fields")
+    if not isinstance(fields, dict) or not fields.get("reasoning_details"):
+        return entry
+    fields = dict(fields)
+    details = fields.pop("reasoning_details")
+    entry["provider_specific_fields"] = fields or None
+    if entry.get("reasoning_details") is None:
+        entry["reasoning_details"] = details
+    return entry
+
+
+# The longest one streamed attempt may take, from opening the call to its
+# last chunk. An unstreamed call ends once its connection has been quiet for
+# httpx's read timeout, but a stream is never quiet while the provider sends
+# keep-alive comments (OpenRouter's ``: OPENROUTER PROCESSING``), which
+# LiteLLM does not pass on as chunks, so a stuck provider could otherwise
+# hold a call open indefinitely. Completed calls take well under a minute.
+STREAM_CALL_DEADLINE_S = 900.0
+
+# How long a streamed attempt may go without receiving a single byte before
+# it is aborted and retried under the transient retry policy. Every byte read
+# from the connection counts, keep-alive comments included, so a provider that
+# is still working (and says so with ``: OPENROUTER PROCESSING``) is never
+# cut; only a connection on which nothing at all arrives is. Read from the
+# environment on every call, as seconds; ``0`` or ``off`` turns it off.
+STREAM_IDLE_ENV = "UNILLM_STREAM_IDLE_S"
+STREAM_IDLE_DEFAULT_S = 120.0
+# The longest pause between two looks at the byte count.
+_STREAM_IDLE_TICK_S = 1.0
+
+
+def _stream_idle_s() -> float | None:
+    """The silence, in seconds, after which a streamed attempt is aborted.
+
+    ``None`` when it is turned off. A value that is not a number of seconds
+    is refused, naming the variable, rather than read as something else.
+    """
+    raw = (os.environ.get(STREAM_IDLE_ENV) or "").strip().lower()
+    if not raw:
+        return STREAM_IDLE_DEFAULT_S
+    if raw == "off":
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        value = float("nan")
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(
+            f"{STREAM_IDLE_ENV} must be a number of seconds (0 or 'off' turns "
+            f"it off), not {raw!r}",
+        )
+    return value or None
+
+
+class _StreamDeadlineExpired(Exception):
+    """A streamed attempt ran past ``STREAM_CALL_DEADLINE_S``.
+
+    It is not a provider error, so the transient retry policy passes it
+    through untouched and ``_acompletion_with_transient_retry`` retries it.
+    """
+
+
+class _StreamWentSilent(Exception):
+    """No byte of a streamed attempt arrived for ``UNILLM_STREAM_IDLE_S``."""
+
+
+class _Wire:
+    """What a streamed attempt has received so far, counted in bytes.
+
+    Before the provider answers, nothing has arrived. Once it has, the count
+    is the HTTP response's own (``httpx.Response.num_bytes_downloaded``):
+    every byte read from the connection, whether or not the provider's
+    parser makes a chunk of it. A provider stream that does not expose its
+    HTTP response cannot be watched, and is never aborted for silence.
+    """
+
+    def __init__(self) -> None:
+        self.opened = False
+        self.response: Any = None
+
+    def open(self, stream: Any) -> None:
+        response = getattr(
+            getattr(stream, "completion_stream", None), "http_response", None
+        )
+        if isinstance(getattr(response, "num_bytes_downloaded", None), int):
+            self.response = response
+        self.opened = True
+
+    @property
+    def watched(self) -> bool:
+        return not self.opened or self.response is not None
+
+    def mark(self) -> tuple[bool, int]:
+        if self.response is None:
+            return (self.opened, 0)
+        return (self.opened, self.response.num_bytes_downloaded)
+
+
+async def _read_unless_silent(read: Any, wire: _Wire, idle_s: float | None) -> Any:
+    """Await *read*, a streamed attempt, unless *wire* stays silent for *idle_s*.
+
+    Raises ``_StreamWentSilent`` (after cancelling *read*) when no byte has
+    arrived for *idle_s* seconds, counted from the request being sent.
+    """
+    task = asyncio.ensure_future(read)
+    if idle_s is None:
+        return await task
+    loop = asyncio.get_running_loop()
+    tick = min(_STREAM_IDLE_TICK_S, idle_s / 4)
+    seen, last = wire.mark(), loop.time()
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=tick)
+            if done:
+                return task.result()
+            now, mark = loop.time(), wire.mark()
+            if mark != seen:
+                seen, last = mark, now
+            elif wire.watched and now - last >= idle_s:
+                raise _StreamWentSilent(
+                    f"no byte arrived for {now - last:.1f} s "
+                    + (
+                        f"after {mark[1]} bytes of the stream"
+                        if mark[0]
+                        else "after the request was sent"
+                    ),
+                )
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+async def _close_streams(opened: list, why: str) -> None:
+    """Close each opened stream, each close bounded to 10 s; a close that
+    fails is logged and never replaces why the attempt ended."""
+    for response in opened:
+        try:
+            await asyncio.wait_for(response.aclose(), 10)
+        except Exception as e:  # noqa: BLE001
+            _LOGGER.warning(f"closing a stream {why} failed: {e!r}")
+
+
 async def _acompletion_with_transient_retry(
     *,
     shared_session: Any,
     client: Any,
     **kw: Any,
 ) -> Any:
-    """Call ``litellm.acompletion`` with UniLLM's transient retry policy."""
+    """Call ``litellm.acompletion`` with UniLLM's transient retry policy.
+
+    A streamed call (``stream=True``) is read to its end inside the attempt
+    and returned as one completion, so a stream that fails part-way, from an
+    error the provider sends in it or a dropped connection, is retried as a
+    call that failed outright is. As for any failed attempt, what the
+    provider charged for it never reaches unillm; a proxy metering the
+    connection still records it.
+
+    LiteLLM raises a failure part-way through a stream as a
+    ``MidStreamFallbackError`` for its router's fallbacks, which unillm does
+    not use. The error it wraps is the one the same failure raises for an
+    unstreamed call, so that is what is raised.
+
+    A streamed attempt has ``STREAM_CALL_DEADLINE_S`` to open and finish.
+    One past it is aborted and tried once more, outside the transient policy,
+    which would retry a timeout up to UNILLM_TRANSIENT_RETRY_COUNT times and
+    so hold a stuck call for that many deadlines. A second expiry raises
+    ``litellm.exceptions.Timeout``, the error an unstreamed call's read
+    timeout raises.
+
+    Within that, a streamed attempt on which no byte arrives for
+    ``UNILLM_STREAM_IDLE_S`` seconds (see ``_stream_idle_s``) is aborted: its
+    stream is closed, the abort is logged, and it fails with
+    ``litellm.exceptions.Timeout``, which the transient policy retries as it
+    retries any timeout. Keep-alive comments are bytes, so a provider that
+    keeps sending them is never aborted for silence. What the provider bills
+    for the aborted attempt never reaches unillm, as for any failed attempt.
+    """
     from ..helpers import retry_transient_llm_async
 
-    async def _call() -> Any:
-        return await litellm.acompletion(
+    async def _open_and_read(opened: list, wire: _Wire | None = None) -> Any:
+        response = await litellm.acompletion(
             shared_session=shared_session,
             client=client,
             **kw,
         )
+        if not kw.get("stream"):
+            return response
+        opened.append(response)
+        if wire is not None:
+            wire.open(response)
+        parsed = _record_parsed_chunks(response)
+        try:
+            async for _ in response:
+                pass
+        except litellm.exceptions.MidStreamFallbackError as e:
+            raise e.original_exception from e
+        return _completion_from_stream(response.chunks, parsed.chunks)
 
-    return await retry_transient_llm_async(_call)
+    async def _call() -> Any:
+        if not kw.get("stream"):
+            return await _open_and_read([])
+        opened: list = []
+        wire = _Wire()
+        idle_s = _stream_idle_s()
+        try:
+            return await asyncio.wait_for(
+                _read_unless_silent(_open_and_read(opened, wire), wire, idle_s),
+                STREAM_CALL_DEADLINE_S,
+            )
+        except asyncio.TimeoutError:
+            # Closing is bounded and never replaces the expiry: a close that
+            # raised would otherwise skip the one-more-try rule below.
+            await _close_streams(opened, "past its deadline")
+            raise _StreamDeadlineExpired(
+                f"the stream did not finish within {STREAM_CALL_DEADLINE_S:g} s",
+            ) from None
+        except _StreamWentSilent as e:
+            await _close_streams(opened, "gone silent")
+            _LOGGER.warning(f"streamed call aborted, {e} (limit {idle_s:g} s)")
+            raise litellm.exceptions.Timeout(
+                message=f"the stream went silent: {e}",
+                model=kw.get("model"),
+                llm_provider="",
+            ) from None
+
+    try:
+        return await retry_transient_llm_async(_call)
+    except _StreamDeadlineExpired as e:
+        _LOGGER.warning(f"trying once more: {e}")
+    try:
+        return await retry_transient_llm_async(_call)
+    except _StreamDeadlineExpired as e:
+        raise litellm.exceptions.Timeout(
+            message=str(e),
+            model=kw.get("model"),
+            llm_provider="",
+        ) from e
 
 
 def _completion_with_transient_retry(**kw: Any) -> Any:
-    """Call ``litellm.completion`` with UniLLM's transient retry policy."""
+    """Call ``litellm.completion`` with UniLLM's transient retry policy.
+
+    A streamed call is read and assembled inside the attempt, as in
+    ``_acompletion_with_transient_retry``. It has no deadline: a blocking
+    read cannot be bounded from the thread doing it, and the keep-alive
+    comments that keep a stuck stream open are not chunks a check between
+    chunks would see. The async client has one.
+    """
     from ..helpers import retry_transient_llm_sync
 
-    return retry_transient_llm_sync(lambda: litellm.completion(**kw))
+    def _call() -> Any:
+        response = litellm.completion(**kw)
+        if not kw.get("stream"):
+            return response
+        parsed = _record_parsed_chunks(response)
+        try:
+            for _ in response:
+                pass
+        except litellm.exceptions.MidStreamFallbackError as e:
+            raise e.original_exception from e
+        return _completion_from_stream(response.chunks, parsed.chunks)
+
+    return retry_transient_llm_sync(_call)
 
 
 def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
@@ -655,6 +1062,7 @@ class _UniClient(_Client, abc.ABC):
         prompt_caching: Optional[PromptCacheParam] = UNSET,  # type: ignore[assignment]
         cache_affinity: Optional[str] = None,
         origin: Optional[str] = None,
+        stream_transport: bool = False,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         **kwargs,
@@ -787,6 +1195,14 @@ class _UniClient(_Client, abc.ABC):
             agents or subsystems share the same process and you need to tell
             their logs apart (e.g. ``"AgentA"``, ``"planner"``).
 
+            stream_transport: If True, a request that returns one completion
+            (stream=False) is sent as a stream, read to its end and reassembled
+            into the completion the same request returns unstreamed. Bytes then
+            arrive while the model is still generating, so a long call does not
+            look idle to a proxy or host that judges a connection by its
+            traffic. Caching, retries, cost accounting and postprocessing are
+            unchanged. Defaults to False.
+
             extra_headers: Additional "passthrough" headers for the request which are
             provider-specific, and are not part of the OpenAI standard. They are handled
             by the provider-specific API.
@@ -829,6 +1245,7 @@ class _UniClient(_Client, abc.ABC):
             prompt_caching=None if prompt_caching is UNSET else prompt_caching,
             cache_affinity=cache_affinity,
             origin=origin,
+            stream_transport=stream_transport,
             # passthrough arguments
             extra_headers=extra_headers,
             **kwargs,
@@ -893,6 +1310,21 @@ class _UniClient(_Client, abc.ABC):
             stream_options=stream_options,
         )
         return {k: v for k, v in kw.items() if v is not None}
+
+    def _single_completion_kw(self, transport_kw: dict) -> dict:
+        """The arguments a request for one completion is sent with.
+
+        With ``stream_transport`` it goes out as a stream that reports usage
+        at its end, and the retry wrapper reads it whole and reassembles the
+        completion, so nothing after the call can tell the difference.
+        """
+        if not self._stream_transport:
+            return transport_kw
+        return {
+            **transport_kw,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
 
     # Representation #
     # ---------------#
@@ -1076,7 +1508,7 @@ class _UniClient(_Client, abc.ABC):
                     # Always store full message (preserves thinking blocks for Claude, etc.)
                     self._messages.insert(
                         placeholder_idx,
-                        res.choices[0].message.model_dump(warnings=False),
+                        _history_message(res.choices[0].message),
                     )
                 elif self._messages:
                     self._messages.clear()
@@ -1092,7 +1524,7 @@ class _UniClient(_Client, abc.ABC):
         # ---------- non-streaming path ----------
         if stateful:
             # Always store full message (preserves thinking blocks for Claude, etc.)
-            assistant_dict = response.choices[0].message.model_dump(warnings=False)
+            assistant_dict = _history_message(response.choices[0].message)
             self._append_to_history(assistant_dict)
         elif self._messages:
             self._messages.clear()
@@ -1476,7 +1908,7 @@ class Unify(_UniClient):
                 origin=origin,
             ):
                 completion = _completion_with_transient_retry(
-                    **transport_kw,
+                    **self._single_completion_kw(transport_kw),
                 )
                 _normalize_assistant_message_content(completion)
         finally:
@@ -1616,7 +2048,7 @@ class Unify(_UniClient):
                 if chat_completion is None:
                     try:
                         chat_completion = _completion_with_transient_retry(
-                            **transport_kw,
+                            **self._single_completion_kw(transport_kw),
                         )
                         _normalize_assistant_message_content(chat_completion)
                     except litellm.exceptions.APIError as e:
@@ -2029,7 +2461,7 @@ class AsyncUnify(_UniClient):
                 completion = await _acompletion_with_transient_retry(
                     shared_session=get_shared_session(),
                     client=self._get_async_http_client(),
-                    **transport_kw,
+                    **self._single_completion_kw(transport_kw),
                 )
                 _normalize_assistant_message_content(completion)
         finally:
@@ -2174,7 +2606,7 @@ class AsyncUnify(_UniClient):
                         _acompletion_with_transient_retry(
                             shared_session=get_shared_session(),
                             client=self._get_async_http_client(),
-                            **transport_kw,
+                            **self._single_completion_kw(transport_kw),
                         ),
                         name="llm_call",
                     )

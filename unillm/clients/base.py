@@ -57,6 +57,7 @@ class _Client(ABC):
         prompt_caching: PromptCacheParam,
         cache_affinity: Optional[str],
         origin: Optional[str],
+        stream_transport: bool,
         # passthrough arguments
         extra_headers: Optional[Headers],
         **kwargs,
@@ -93,6 +94,7 @@ class _Client(ABC):
         self._prompt_caching = None
         self._cache_affinity = None
         self._origin = None
+        self._stream_transport = None
         self._on_log_file = None
         self._on_log_file_pending = None
         self._extra_headers = None
@@ -135,6 +137,7 @@ class _Client(ABC):
         self.set_prompt_caching(prompt_caching)
         self.set_cache_affinity(cache_affinity)
         self.set_origin(origin)
+        self.set_stream_transport(stream_transport)
         # passthrough arguments
         self.set_extra_headers(extra_headers)
 
@@ -437,6 +440,16 @@ class _Client(ABC):
             The origin string, or None.
         """
         return self._origin
+
+    @property
+    def stream_transport(self) -> bool:
+        """
+        Get whether single-completion requests are sent as streams.
+
+        Returns:
+            True if they are streamed and reassembled, False otherwise.
+        """
+        return self._stream_transport
 
     @property
     def extra_headers(self) -> Optional[Headers]:
@@ -878,6 +891,25 @@ class _Client(ABC):
         self._origin = value
         return self
 
+    def set_stream_transport(self, value: bool) -> Self:
+        """
+        Set whether single-completion requests are sent as streams.
+
+        A streamed request is read to its end and reassembled into the
+        completion the same request returns unstreamed, so callers see no
+        difference. Its bytes arrive while the model is still generating,
+        which keeps a long call from looking idle to a proxy or host that
+        judges a connection by its traffic.
+
+        Args:
+            value: True to stream single-completion requests.
+
+        Returns:
+            This client, useful for chaining inplace calls.
+        """
+        self._stream_transport = value
+        return self
+
     def set_on_log_file(self, callback: Optional[Callable[[Path], None]]) -> Self:
         """
         Set a callback invoked with the finalized log file path after each LLM call.
@@ -1196,6 +1228,7 @@ class _Client(ABC):
                         cache=self._cache,
                         prompt_caching=self._prompt_caching,
                         cache_affinity=self._cache_affinity,
+                        stream_transport=self._stream_transport,
                         # passthrough arguments
                         extra_headers=self._extra_headers,
                     ),
@@ -1238,6 +1271,7 @@ class _Client(ABC):
                     cache=self._cache,
                     prompt_caching=self._prompt_caching,
                     cache_affinity=self._cache_affinity,
+                    stream_transport=self._stream_transport,
                     # passthrough arguments
                     extra_headers=self._extra_headers,
                 ),
