@@ -1,5 +1,8 @@
 """Tests for LLM event hooks."""
 
+import copy
+import json
+
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -474,6 +477,197 @@ class TestLLMEventEmissionMocked:
         assert "model" in event.request
         assert "messages" in event.request
         assert event.request.get("temperature") == 0.7
+
+
+class TestLLMEventRequestCredentials:
+    """``LLMEvent.request`` is persisted by its consumers, so it never holds a
+    credential, while the request sent to the provider keeps every one."""
+
+    FAKE_KEY = "fake-provider-key-not-real"  # pragma: allowlist secret
+    # Shaped like real keys so the value-pattern redaction is exercised.
+    OPENROUTER_SHAPED = "sk-or-v1-" + "0123456789abcdef" * 4
+    ANTHROPIC_SHAPED = "sk-ant-api03-" + "AbCdEfGhIjKlMnOpQrSt" * 3
+    GOOGLE_SHAPED = "AIza" + "SyAbCdEfGhIjKlMnOpQrStUvWxYz0123456"
+
+    @pytest.fixture(autouse=True)
+    def mock_logging(self):
+        """Mock logging functions to prevent log file creation in mocked tests."""
+        with patch("unillm.clients.uni_llm.write_request_pending", return_value=None):
+            with patch("unillm.clients.uni_llm.append_response_and_finalize"):
+                yield
+
+    @pytest.fixture(autouse=True)
+    def clear_hook(self):
+        set_llm_event_hook(None)
+        yield
+        set_llm_event_hook(None)
+
+    @pytest.fixture
+    def fake_openrouter_key(self, monkeypatch):
+        from pydantic import SecretStr
+
+        from unillm.settings import SETTINGS
+
+        monkeypatch.delenv("UNILLM_LLM_GATEWAY_URL", raising=False)
+        monkeypatch.delenv("UNILLM_LLM_GATEWAY_KEY", raising=False)
+        monkeypatch.setattr(SETTINGS, "OPENROUTER_API_KEY", SecretStr(self.FAKE_KEY))
+
+    @staticmethod
+    def _mock_response():
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "Hello"
+        response.model_dump.return_value = {"id": "test", "choices": []}
+        return response
+
+    def _generate_sync(self, client):
+        captured = []
+        completion = MagicMock(return_value=self._mock_response())
+        with patch("unillm.clients.uni_llm.litellm.completion", completion):
+            with patch("unillm.clients.uni_llm._get_cache", return_value=(None, None)):
+                with patch("unillm.clients.uni_llm._write_to_cache"):
+                    with patch(
+                        "unillm.clients.uni_llm.compute_cost_from_response",
+                        return_value=0.001,
+                    ):
+                        with llm_event_hook_scope(captured.append):
+                            client.generate(
+                                messages=[{"role": "user", "content": "Hi"}],
+                            )
+        assert completion.call_count == 1
+        assert len(captured) == 1
+        return completion.call_args.kwargs, captured[0].request
+
+    def test_event_copy_redacts_credentials_everywhere(self):
+        from unillm.clients.uni_llm import _request_kw_for_event
+
+        kw = {
+            "model": "openrouter/openai/gpt-4o",
+            "api_key": self.FAKE_KEY,
+            "anthropic_api_key": self.FAKE_KEY,
+            "api_base": f"https://user:{self.FAKE_KEY}@gateway.example/v1",
+            "extra_headers": {
+                "AUTHORIZATION": f"Bearer {self.FAKE_KEY}",
+                "Proxy-Authorization": f"Basic {self.FAKE_KEY}",
+                "X-Api-Key": self.FAKE_KEY,
+                "api-key": self.FAKE_KEY,
+                "Cookie": f"session={self.FAKE_KEY}",
+                "anthropic-beta": "prompt-caching-2024-07-31",
+            },
+            "extra_body": {
+                "routes": [{"headers": {"authorization": self.FAKE_KEY}}],
+                "notes": f"keys {self.OPENROUTER_SHAPED} and {self.GOOGLE_SHAPED}",
+            },
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": f"use {self.ANTHROPIC_SHAPED}"},
+                    ],
+                },
+            ],
+        }
+        original = copy.deepcopy(kw)
+
+        event_request = _request_kw_for_event(kw, "openrouter/openai/gpt-4o")
+
+        serialized = json.dumps(event_request)
+        for secret in (
+            self.FAKE_KEY,
+            self.OPENROUTER_SHAPED,
+            self.ANTHROPIC_SHAPED,
+            self.GOOGLE_SHAPED,
+        ):
+            assert secret not in serialized
+        assert event_request["api_key"] == "[REDACTED]"
+        assert event_request["api_base"] == "https://[REDACTED]@gateway.example/v1"
+        assert event_request["extra_headers"]["AUTHORIZATION"] == "[REDACTED]"
+        assert event_request["extra_headers"]["anthropic-beta"] == (
+            "prompt-caching-2024-07-31"
+        )
+        assert event_request["messages"][0]["content"][0]["text"] == "use [REDACTED]"
+        # The request that is sent keeps every credential, nested ones included.
+        assert kw == original
+
+    def test_ordinary_values_are_left_alone(self):
+        from unillm.clients.uni_llm import _request_kw_for_event
+
+        kw = {
+            "model": "openrouter/openai/gpt-4o",
+            "api_key": None,
+            "api_base": "https://openrouter.ai/api/v1",
+            "messages": [
+                {"role": "user", "content": "Is sk-learn-compatible-estimator ok?"},
+            ],
+        }
+
+        assert _request_kw_for_event(kw, "openrouter/openai/gpt-4o") == kw
+
+    def test_sync_event_omits_provider_key_and_caller_auth_header(
+        self,
+        fake_openrouter_key,
+    ):
+        client = unillm.Unify(
+            "openai/gpt-4o@openrouter",
+            cache=True,
+            extra_headers={"Authorization": f"Bearer {self.FAKE_KEY}"},
+        )
+
+        sent, event_request = self._generate_sync(client)
+
+        assert sent["api_key"] == self.FAKE_KEY
+        assert sent["extra_headers"]["Authorization"] == f"Bearer {self.FAKE_KEY}"
+        assert self.FAKE_KEY not in json.dumps(event_request)
+        assert event_request["api_key"] == "[REDACTED]"
+        assert event_request["extra_headers"]["Authorization"] == "[REDACTED]"
+
+    def test_sync_event_omits_gateway_key_and_url_userinfo(self, monkeypatch):
+        gateway = f"https://harness:{self.FAKE_KEY}@gateway.example/v0/llm"
+        monkeypatch.setenv("UNILLM_LLM_GATEWAY_URL", gateway)
+        monkeypatch.setenv("UNILLM_LLM_GATEWAY_KEY", self.FAKE_KEY)
+        client = unillm.Unify("openai/gpt-4o@openrouter", cache=True)
+
+        sent, event_request = self._generate_sync(client)
+
+        assert sent["api_key"] == self.FAKE_KEY
+        assert sent["api_base"] == gateway
+        assert self.FAKE_KEY not in json.dumps(event_request)
+        assert event_request["api_base"] == (
+            "https://[REDACTED]@gateway.example/v0/llm"
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_event_omits_provider_key(self, fake_openrouter_key):
+        sent = {}
+
+        async def acompletion(**kwargs):
+            sent.update(kwargs)
+            return self._mock_response()
+
+        captured = []
+        with patch(
+            "unillm.clients.uni_llm.litellm.acompletion",
+            side_effect=acompletion,
+        ):
+            with patch("unillm.clients.uni_llm._get_cache", return_value=(None, None)):
+                with patch("unillm.clients.uni_llm._write_to_cache"):
+                    with patch(
+                        "unillm.clients.uni_llm.compute_cost_from_response",
+                        return_value=0.001,
+                    ):
+                        client = unillm.AsyncUnify(
+                            "openai/gpt-4o@openrouter",
+                            cache=True,
+                        )
+                        async with allm_event_hook_scope(captured.append):
+                            await client.generate(
+                                messages=[{"role": "user", "content": "Hi"}],
+                            )
+
+        assert sent["api_key"] == self.FAKE_KEY
+        assert len(captured) == 1
+        assert self.FAKE_KEY not in json.dumps(captured[0].request)
+        assert captured[0].request["api_key"] == "[REDACTED]"
 
 
 class TestStreamingLLMEvents:
