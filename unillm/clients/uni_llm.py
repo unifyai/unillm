@@ -600,7 +600,9 @@ class _Wire:
         self.response: Any = None
 
     def open(self, stream: Any) -> None:
-        response = getattr(getattr(stream, "completion_stream", None), "http_response", None)
+        response = getattr(
+            getattr(stream, "completion_stream", None), "http_response", None
+        )
         if isinstance(getattr(response, "num_bytes_downloaded", None), int):
             self.response = response
         self.opened = True

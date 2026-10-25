@@ -541,7 +541,13 @@ async def test_with_the_limit_off_only_the_deadline_ends_a_silent_stream(
 def test_the_limit_is_read_from_the_environment(monkeypatch):
     monkeypatch.delenv(uni_llm.STREAM_IDLE_ENV, raising=False)
     assert uni_llm._stream_idle_s() == uni_llm.STREAM_IDLE_DEFAULT_S == 120.0
-    for raw, value in [("90", 90.0), (" 0.5 ", 0.5), ("0", None), ("OFF", None), ("", 120.0)]:
+    for raw, value in [
+        ("90", 90.0),
+        (" 0.5 ", 0.5),
+        ("0", None),
+        ("OFF", None),
+        ("", 120.0),
+    ]:
         monkeypatch.setenv(uni_llm.STREAM_IDLE_ENV, raw)
         assert uni_llm._stream_idle_s() == value
     for raw in ["-1", "soon", "nan", "inf"]:
@@ -651,7 +657,9 @@ TWO_TURNS_WITH_REASONING = [
         EVENTS_ITEMS,
         id="streamed-encrypted-at-finish",
     ),
-    pytest.param(streamed(sse(SUMMARY_EVENTS)), True, SUMMARY_ITEMS, id="streamed-summary"),
+    pytest.param(
+        streamed(sse(SUMMARY_EVENTS)), True, SUMMARY_ITEMS, id="streamed-summary"
+    ),
     pytest.param(whole(SUMMARY_REPLY), False, SUMMARY_ITEMS, id="unstreamed-summary"),
 ]
 
@@ -748,10 +756,14 @@ async def test_a_reply_without_reasoning_goes_back_exactly_as_before(
 
     message = reply.choices[0].message
     assert uni_llm._history_message(message) == message.model_dump(warnings=False)
-    assert sent_back(sent[1]) == as_sent(message) == {
-        "role": "assistant",
-        "content": "Sunny.",
-    }
+    assert (
+        sent_back(sent[1])
+        == as_sent(message)
+        == {
+            "role": "assistant",
+            "content": "Sunny.",
+        }
+    )
 
 
 THIRD = "And the day after?"
@@ -781,10 +793,13 @@ async def test_a_message_goes_out_the_same_on_every_later_request(
     later = second(stream_transport), second(stream_transport)
     with provider(first, *later) as sent:
         for text in (FIRST, SECOND, THIRD):
-            await client.generate(user_message=text, tools=[copy.deepcopy(WEATHER_TOOL)])
+            await client.generate(
+                user_message=text, tools=[copy.deepcopy(WEATHER_TOOL)]
+            )
 
     on_second, on_third = (
-        [m for m in body["messages"] if m["role"] == "assistant"][0] for body in sent[1:]
+        [m for m in body["messages"] if m["role"] == "assistant"][0]
+        for body in sent[1:]
     )
     assert dumps(on_third, sort_keys=True) == dumps(on_second, sort_keys=True)
     assert body_prefix(sent[2], len(sent[1]["messages"]) - 1) == body_prefix(
