@@ -543,7 +543,7 @@ def place_cache_breakpoints(
     """Give a Claude request body posted outside a client the breakpoints a
     client would send.
 
-    String content becomes a text block first: OpenRouter honours a
+    String content becomes a text block first: OpenRouter honors a
     breakpoint only on a content block, and a client's transport makes the
     same change on its way out. Mutates *body*, whose messages must be its
     own.

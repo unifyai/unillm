@@ -200,7 +200,7 @@ def test_static_system_blocks_end_where_the_first_dynamic_one_begins():
 
 
 def test_a_body_posted_outside_a_client_gets_its_breakpoints_on_blocks():
-    """OpenRouter honours a breakpoint only on a content block."""
+    """OpenRouter honors a breakpoint only on a content block."""
     tools = [copy.deepcopy(WEATHER_TOOL)]
     body = {
         "model": "anthropic/claude-opus-5.5",
