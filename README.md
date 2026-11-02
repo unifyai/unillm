@@ -127,8 +127,11 @@ client = unillm.Unify("anthropic/claude-opus-5.5@openrouter")
 client.generate(messages=messages)
 ```
 
-Anthropic accepts four breakpoints per request; when the caller's marks would
-exceed that, the earliest of them are dropped. A system block marked
+A block that already carries a `cache_control` of its own counts as a mark
+too. Every breakpoint gets the one-hour TTL, since Anthropic rejects a one-hour
+breakpoint after a five-minute one. Anthropic accepts four breakpoints per
+request; when the caller's marks would exceed that, the earliest of them are
+dropped. A system block marked
 `"_static": False` (a clock, say) ends the cached system prefix before it.
 `prompt_caching=["system"]` places only the listed defaults, and
 `prompt_caching=None` sends no breakpoints at all. Breakpoints are left out of
