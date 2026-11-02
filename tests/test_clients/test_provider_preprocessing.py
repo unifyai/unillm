@@ -10,7 +10,7 @@ from unillm.clients.provider_preprocessing import (
     COMPLETED_TOOL_CONTEXT_HEADER,
     THINKING_COMPLIANCE_CONTEXT_HEADER,
     THINKING_COMPLIANCE_CONTEXT_FOOTER,
-    _apply_anthropic_caching,
+    place_cache_breakpoints,
     _apply_thinking_compliance,
     _transform_tool_calls_to_context,
     apply_provider_preprocessing,
@@ -34,7 +34,7 @@ class TestApplyAnthropicCachingSystemMessage:
                 },
             ],
         }
-        _apply_anthropic_caching(kw, ["system"])
+        place_cache_breakpoints(kw, ["system"])
 
         content = kw["messages"][0]["content"]
         assert "cache_control" not in content[0]
@@ -57,7 +57,7 @@ class TestApplyAnthropicCachingSystemMessage:
                 },
             ],
         }
-        _apply_anthropic_caching(kw, ["system"])
+        place_cache_breakpoints(kw, ["system"])
 
         content = kw["messages"][0]["content"]
         assert "cache_control" not in content[0]
@@ -80,7 +80,7 @@ class TestApplyAnthropicCachingSystemMessage:
                 },
             ],
         }
-        _apply_anthropic_caching(kw, ["system"])
+        place_cache_breakpoints(kw, ["system"])
 
         content = kw["messages"][0]["content"]
         assert "cache_control" not in content[0]
@@ -102,7 +102,7 @@ class TestApplyAnthropicCachingSystemMessage:
                 },
             ],
         }
-        _apply_anthropic_caching(kw, ["system"])
+        place_cache_breakpoints(kw, ["system"])
 
         content = kw["messages"][0]["content"]
         assert "cache_control" not in content[0]
@@ -123,7 +123,7 @@ class TestApplyAnthropicCachingSystemMessage:
                 },
             ],
         }
-        _apply_anthropic_caching(kw, ["system"])
+        place_cache_breakpoints(kw, ["system"])
 
         content = kw["messages"][0]["content"]
         assert "cache_control" not in content[0]
@@ -141,7 +141,7 @@ class TestApplyAnthropicCachingSystemMessage:
                 },
             ],
         }
-        _apply_anthropic_caching(kw, ["system"])
+        place_cache_breakpoints(kw, ["system"])
 
         content = kw["messages"][0]["content"]
         assert content[0]["cache_control"] == CACHE_CONTROL
@@ -158,7 +158,7 @@ class TestApplyAnthropicCachingSystemMessage:
                 },
             ],
         }
-        _apply_anthropic_caching(kw, ["system"])
+        place_cache_breakpoints(kw, ["system"])
 
         content = kw["messages"][0]["content"]
         assert "cache_control" not in content[0]
@@ -173,7 +173,7 @@ class TestApplyAnthropicCachingSystemMessage:
                 },
             ],
         }
-        _apply_anthropic_caching(kw, ["system"])
+        place_cache_breakpoints(kw, ["system"])
 
         msg = kw["messages"][0]
         assert msg["cache_control"] == CACHE_CONTROL
@@ -188,7 +188,7 @@ class TestApplyAnthropicCachingSystemMessage:
                 },
             ],
         }
-        _apply_anthropic_caching(kw, ["system"])
+        place_cache_breakpoints(kw, ["system"])
 
         msg = kw["messages"][0]
         # Falls through to string case since list is empty
@@ -404,7 +404,7 @@ class TestApplyAnthropicCachingTools:
             ],
             "messages": [],
         }
-        _apply_anthropic_caching(kw, ["tools"])
+        place_cache_breakpoints(kw, ["tools"])
 
         assert "cache_control" not in kw["tools"][0]
         assert kw["tools"][1]["cache_control"] == CACHE_CONTROL
@@ -423,7 +423,7 @@ class TestApplyAnthropicCachingTools:
             {"name": "tool2", "description": "Second tool"},
         ]
         kw = {"tools": tools, "messages": []}
-        _apply_anthropic_caching(kw, ["tools"])
+        place_cache_breakpoints(kw, ["tools"])
 
         assert kw["tools"][-1]["cache_control"] == CACHE_CONTROL
         assert all("cache_control" not in tool for tool in tools)
@@ -431,7 +431,7 @@ class TestApplyAnthropicCachingTools:
     def test_empty_tools_no_error(self):
         """Empty tools list doesn't cause errors."""
         kw = {"tools": [], "messages": []}
-        _apply_anthropic_caching(kw, ["tools"])
+        place_cache_breakpoints(kw, ["tools"])
         # No assertion needed, just verify no error
 
 
@@ -451,7 +451,7 @@ class TestApplyAnthropicCachingUserMessages:
                 },
             ],
         }
-        _apply_anthropic_caching(kw, ["messages"])
+        place_cache_breakpoints(kw, ["messages"])
 
         content = kw["messages"][0]["content"]
         assert "cache_control" not in content[0]
@@ -467,7 +467,7 @@ class TestApplyAnthropicCachingUserMessages:
                 },
             ],
         }
-        _apply_anthropic_caching(kw, ["messages"])
+        place_cache_breakpoints(kw, ["messages"])
 
         msg = kw["messages"][0]
         assert msg["cache_control"] == CACHE_CONTROL
@@ -490,7 +490,7 @@ class TestApplyAnthropicCachingMultipleLocations:
                 },
             ],
         }
-        _apply_anthropic_caching(kw, ["system", "messages"])
+        place_cache_breakpoints(kw, ["system", "messages"])
 
         assert kw["messages"][0]["cache_control"] == CACHE_CONTROL
         assert kw["messages"][1]["cache_control"] == CACHE_CONTROL
@@ -498,7 +498,7 @@ class TestApplyAnthropicCachingMultipleLocations:
     def test_no_messages_no_error(self):
         """Missing messages doesn't cause errors."""
         kw = {}
-        _apply_anthropic_caching(kw, ["system", "messages"])
+        place_cache_breakpoints(kw, ["system", "messages"])
         # No assertion needed, just verify no error
 
 
@@ -552,7 +552,7 @@ class TestApplyAnthropicCachingMultipleSystemMessages:
                 {"role": "user", "content": "hello"},
             ],
         }
-        _apply_anthropic_caching(kw, ["system"])
+        place_cache_breakpoints(kw, ["system"])
 
         # The breakpoint must be on the static block in the first system message
         first_sys_content = kw["messages"][0]["content"]

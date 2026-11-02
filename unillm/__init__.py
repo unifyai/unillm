@@ -8,6 +8,7 @@ logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
 from .clients.uni_llm import Unify, AsyncUnify
 from .clients.provider_postprocessing import ModelRefusalError
+from .clients.provider_preprocessing import place_cache_breakpoints
 from .clients.completion_mutator import (
     CompletionMutator,
     CompletionMutatorContext,

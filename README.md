@@ -135,6 +135,9 @@ exceed that, the earliest of them are dropped. A system block marked
 the response cache key, so a recorded response serves a request whatever its
 breakpoints.
 
+A caller that posts a Claude request body itself, outside a client, gives
+it the same breakpoints with `unillm.place_cache_breakpoints(body)`.
+
 Calls that share a prefix and start at the same moment each write it and read
 none of it: send the first alone, and start the rest once its reply has begun. Each completion's
 `usage.prompt_tokens_details.cached_tokens` says how much was read from cache.

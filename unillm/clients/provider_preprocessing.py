@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .response_format import (
     ensure_response_format_spec,
 )
-from ..types import PromptCacheParam
+from ..types import DEFAULT_PROMPT_CACHING, PromptCacheParam
 
 CONCURRENT_USER_MESSAGES_EXPLANATION = (
     "For all user messages which are represented in JSON format, please treat each "
@@ -536,11 +536,14 @@ def _cache_target(msg: Dict[str, Any]) -> Dict[str, Any]:
     return msg
 
 
-def _apply_anthropic_caching(
+def place_cache_breakpoints(
     kw: Dict[str, Any],
-    prompt_caching: PromptCacheParam,
+    prompt_caching: PromptCacheParam = DEFAULT_PROMPT_CACHING,
 ) -> None:
-    """Place Anthropic's ``cache_control`` breakpoints on a request.
+    """Place Anthropic's ``cache_control`` breakpoints on a Claude request.
+
+    Every Claude request a client sends passes through here; a caller that
+    posts a Claude request body itself calls it to get the same breakpoints.
 
     Claude reads from its prompt cache only up to an explicit breakpoint, so
     each one marks the end of a prefix later requests are expected to repeat:
@@ -553,9 +556,9 @@ def _apply_anthropic_caching(
     breakpoint covers everything before it whenever the earlier prefix is
     repeated whole.
 
-    Mutates kw in-place. Messages are already this request's own copy; the
-    tool list is still the caller's, so the marked tool is replaced rather
-    than written into.
+    Mutates kw in-place, writing into its messages and content blocks, which
+    must be the request's own; the tool list is replaced rather than written
+    into. ``_cache_breakpoint`` marks are left for the caller to strip.
     """
     tools = kw.get("tools")
     tools_marked = "tools" in prompt_caching and bool(tools)
@@ -762,7 +765,7 @@ def apply_provider_preprocessing(
 
     if provider != "anthropic":
         if prompt_caching and _is_anthropic_model_on_openrouter(kw.get("model")):
-            _apply_anthropic_caching(kw, prompt_caching)
+            place_cache_breakpoints(kw, prompt_caching)
         _strip_internal_annotations(kw)
         return kw
 
@@ -831,7 +834,7 @@ def apply_provider_preprocessing(
     _strip_rejected_sampling_params(kw)
 
     if prompt_caching:
-        _apply_anthropic_caching(kw, prompt_caching)
+        place_cache_breakpoints(kw, prompt_caching)
 
     _strip_internal_annotations(kw)
 
