@@ -1,14 +1,17 @@
 <!--
     GENERATED FILE - DO NOT EDIT DIRECTLY.
 
-    Regenerate with:  python3 .agents/global-rules/build_agents_md.py
+    Regenerate from the repo's root with build_agents_md.py from
+    unifyai/global-agent-rules: python3 ../global-agent-rules/build_agents_md.py
+    where it is a clone beside the repo, or
+    python3 .agents/global-rules/build_agents_md.py where it is a submodule.
 
     Edit the sources instead:
-      .agents/repo.md              this repo's overview and always-on guidance
-      .agents/rules/*.md           this repo's own rules
-      .agents/shared.txt           which shared rules this repo includes
-      .agents/global-rules/rules/  rules shared across all unifyai repos
-                                   (submodule: unifyai/global-agent-rules)
+      .agents/repo.md       this repo's overview and always-on guidance
+      .agents/rules/*.md    this repo's own rules
+      .agents/shared.txt    which shared rules this repo includes
+      rules/*.md in unifyai/global-agent-rules, the rules shared across
+      all unifyai repos
 -->
 
 # UniLLM: The LLM Abstraction Layer
@@ -147,60 +150,48 @@ The `LLM Cache Check` job counts the `.cache_miss.txt` files in the pytest job's
 
 ---
 
+# Situational rules
+
+These are not loaded by default. Read the file when the work matches its description.
+
+- `~/global-agent-rules/rules/shared-agent-context.md` — Questions about what the team did or decided in earlier agent sessions (did we set up X, who changed Y, why Z) - every Cursor, Claude Code and Codex transcript is in ~/shared_context
+
+---
+
 # Shared rules
 
-These apply across every unifyai repo. Edit them in the `unifyai/global-agent-rules` submodule, not here.
+These apply across every unifyai repo. Edit them in the `unifyai/global-agent-rules`, not here.
 
-# Aggressive Refactoring & Zero Backward Compatibility
+# Aggressive Refactoring, No Backward Compatibility
 
-## Context
-This project is a prototype in rapid development. We prioritize a clean, minimal, and correct codebase over stability, backward compatibility, or risk aversion.
+The code is a prototype in rapid development: clean, minimal and correct
+matters more than stability or caution.
 
-## Critical Rules
+- **No backward compatibility** unless it is asked for. Change an interface
+  and update every call site at once, with no adapters, aliases or optional
+  parameters to soften it. A new pattern replaces the old one everywhere.
+- **Rewrite, don't staple.** When requirements change, rewrite the code as
+  if the new requirements had been the first ones, rather than adding logic
+  on top. Delete what is no longer the best way; never comment it out or
+  keep it "just in case".
+- **No defensive coding.** No try/except except around a specific, expected,
+  recoverable error such as a network timeout, and no null or type checks
+  the logic does not need. Fail loud and fast.
+- **Simplify first.** Before adding a feature, ask whether simplifying the
+  code would make it natural, and remove redundant code, unused variables
+  and needless abstraction as you go.
 
-### 1. Zero Backward Compatibility
-- **Assume NO Backward Compatibility**: Unless explicitly requested, break APIs, data structures, and protocols freely.
-- **Immediate Updates**: When changing an interface, update all call sites immediately. Do not create adapters, aliases, or optional parameters to "soften" the change.
-- **Purge Old Patterns**: If you introduce a new design pattern (e.g., for state management), strictly remove all instances of the old pattern. Do not leave mixed patterns in the codebase.
+# Timeless Comments
 
-### 2. Destructive vs. Additive Editing
-- **Avoid "Stapling"**: Do not merely add new logic on top of old logic (additive editing). This creates bloat and "staples upon staples".
-- **Rewrite and Simplify**: When requirements change, **rewrite** the affected code to optimally support the *new* requirements as if they were the original ones.
-- **Delete Aggressively**: If code is no longer the "best" way to do something, delete it. Do not comment it out. Do not keep it "just in case".
+Comments and docstrings describe the code as it is now, never its history or
+the conversation that produced it.
 
-### 3. No Defensive Coding
-- **No Preemptive Exception Handling**: Do not wrap code in try/catch or try/except blocks to prevent crashes unless you are handling a specific, expected, and recoverable runtime error (e.g., network timeout). Fail loud and fast.
-- **No Defensive Checks**: Do not add null checks or type checks unless strictly necessary for the logic. Trust the type system and the caller contract.
-- **Clean Implementation**: Code should look like the "happy path". Avoid cluttering logic with defensive branches for edge cases that shouldn't happen in a correct system.
-
-### 4. Review and Reflect
-- **Simplify First**: Before adding a feature, ask: "Can I simplify the existing code to make this feature natural to implement?"
-- **Remove Bloat**: actively look for and remove redundant code, unused variables, and overly complex abstractions.
-
-# No Temporal or Chat-Specific Comments
-
-## Context
-Code comments and docstrings must be **timeless** and describe the code as it currently exists. They must **never** reflect the history of changes, the current chat session, or the fact that code is "new".
-
-## Critical Rules
-
-### 1. No "New" or "Updated" Markers
-- **Forbidden**: Never use words like "New", "Updated", "Added", "Modified", "Refactored" in comments to mark changes.
-- **Reasoning**: Code is only "new" for the moment it is written. Next week, it is old. These comments rot immediately and create noise.
-- **Correct Approach**: Just write the comment describing what the code does. Git history tracks what is new.
-
-### 2. No Chat Context
-- **Forbidden**: Do not reference "the user request", "this chat", "per instruction", or specific reasoning from the current conversation.
-- **Reasoning**: The codebase must stand alone. Context from a chat session is lost to future readers.
-- **Correct Approach**: If a complex decision needs explanation, document the *technical why* (e.g., "Use X because Y is slow"), not the *conversational why* ("User asked for X").
-
-### 3. Clean Documentation
-- **Focus**: Comments should explain **why** tricky code exists or **how** it functions.
-- **Avoid**: "Here is the implementation of..." or "Standardized composer utilities". The code itself shows it is an implementation.
-- **Example**:
-  - BAD: `NEW: Added this function to handle retries`
-  - BAD: `Updated to support the new API`
-  - GOOD: `Retries the request with exponential backoff to handle transient network errors.`
+- Never mark code "new", "updated", "added" or "refactored"; git records that.
+- Never cite the chat or the request ("as the user asked"). Give the
+  technical why ("retries with backoff because the API drops connections"),
+  never the conversational one.
+- Say why tricky code exists or how it works, not that it is an
+  implementation of something.
 
 If a test is failing, we should **never** add test-specific information or shortcuts to production code as a hack to get the test passing. No details about specific test cases should ever make their way into production code—no special-case branches, no hardcoded values that match test inputs, no conditional logic that only exists to satisfy a test.
 
@@ -208,148 +199,50 @@ All fixes must be fully general and **much** broader than the specific failing t
 
 # Git Safety
 
-## Rule: Pull Before Editing a Repository
+- **Pull before editing.** Run `git pull --rebase origin main` once per repo
+  per session before changing files, so you never work on a stale tree.
+  After a rejected push and a rebase, re-read any file you are about to edit:
+  the rebase changed it on disk.
+- **Never `--autostash` or `git stash` in a checkout other agents share.**
+  It takes their uncommitted edits along with yours, and when they do not
+  reapply cleanly it leaves their files conflicted and staged, which blocks
+  every commit there. If the tree holds work that is not yours, pull in a
+  worktree of your own (`git worktree add`), or commit your own files and
+  leave the pull.
+- **Commit explicit paths:** `git commit <files> -m "…"`, never a bare
+  `git commit`. Agents working in parallel share one index, so a bare commit
+  takes in whatever another agent staged. A new file needs `git add <file>`
+  first, then the same explicit commit.
+- **Push to `main` as the work lands,** without being asked:
+  `git push origin HEAD:main`, which works from `main` and from a worktree's
+  own branch alike. Never push a worktree's branch itself, since nobody
+  merges it. If the push is rejected, `git pull --rebase origin main`,
+  re-read what you are about to edit, and push again.
+- **Never force-push** unless the user asks and understands that it rewrites
+  history other people have pulled.
+- Start a branch only when a change has to sit apart from `main`, and merge
+  and delete it as soon as it lands.
 
-Before making any file edits in a repository, run `git pull --rebase` once to sync with the remote. This prevents the agent from working on a stale branch and silently overwriting others' commits.
+# Worktrees: No Feature Branches, No Pull Requests
 
-- **Once per repo per session** is sufficient — no need to pull on every turn.
-- **After a push rejection + rebase**: re-read any files you plan to edit next. The rebase changed them on disk but your in-memory copies are stale.
-- **Exception**: only skip if the user explicitly asks you not to pull.
+A worktree is isolation enough: agents in separate worktrees are
+collaborators on `main`. Commit on the branch the worktree has and push it
+to `main` (see Git Safety). Never create a feature branch or a pull request,
+or suggest one, unless the user asks for it.
 
-## Context: Explicit Path Commits
-When multiple agents run in parallel in `local` mode, there is a race condition risk if they use the shared git index (staging area).
-- Agent A: `git add fileA`
-- Agent B: `git add fileB`
-- Agent A: `git commit -m "msg"` -> Commits BOTH fileA and fileB!
-
-## Rule: Explicit Path Commits
-To eliminate this risk, **NEVER** run `git commit` without explicit file arguments.
-
-### Incorrect
-```bash
-git add myfile.json
-git commit -m "Update myfile"
-```
-
-### Correct
-```bash
-# For modified files:
-git commit myfile.json -m "Update myfile"
-
-# For new (untracked) files:
-git add myfile.json
-git commit myfile.json -m "Add myfile"
-```
-
-### Reasoning
-Passing filenames to `git commit` bypasses the shared index for that specific commit operation, ensuring that Agent A only commits what it intends to, regardless of what Agent B has staged.
-
-## Rule: Push When the Work Lands
-
-Commit to `main` and push as the work lands, without waiting to be asked. An
-unpushed commit, or a branch nobody merges, is invisible to every other
-checkout and every other agent: a branch in `continual-arc-baselines` once
-drifted ten commits ahead of an untouched `main` before anyone noticed.
-
-- Push the current branch only: `git push origin HEAD`.
-- If the push is rejected, `git pull --rebase`, re-read what you are about to
-  edit, and push again.
-- **Never** force-push unless the user explicitly asks for it and understands
-  that it rewrites history other people have pulled.
-- Start a branch only when a change genuinely has to sit apart from `main`,
-  and merge and delete it as soon as it lands.
-
-# Worktree Mode: Direct Commits, No Feature Branches
-
-## Context
-When running in **worktree mode**, the mental model is fundamentally different from traditional feature development:
-
-- **Worktrees are for small-scale parallel fixes**, not large-scale feature development
-- **Multiple agents on the same branch** = multiple collaborators working in parallel, each with their own local working directory
-- The overhead of `feature branch → PR → merge → cleanup` is **overkill** for this workflow
-
-## Critical Rules
-
-### 1. NEVER Create Feature Branches
-When asked to make changes, commit, or push:
-- **DO NOT** create a new branch (e.g., `git checkout -b feature/...`)
-- **DO NOT** suggest creating a branch for the work
-- **COMMIT DIRECTLY** to whatever branch is currently checked out
-
-The worktree already provides isolation. Creating additional branches defeats the purpose.
-
-### 2. NEVER Create Pull Requests
-- **DO NOT** use `gh pr create` or suggest creating a PR
-- **DO NOT** push to a new remote branch with the intent of opening a PR
-- If the user wants changes merged, they will handle the merge strategy themselves
-
-### 3. The Correct Workflow
-```bash
-# 1. Make your changes to files
-
-# 2. Commit directly to the current branch (following git-commit-safety rules)
-git commit <specific-files> -m "Description of change"
-
-# 3. Push the current branch (see git-commit-safety)
-git push origin HEAD
-```
-
-### 4. Mental Model
-Think of worktree agents as **multiple developers pair-programming on the same branch**:
-- Each has their own local checkout (the worktree)
-- All commit to the same branch
-- No one creates personal feature branches for small fixes
-- Coordination happens through communication, not branch isolation
-
-## Why This Matters
-The alternative workflow creates significant noise:
-1. **Stale branches accumulate** - agents create branches, users forget to delete them
-2. **PR overhead** - reviewing, merging, and closing PRs for trivial fixes wastes time
-3. **Context switching** - users must mentally track multiple branches for what should be one stream of work
-4. **Merge conflicts** - more branches = more opportunities for conflicts
-
-## Exception
-If the user **explicitly asks** for a feature branch or PR workflow, follow their instructions. But **never default to this behavior** in worktree mode.
-
-# Git History for Context
-
-## Context
-This rule applies when you are trying to understand the *rationale* behind specific code blocks, the evolution of a module, or when deciding whether "weird" looking code is essential or legacy technical debt.
-
-## Rules
-
-### 1. Strategic Git Usage
-- **Use as a Second Level of Analysis**: If the code's purpose isn't clear from the current state alone (static analysis), use `git blame` or `git log` to uncover the "why".
-- **Not a Mandate**: Do not check git history for every file you touch. This creates noise. Use it selectively when you lack context.
-
-### 2. Understanding Code Evolution
-- **Identify Legacy Code**: If you suspect code is redundant or outdated, check its commit date and message. If it was added months ago for a feature that is no longer relevant, this confirms it can likely be purged.
-- **Find the "Why"**: Expressive commit messages often contain the reasoning that comments lack. Use them to understand the author's original intent before refactoring or deleting complex logic.
-
-### 3. Targeted Queries
-- **Be Surgical**: When querying git, look for the history of specific lines or changes (e.g., `git blame -L n,m filename` or `git log -p filename`) rather than dumping the entire history into the context.
-- **Synthesize**: Use the information to form a narrative about the code's lifecycle (e.g., "This was added in commit X to fix bug Y, but since we rewrote the bug Y subsystem, this is now dead code").
-
-### 4. Investigating Regressions with Git Diff
-
-When debugging test failures or regressions, git history can pinpoint exactly what changed.
-
-**When the user proactively provides context:**
-If the user says something like "the test was passing at commit `<hash>`, and the relevant changes are in `<path>`", use this optimally:
-- Run `git log --oneline <hash>..HEAD -- <path>` to see which commits touched the area
-- Run `git diff <hash>..HEAD -- <path>` to get the **aggregate diff** (not serial diffs commit-by-commit)
-- Cross-reference the diff with commit messages to understand developer intent
-- The overall diff is mathematically equivalent to composing serial diffs, but far more token-efficient and cognitively cleaner
-
-**When debugging hits a roadblock:**
-If direct code analysis and debug logging (`CURSOR_DEBUG_LOG`) aren't yielding answers, *then* ask the user:
-- "Do you know when this test was last passing? If you have a commit hash and know which files/folders are likely involved, that would help narrow down what changed."
-- Don't front-load this question—often the user doesn't know the answer. Try direct debugging first.
-
-**Avoid wasteful patterns:**
-- Don't ask the user to provide diffs—ask for the commit hash and run git commands yourself
-- Don't read diffs commit-by-commit and mentally compose them; use the aggregate diff
-- Don't dump entire file histories; scope queries to the relevant path(s)
+Make each worktree under your home folder at a path nobody else uses, such
+as one from `mkdir -p ~/worktrees && mktemp -d ~/worktrees/wt.XXXXXX`, never
+under `/tmp` or the system's temporary folder, which a restart empties: on 26
+October 2026 a Mac restarted overnight and its start-up clean of
+`/private/tmp` took six Continual Office worktrees, with run records, a
+harness fix and twelve rewritten workflow types nobody had committed.
+Remove only a worktree your own command made. Sessions' worktrees sit
+side by side, and `git worktree remove` takes another session's worktree once
+its tracked files are clean, its ignored files with it: on 18 October 2026 a
+session's `git worktree add ~/brain-video` failed because the explainer
+video's worktree had that path, its cleanup removed that worktree, and the
+video's renders and installed packages went with it. A `&&` chain under
+`set -e` carries on past a failed step, so check the path is free first.
 
 # Python Formatting & Pre-commit
 
@@ -466,8 +359,13 @@ it is written, and it drifts from the truth because nobody can correct it.
   `.agents/rules/`, or a comment beside the code it explains. Company-wide
   facts (people, accounts, legal state, decisions, how a job is run) go in
   `brain`'s wiki.
-- **Corrections count.** When someone tells you how they want something
-  done, write down the rule it implies where the next agent will read it.
+- **Corrections that teach something count.** When someone tells you what
+  the next agent could not work out for itself (how they like a thing done,
+  a fact, a limit to respect, a gotcha nobody would guess), write it down
+  where the next agent will read it. A correction for a lapse in ordinary
+  judgement or effort is not a rule to write: fix the work. Rules that
+  restate common sense bury the ones that matter, and teach agents to wait
+  for a rule instead of thinking (Dan, 12 October 2026).
 - **Commit and push it as the work lands,** so the next agent on any machine
   starts from it.
 - **Never write to private memory.** Claude Code's auto-memory is off in
@@ -480,70 +378,6 @@ Two things never go in the repo: secrets, which live in Secret Manager, and
 material a repo keeps out of git on purpose through `.gitignore`, which stays
 in its ignored folder.
 
-# Shared agent conversation archive
-
-Unify keeps a private repo of **raw** agent transcripts at **`~/shared_context`**
-(GitHub: `unifyai/shared_context`), keyed by **GitHub login** (e.g. `djl11`).
-
-## Design (important)
-
-- **Adjacent clone, not a submodule.** `shared_context` sits next to the
-  product checkouts (`~/brain`, `~/unillm`, …). It is **not** nested under any
-  public or private product repo.
-- **Why:** public repos such as `unillm` stay public; transcript data stays
-  private. Public cloners never need or see this tree. One clone serves agents
-  in **every** repo that pulls `unifyai/global-agent-rules`.
-
-## When to load this
-
-Use before answering questions about past investigations or decisions across the
-team — e.g. "did we set up X?", "who changed Y?", "why did we do Z?" — when the
-answer might live in someone else's Cursor / Claude Code / Codex session, not
-only the current chat.
-
-## How to search
-
-Prefer ripgrep over reading whole files. Search **tracked** login trees only —
-**do not** search `yours/` unless the user explicitly asks about their local /
-unexported chats:
-
-```bash
-rg -n -i "keyword" ~/shared_context/derived/index.jsonl
-rg -n -i "keyword" ~/shared_context -g '!yours/**' -g '!tools/**' -g '!.git/**'
-```
-
-`derived/index.jsonl` is rebuilt locally by `tools/sync.sh` / `tools/export.py`
-after pull (gitignored). If it is missing, search tracked trees directly or run:
-
-```bash
-python3 ~/shared_context/tools/export.py --index-only
-```
-
-Sessions live at
-`<github_login>/{cursor|codex|claude-code}/<yyyy-mm>/<id>/{meta.json,transcript.jsonl}`.
-
-`yours/{cursor,codex,claude-code}` are local symlinks to personal stores and are
-gitignored.
-
-If `~/shared_context` is missing, say so and suggest:
-
-```bash
-git clone git@github.com:unifyai/shared_context.git ~/shared_context
-```
-
-Do **not** suggest `git submodule add` / nesting it under a product repo.
-
-## Citing
-
-Cite **user**, **tool**, **date**, and **path** so a human can open the same session.
-
-## Do not
-
-- Do not confuse this with `brain` (curated company memory).
-- Do not scrub or rewrite historical transcripts.
-- Do not push/sync unless the user asked you to.
-- Do not grep `yours/` unless the user asked for local-only context.
-
 # Replying to the Team
 
 The people reading an agent's replies act on them, often in another window
@@ -552,13 +386,70 @@ while the agent waits.
 - **Lead with the answer or the decision.** Background comes after it, or
   goes in a file the reply points to.
 - **When someone has to do something, give exact numbered steps:** one action
-  per step, with the literal button, menu path or text to paste. When they are
-  carrying the steps out as they read, give one step and wait for them.
+  per step, with the literal button, menu path or text to paste, and what
+  they should see when it worked. Give them all in one message they can
+  follow from start to finish while they work in another window (Dan, 18
+  October 2026: "I just want all the instructions here"), and stop early only
+  where the next step depends on what they report back.
+- **Steps, and any answer the reader needs, are the last thing in the turn,
+  never above the app's question box.** In the Claude desktop app, a turn that
+  ends with the next-step box's question (`mcp__ccd_turn__wrap_up` with an
+  `ask`) shows the box and hides the message above it, so steps written there
+  went unseen again and again (Dan, 18 October 2026), and so did answers: a
+  reader who saw only the box's recap asked again what was going on (19
+  October 2026). When a reply holds steps or an answer, call the wrap-up with
+  a recap and no question, then write them as the closing message, any
+  question last in its prose. A question that needs any context to answer
+  goes the same way, with its context written out in plain words above it:
+  what the thing is, where it came from and what each answer does, with no
+  internal label left unexplained (Dan, 20 October 2026, after a day of
+  questions whose explanations the box had hidden: "You need to give me the
+  full context every time I ask a question ... I just see one sentence and a
+  question"). Delete
+  this point once the app shows the message above its box: to check, end one
+  turn with a short line above a question and ask whether it showed.
+- **Times in the reader's own time zone, never UTC.** Quote every time in the
+  time zone the person reading is in, the machine's own clock's (`date`), and
+  name it ("about 20:30 PDT"): they should not have to convert to know what
+  you mean (Dan, 19 October 2026: "always quote time in the time zone that I
+  am in"). UTC stays in logs and in records written for everyone.
 - **Only the caveat that changes what they do next.** No stream of
   consciousness, no narration of tools or process, and no alternatives nobody
   asked for; they will ask if they want more.
 
-# OpenAI is reached only through OpenRouter
+# Calling LLMs
+
+## Prompt caching on every call, as far as it goes
+
+Every call that sends a model the same opening as calls before it reads
+that opening from the provider's prompt cache, at the longest-lived
+setting the provider offers (Dan, 1 November 2026, after support-bench's
+Opus 5.5 graders ran $230 to $450 an hour with no cache reads at all: "We
+need to make sure prompt caching is, of course, always turned on and maxed
+out to the absolute extreme"). A cache read costs a tenth of fresh input
+on Anthropic's models, so an uncached call that repeats a long prefix pays
+up to ten times what it should.
+
+- **Order each request from most to least shared:** tools and system
+  instructions, then the documents or records that a task's calls all
+  read, then what changes from call to call, last. Nothing that varies
+  between calls, such as a timestamp, a run id or a shuffled order, goes
+  before shared content.
+- **Anthropic's models cache only where a request says so,** through
+  OpenRouter as well: a `cache_control` breakpoint (`{"type": "ephemeral"}`)
+  after each shared block, up to the four a request allows, with the
+  one-hour TTL (`"ttl": "1h"`) on any prefix reused for longer than five
+  minutes. OpenAI's, DeepSeek's and Gemini's models cache a long repeated
+  prefix on their own, so there the ordering above is what earns it.
+- **Warm before fanning out:** send the first call of each prefix alone and
+  start its siblings once its reply has begun; calls sent at the same
+  moment each write the prefix again and read none of it.
+- **Prove it on the first run:** read each response's cached-token count
+  (Anthropic's `cache_read_input_tokens`, OpenRouter's `cached_tokens`)
+  and the provider's usage report. A call path that repeats a prefix and
+  shows no cache reads is a bug, fixed before the next run.
+
+## OpenAI only through OpenRouter
 
 Every OpenAI LLM call in every repo routes through **OpenRouter**, using
 `OPENROUTER_API_KEY`. UniLLM does not expose a native OpenAI chat provider, and
@@ -566,7 +457,7 @@ the company's own direct OpenAI account is inactive — it answers
 `429 billing_not_active` — so a native route is dead in practice as well as
 unregistered.
 
-## Canonical endpoint form
+### Canonical endpoint form
 
 ```
 openai/<model-id>@openrouter      # openai/gpt-5.6-terra@openrouter
@@ -578,7 +469,7 @@ OpenRouter catalog; `@openai` is not registered and fails endpoint resolution.
 Source, defaults, examples, and tests use the canonical OpenRouter form
 directly.
 
-## Hard rules
+### Hard rules
 
 - New LLM call sites use `openai/<id>@openrouter`. Non-OpenAI providers
   (Anthropic, Google, …) are unaffected by this rule and keep their own routing.
@@ -591,7 +482,7 @@ directly.
   fresh checkout cannot inherit a dead route.
 - Treat any surviving `@openai` model string as a bug; UniLLM rejects it.
 
-## The one legitimate direct-OpenAI path
+### The one legitimate direct-OpenAI path
 
 Masked image edits (`images.edit` with `gpt-image-2`) have no OpenRouter
 equivalent — OpenRouter's unified Image API does not expose the mask parameter.
