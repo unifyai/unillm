@@ -197,3 +197,25 @@ def test_static_system_blocks_end_where_the_first_dynamic_one_begins():
         prompt_caching=["system"],
     )
     assert _breakpoints(body) == ["system[1]"]
+
+
+def test_a_body_posted_outside_a_client_gets_its_breakpoints_on_blocks():
+    """OpenRouter honours a breakpoint only on a content block."""
+    tools = [copy.deepcopy(WEATHER_TOOL)]
+    body = {
+        "model": "anthropic/claude-opus-5.5",
+        "messages": [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": "Paris?"},
+            {"role": "assistant", "content": "", "tool_calls": []},
+            {"role": "user", "content": "And Rome?"},
+        ],
+        "tools": tools,
+    }
+    unillm.place_cache_breakpoints(body)
+    assert sorted(_breakpoints(body)) == ["system[0]", "tools[0]", "user[0]"]
+    assert body["messages"][0]["content"] == [
+        {"type": "text", "text": SYSTEM, "cache_control": ONE_HOUR},
+    ]
+    assert body["messages"][2]["content"] == ""
+    assert "cache_control" not in json.dumps(tools)

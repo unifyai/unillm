@@ -537,13 +537,29 @@ def _cache_target(msg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def place_cache_breakpoints(
-    kw: Dict[str, Any],
+    body: Dict[str, Any],
     prompt_caching: PromptCacheParam = DEFAULT_PROMPT_CACHING,
 ) -> None:
-    """Place Anthropic's ``cache_control`` breakpoints on a Claude request.
+    """Give a Claude request body posted outside a client the breakpoints a
+    client would send.
 
-    Every Claude request a client sends passes through here; a caller that
-    posts a Claude request body itself calls it to get the same breakpoints.
+    String content becomes a text block first: OpenRouter honours a
+    breakpoint only on a content block, and a client's transport makes the
+    same change on its way out. Mutates *body*, whose messages must be its
+    own.
+    """
+    for msg in body.get("messages") or []:
+        content = msg.get("content")
+        if isinstance(content, str) and content:
+            msg["content"] = [{"type": "text", "text": content}]
+    _place_cache_breakpoints(body, prompt_caching)
+
+
+def _place_cache_breakpoints(
+    kw: Dict[str, Any],
+    prompt_caching: PromptCacheParam,
+) -> None:
+    """Place Anthropic's ``cache_control`` breakpoints on a Claude request.
 
     Claude reads from its prompt cache only up to an explicit breakpoint, so
     each one marks the end of a prefix later requests are expected to repeat:
@@ -556,9 +572,9 @@ def place_cache_breakpoints(
     breakpoint covers everything before it whenever the earlier prefix is
     repeated whole.
 
-    Mutates kw in-place, writing into its messages and content blocks, which
-    must be the request's own; the tool list is replaced rather than written
-    into. ``_cache_breakpoint`` marks are left for the caller to strip.
+    Mutates kw in-place. Messages are already this request's own copy; the
+    tool list is still the caller's, so the marked tool is replaced rather
+    than written into.
     """
     tools = kw.get("tools")
     tools_marked = "tools" in prompt_caching and bool(tools)
@@ -765,7 +781,7 @@ def apply_provider_preprocessing(
 
     if provider != "anthropic":
         if prompt_caching and _is_anthropic_model_on_openrouter(kw.get("model")):
-            place_cache_breakpoints(kw, prompt_caching)
+            _place_cache_breakpoints(kw, prompt_caching)
         _strip_internal_annotations(kw)
         return kw
 
@@ -834,7 +850,7 @@ def apply_provider_preprocessing(
     _strip_rejected_sampling_params(kw)
 
     if prompt_caching:
-        place_cache_breakpoints(kw, prompt_caching)
+        _place_cache_breakpoints(kw, prompt_caching)
 
     _strip_internal_annotations(kw)
 
