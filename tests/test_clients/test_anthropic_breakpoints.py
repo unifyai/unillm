@@ -219,3 +219,45 @@ def test_a_body_posted_outside_a_client_gets_its_breakpoints_on_blocks():
     ]
     assert body["messages"][2]["content"] == ""
     assert "cache_control" not in json.dumps(tools)
+
+
+@pytest.mark.parametrize("endpoint", CLAUDE)
+def test_a_callers_own_breakpoints_count_toward_the_four_and_last_an_hour(endpoint):
+    """Anthropic rejects a fifth breakpoint, and a one-hour one after a five-minute one."""
+    five_minutes = {"type": "ephemeral"}
+
+    def turn(text: str) -> dict:
+        return {
+            "role": "user",
+            "content": [{"type": "text", "text": text, "cache_control": five_minutes}],
+        }
+
+    client = unillm.Unify(endpoint, cache=False)
+    tools = [
+        {**copy.deepcopy(WEATHER_TOOL), "cache_control": five_minutes},
+        {
+            "type": "function",
+            "function": {"name": "get_time", "parameters": {"type": "object"}},
+        },
+    ]
+    with captured_requests() as sent:
+        client.generate(
+            messages=[
+                {"role": "system", "content": SYSTEM},
+                turn("first"),
+                {"role": "assistant", "content": "ok"},
+                turn("second"),
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "Paris?"},
+            ],
+            tools=tools,
+            tool_choice="auto",
+        )
+    (request,) = sent
+    body = request["body"]
+    assert len(_breakpoints(body)) == 4
+    assert [("cache_control" in tool) for tool in body["tools"]] == [False, True]
+    assert "first" not in json.dumps(
+        [m for m in body["messages"] if "cache_control" in json.dumps(m)],
+    )
+    assert tools[0]["cache_control"] == five_minutes

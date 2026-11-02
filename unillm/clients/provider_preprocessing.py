@@ -565,21 +565,33 @@ def _place_cache_breakpoints(
     each one marks the end of a prefix later requests are expected to repeat:
     the last tool (``"tools"``), the last static system block (``"system"``,
     stopping before the first block a caller marks ``_static: False``), every
-    message or content block a caller marks ``_cache_breakpoint: True``, and
-    the last message (``"messages"``), which lets each turn of a conversation
-    read the turn before it. Anthropic accepts four breakpoints, so when the
-    caller's marks would exceed that the earliest of them are dropped: a later
+    message or content block a caller marks, with ``_cache_breakpoint: True``
+    or a ``cache_control`` of its own, and the last message (``"messages"``),
+    which lets each turn of a conversation read the turn before it.
+
+    Anthropic accepts four breakpoints and rejects a one-hour one after a
+    five-minute one, so every breakpoint gets the one-hour TTL, and when the
+    caller's marks would exceed four the earliest of them are dropped: a later
     breakpoint covers everything before it whenever the earlier prefix is
-    repeated whole.
+    repeated whole. The tools take one breakpoint at most, on the last tool,
+    which covers the rest.
 
     Mutates kw in-place. Messages are already this request's own copy; the
-    tool list is still the caller's, so the marked tool is replaced rather
-    than written into.
+    tool list is still the caller's, so it is replaced rather than written
+    into.
     """
-    tools = kw.get("tools")
-    tools_marked = "tools" in prompt_caching and bool(tools)
+    tools = kw.get("tools") or []
+    tools_marked = bool(tools) and (
+        "tools" in prompt_caching or any("cache_control" in tool for tool in tools)
+    )
     if tools_marked:
-        kw["tools"] = [*tools[:-1], {**tools[-1], "cache_control": CACHE_CONTROL}]
+        kw["tools"] = [
+            *(
+                {k: v for k, v in tool.items() if k != "cache_control"}
+                for tool in tools[:-1]
+            ),
+            {**tools[-1], "cache_control": CACHE_CONTROL},
+        ]
 
     messages = kw.get("messages") or []
     fixed: List[Dict[str, Any]] = []
@@ -611,13 +623,21 @@ def _place_cache_breakpoints(
     for msg in messages:
         content = msg.get("content")
         blocks = content if isinstance(content, list) else []
-        for target in (msg, *blocks):
-            if not isinstance(target, dict) or not target.get(CACHE_BREAKPOINT):
-                continue
-            target = _cache_target(msg) if target is msg else target
+        targets = [msg] if "cache_control" in msg else []
+        targets += [
+            block
+            for block in blocks
+            if isinstance(block, dict)
+            and (block.get(CACHE_BREAKPOINT) or "cache_control" in block)
+        ]
+        if msg.get(CACHE_BREAKPOINT):
+            targets.append(_cache_target(msg))
+        for target in targets:
             if all(target is not t for t in fixed + marked):
                 marked.append(target)
 
+    for target in marked:
+        target.pop("cache_control", None)
     room = MAX_CACHE_BREAKPOINTS - tools_marked - len(fixed)
     for target in fixed + (marked[-room:] if room > 0 else []):
         target["cache_control"] = CACHE_CONTROL
