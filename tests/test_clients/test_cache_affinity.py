@@ -13,6 +13,7 @@ import litellm
 import pytest
 
 import unillm
+from unillm.caching._caching import _cache_key_kwargs
 from unillm.clients.uni_llm import _prepare_provider_request_kw
 
 from .fake_transport import (
@@ -26,6 +27,7 @@ from .fake_transport import (
 )
 
 KEY = "run-7f3a"
+_CLAUDE = (*CLAUDE_ON_OPENROUTER, "claude-opus-5@anthropic")
 
 # Behind OpenRouter with no fixed host list, so OpenRouter chooses the
 # provider and can keep choosing the one holding the conversation's cache.
@@ -56,20 +58,24 @@ def test_the_endpoint_groups_cover_every_recorded_endpoint():
 
 
 class TestWithoutAKeyRequestsAreUnchanged:
-    """The recording was taken before the key existed, from the same turn."""
+    """The recording was taken before the key existed, from the same turn.
 
-    @pytest.mark.parametrize("variant", PROMPT_CACHING_VARIANTS)
-    @pytest.mark.parametrize("endpoint", ENDPOINTS)
+    Claude's breakpoints are covered by ``test_anthropic_breakpoints``; here
+    each Claude endpoint is compared with caching off.
+    """
+
+    @pytest.mark.parametrize(
+        ("endpoint", "variant"),
+        [
+            (endpoint, variant)
+            for endpoint in ENDPOINTS
+            for variant in PROMPT_CACHING_VARIANTS
+            if variant == "no-markers" or endpoint not in _CLAUDE
+        ],
+    )
     def test_request_matches_the_recording(self, endpoint, variant):
         sent = send(endpoint, prompt_caching=PROMPT_CACHING_VARIANTS[variant])
         assert sent == recorded(endpoint, variant)
-
-    @pytest.mark.parametrize("endpoint", CLAUDE_ON_OPENROUTER)
-    def test_claude_behind_openrouter_ignores_prompt_caching(self, endpoint):
-        """Callers pass ``prompt_caching`` by default; only the key opts in."""
-        sent = send(endpoint, prompt_caching=["system", "tools", "messages"])
-        assert sent == recorded(endpoint, "all-markers") == recorded(endpoint)
-        assert "cache_control" not in json.dumps(sent)
 
 
 def test_markers_for_one_request_do_not_reach_the_next():
@@ -120,7 +126,7 @@ class TestOpenRouterStickiness:
         [e for e in _UNPINNED_OPENROUTER if not e.startswith("openai/")],
     )
     def test_unpinned_models_carry_session_id_and_nothing_else(self, endpoint):
-        (sent,) = send(endpoint, cache_affinity=KEY)
+        (sent,) = send(endpoint, cache_affinity=KEY, prompt_caching=None)
         (before,) = recorded(endpoint)
         assert sent["body"].pop("session_id") == KEY
         assert sent == before
@@ -141,7 +147,8 @@ class TestOpenRouterStickiness:
         assert sent[0]["body"]["provider"]["only"]
 
     def test_direct_anthropic_has_no_routing_hint_to_send(self):
-        assert send("claude-opus-5@anthropic", cache_affinity=KEY) == recorded(
+        sent = send("claude-opus-5@anthropic", cache_affinity=KEY, prompt_caching=None)
+        assert sent == recorded(
             "claude-opus-5@anthropic",
         )
 
@@ -198,6 +205,34 @@ class TestOpenRouterRequestPreparation:
             cache_affinity=KEY,
         )
         assert "extra_body" not in kw
+
+
+def test_the_response_cache_key_ignores_breakpoints():
+    """A response recorded without breakpoints serves the request with them."""
+    seen = []
+
+    def lookup(**kw):
+        seen.append(kw["kw"])
+        return None, None
+
+    for prompt_caching in (None, ["tools", "system", "messages"]):
+        client = unillm.Unify(
+            "claude-opus-5@anthropic",
+            cache=True,
+            prompt_caching=prompt_caching,
+        )
+        with (
+            patch("unillm.clients.uni_llm._get_cache", side_effect=lookup),
+            patch("unillm.clients.uni_llm._write_to_cache"),
+            captured_requests(),
+        ):
+            client.generate(
+                system_message="You answer weather questions briefly.",
+                user_message="hi",
+                tools=[copy.deepcopy(WEATHER_TOOL)],
+            )
+    assert "cache_control" in json.dumps(seen[1], default=str)
+    assert _cache_key_kwargs(seen[0]) == _cache_key_kwargs(seen[1])
 
 
 def test_the_response_cache_key_ignores_the_routing_hint():

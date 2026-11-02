@@ -841,11 +841,13 @@ class _Client(ABC):
         value: Optional[List[Literal["tools", "system", "messages"]]],
     ) -> Self:
         """
-        Set the prompt caching settings for Anthropic models.
+        Set where Claude models get prompt cache breakpoints.
 
         Args:
             value: List of locations to insert cache breakpoints.
-                   Valid values: "tools", "system", "messages".
+                   Valid values: "tools", "system", "messages". None or []
+                   sends none, the caller's ``_cache_breakpoint`` marks
+                   included.
 
         Returns:
             This client, useful for chaining inplace calls.
@@ -862,10 +864,7 @@ class _Client(ABC):
         holds it. Requests sharing this key are asked to go to the same place,
         through whatever mechanism the transport offers (OpenRouter's
         ``session_id``, for one). A transport with no such mechanism ignores
-        it. The key is otherwise a routing hint, with one exception: Claude
-        behind OpenRouter receives the ``prompt_caching`` breakpoints only
-        when a key is set, so a client without one sends exactly what it
-        always did.
+        it. The key is a routing hint only.
 
         Args:
             value: A stable, short identifier for one conversation or agent

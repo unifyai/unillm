@@ -603,7 +603,9 @@ class _Wire:
 
     def open(self, stream: Any) -> None:
         response = getattr(
-            getattr(stream, "completion_stream", None), "http_response", None
+            getattr(stream, "completion_stream", None),
+            "http_response",
+            None,
         )
         if isinstance(getattr(response, "num_bytes_downloaded", None), int):
             self.response = response
@@ -1075,7 +1077,12 @@ from ..logger import (
     llm_span,
     set_span_response,
 )
-from ..types import Prompt, PromptCacheParam, VALID_CACHE_VALUES
+from ..types import (
+    DEFAULT_PROMPT_CACHING,
+    Prompt,
+    PromptCacheParam,
+    VALID_CACHE_VALUES,
+)
 from .shared_session import get_shared_session
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
@@ -1235,13 +1242,21 @@ class _UniClient(_Client, abc.ABC):
             cache, else an exception will be raised. This argument only has any effect
             when stream=False.
 
+            prompt_caching: Where Claude models, direct or behind OpenRouter, get
+            Anthropic's ``cache_control`` breakpoints, with the one-hour TTL:
+            ``"tools"`` (the last tool), ``"system"`` (the last static system
+            block) and ``"messages"`` (the last message). Every message or content
+            block the caller marks ``"_cache_breakpoint": True`` gets one as well,
+            within Anthropic's four. Defaults to all three; ``None`` or ``[]``
+            sends no breakpoints at all, the caller's marks included. Other models
+            cache a repeated prefix on their own and are sent no breakpoints.
+            Breakpoints are left out of the response cache key.
+
             cache_affinity: An optional key, stable across one conversation or
             agent run, that asks the transport to send every request carrying it
             to the provider replica holding that conversation's prompt cache. It
-            is a routing hint and leaves the response cache key unchanged, except
-            that Claude behind OpenRouter also gets the ``prompt_caching``
-            breakpoints only once a key is set. None (the default) sends no hint
-            and changes nothing.
+            is a routing hint and leaves the response cache key unchanged. None
+            (the default) sends no hint.
 
             origin: An optional string tag for identifying the origin of LLM
             calls in log files, OTel spans, and events. Useful when multiple
@@ -1295,7 +1310,11 @@ class _UniClient(_Client, abc.ABC):
             return_full_completion=return_full_completion,
             cache=cache,
             cache_backend=cache_backend,
-            prompt_caching=None if prompt_caching is UNSET else prompt_caching,
+            prompt_caching=(
+                list(DEFAULT_PROMPT_CACHING)
+                if prompt_caching is UNSET
+                else prompt_caching
+            ),
             cache_affinity=cache_affinity,
             origin=origin,
             stream_transport=stream_transport,
@@ -1859,7 +1878,6 @@ class Unify(_UniClient):
             kw,
             self._provider,
             prompt_caching,
-            cache_affinity=self._cache_affinity,
         )
         accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
@@ -2052,7 +2070,6 @@ class Unify(_UniClient):
             kw,
             self._provider,
             prompt_caching,
-            cache_affinity=self._cache_affinity,
         )
         accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
@@ -2372,7 +2389,6 @@ class AsyncUnify(_UniClient):
             kw,
             self._provider,
             prompt_caching,
-            cache_affinity=self._cache_affinity,
         )
         accounting_model, transport_kw = _prepare_request_models(
             kw=kw,
@@ -2605,7 +2621,6 @@ class AsyncUnify(_UniClient):
             kw,
             self._provider,
             prompt_caching,
-            cache_affinity=self._cache_affinity,
         )
         accounting_model, transport_kw = _prepare_request_models(
             kw=kw,

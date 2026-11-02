@@ -29,9 +29,26 @@ _CACHE_INTERNAL_KW_KEYS = frozenset(
 )
 
 
+def _without_cache_control(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_without_cache_control(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            k: (_without_cache_control(v) if k == "content" else v)
+            for k, v in value.items()
+            if k != "cache_control"
+        }
+    return value
+
+
 def _cache_key_kwargs(kw: Dict[str, Any]) -> Dict[str, Any]:
+    """The request as its response is cached under.
+
+    Prompt cache breakpoints change what a call costs, never what it answers,
+    so a recording made with or without them serves the same request.
+    """
     return {
-        k: v
+        k: (_without_cache_control(v) if k in ("messages", "tools") else v)
         for k, v in kw.items()
         if v is not None and k not in _CACHE_INTERNAL_KW_KEYS
     }

@@ -96,6 +96,49 @@ client = unillm.Unify("gemini-2.0-flash@vertexai")
 
 Automatic handling of provider quirks (message format normalization, parameter translation, etc.) before requests are sent.
 
+### Prompt Caching
+
+Every Claude call, direct (`@anthropic`) or through OpenRouter (Bedrock and
+Vertex Claude included), carries Anthropic's `cache_control` breakpoints with
+the one-hour TTL, because Claude reads nothing from its prompt cache without
+them. A client places three by default: after the last tool, after the last
+static system block, and on the last message, so each turn of a conversation
+reads the turn before it. Other models cache a repeated prefix on their own
+and are sent no breakpoints; for them, as for Claude, what earns cache reads
+is a request ordered from most to least shared, with nothing that varies
+between calls (a timestamp, a run id) ahead of shared content.
+
+A caller marks any further shared block, such as a document every call of a
+task reads, with `"_cache_breakpoint": True` on the content block (or on the
+message, for string content):
+
+```python
+messages = [
+    {"role": "system", "content": RUBRIC},
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": transcript, "_cache_breakpoint": True},
+            {"type": "text", "text": question},
+        ],
+    },
+]
+client = unillm.Unify("anthropic/claude-opus-5.5@openrouter")
+client.generate(messages=messages)
+```
+
+Anthropic accepts four breakpoints per request; when the caller's marks would
+exceed that, the earliest of them are dropped. A system block marked
+`"_static": False` (a clock, say) ends the cached system prefix before it.
+`prompt_caching=["system"]` places only the listed defaults, and
+`prompt_caching=None` sends no breakpoints at all. Breakpoints are left out of
+the response cache key, so a recorded response serves a request whatever its
+breakpoints.
+
+Calls that share a prefix and start at the same moment each write it and read
+none of it: send the first alone, and start the rest once its reply has begun. Each completion's
+`usage.prompt_tokens_details.cached_tokens` says how much was read from cache.
+
 ### Response Caching
 
 Built-in caching to avoid redundant LLM calls. Cache entries are stored as

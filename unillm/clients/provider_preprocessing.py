@@ -518,65 +518,90 @@ def _combine_adjacent_user_messages(
     return result, combined_any
 
 
-CACHE_CONTROL_EPHEMERAL = {"type": "ephemeral"}
+# The longest-lived cache Anthropic offers. A one-hour write costs twice the
+# input price against 1.25 times for the five-minute default, and a read a
+# tenth of it either way, so one read after a pause of more than five minutes
+# pays for the difference many times over.
+CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
+MAX_CACHE_BREAKPOINTS = 4
+CACHE_BREAKPOINT = "_cache_breakpoint"
+
+
+def _cache_target(msg: Dict[str, Any]) -> Dict[str, Any]:
+    """The dict a breakpoint on *msg* is written into: its last content block,
+    or the message itself when its content is a string."""
+    content = msg.get("content")
+    if isinstance(content, list) and content:
+        return content[-1]
+    return msg
 
 
 def _apply_anthropic_caching(
     kw: Dict[str, Any],
     prompt_caching: PromptCacheParam,
 ) -> None:
-    """
-    Apply Anthropic prompt caching breakpoints to tools, system, and/or user messages.
+    """Place Anthropic's ``cache_control`` breakpoints on a request.
 
-    Mutates kw in-place to add cache_control markers at specified locations.
-    Messages are already this request's own copy; the tool list is still the
-    caller's, so the marked tool is replaced rather than written into.
-    """
-    if "tools" in prompt_caching:
-        tools = kw.get("tools")
-        if tools:
-            kw["tools"] = [
-                *tools[:-1],
-                {**tools[-1], "cache_control": CACHE_CONTROL_EPHEMERAL},
-            ]
+    Claude reads from its prompt cache only up to an explicit breakpoint, so
+    each one marks the end of a prefix later requests are expected to repeat:
+    the last tool (``"tools"``), the last static system block (``"system"``,
+    stopping before the first block a caller marks ``_static: False``), every
+    message or content block a caller marks ``_cache_breakpoint: True``, and
+    the last message (``"messages"``), which lets each turn of a conversation
+    read the turn before it. Anthropic accepts four breakpoints, so when the
+    caller's marks would exceed that the earliest of them are dropped: a later
+    breakpoint covers everything before it whenever the earlier prefix is
+    repeated whole.
 
-    messages = kw.get("messages")
-    if not messages:
-        return
+    Mutates kw in-place. Messages are already this request's own copy; the
+    tool list is still the caller's, so the marked tool is replaced rather
+    than written into.
+    """
+    tools = kw.get("tools")
+    tools_marked = "tools" in prompt_caching and bool(tools)
+    if tools_marked:
+        kw["tools"] = [*tools[:-1], {**tools[-1], "cache_control": CACHE_CONTROL}]
+
+    messages = kw.get("messages") or []
+    fixed: List[Dict[str, Any]] = []
 
     if "system" in prompt_caching:
-        # Flatten all system messages into a sequence of (target, is_static)
-        # pairs, then find the optimal breakpoint across all of them.
-        # "target" is the dict to annotate with cache_control — either a
-        # content block (for list content) or the message itself (for string).
-        targets: List[Tuple[Dict[str, Any], bool]] = []
+        system_target = None
         for msg in messages:
             if msg.get("role") != "system":
                 continue
             content = msg.get("content")
-            if isinstance(content, list) and len(content) > 0:
-                for item in content:
-                    targets.append((item, item.get("_static", True)))
-            else:
-                targets.append((msg, msg.get("_static", True)))
-
-        inject_target = None
-        for target, is_static in targets:
-            if not is_static:
+            blocks = content if isinstance(content, list) and content else [msg]
+            static = [block.get("_static", True) for block in blocks]
+            for block, is_static in zip(blocks, static):
+                if not is_static:
+                    break
+                system_target = block
+            if not all(static):
                 break
-            inject_target = target
-        if inject_target is not None:
-            inject_target["cache_control"] = CACHE_CONTROL_EPHEMERAL
+        if system_target is not None:
+            fixed.append(system_target)
 
     if "messages" in prompt_caching:
         for msg in reversed(messages):
-            content = msg.get("content")
-            if content is not None:
-                if isinstance(content, list) and len(content) > 0:
-                    content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
-                else:
-                    msg["cache_control"] = CACHE_CONTROL_EPHEMERAL
+            if msg.get("content") is not None:
+                fixed.append(_cache_target(msg))
                 break
+
+    marked = []
+    for msg in messages:
+        content = msg.get("content")
+        blocks = content if isinstance(content, list) else []
+        for target in (msg, *blocks):
+            if not isinstance(target, dict) or not target.get(CACHE_BREAKPOINT):
+                continue
+            target = _cache_target(msg) if target is msg else target
+            if all(target is not t for t in fixed + marked):
+                marked.append(target)
+
+    room = MAX_CACHE_BREAKPOINTS - tools_marked - len(fixed)
+    for target in fixed + (marked[-room:] if room > 0 else []):
+        target["cache_control"] = CACHE_CONTROL
 
 
 def _is_anthropic_model_on_openrouter(model: Optional[str]) -> bool:
@@ -587,11 +612,6 @@ def _is_anthropic_model_on_openrouter(model: Optional[str]) -> bool:
     Vertex and Replicate Claude endpoints ride OpenRouter too. Such a model
     takes the same breakpoints as direct Anthropic but none of the direct
     API's message rewriting, which OpenRouter does itself.
-
-    The breakpoints are placed only for a client with a ``cache_affinity``
-    key. Callers pass ``prompt_caching`` by default, so honouring it alone
-    would change every such Claude request, and its response-cache key, for
-    callers that never opted into cache discipline.
     """
     return bool(model) and model.startswith("openrouter/anthropic/")
 
@@ -712,7 +732,6 @@ def apply_provider_preprocessing(
     kw: Dict[str, Any],
     provider: Optional[str],
     prompt_caching: Optional[PromptCacheParam] = None,
-    cache_affinity: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Apply provider-specific preprocessing to messages in kw dict (mutates kw)."""
     ensure_response_format_spec(kw)
@@ -742,11 +761,7 @@ def apply_provider_preprocessing(
         return kw
 
     if provider != "anthropic":
-        if (
-            prompt_caching
-            and cache_affinity is not None
-            and _is_anthropic_model_on_openrouter(kw.get("model"))
-        ):
+        if prompt_caching and _is_anthropic_model_on_openrouter(kw.get("model")):
             _apply_anthropic_caching(kw, prompt_caching)
         _strip_internal_annotations(kw)
         return kw

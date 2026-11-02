@@ -5,7 +5,7 @@ import json
 from pydantic import BaseModel
 
 from unillm.clients.provider_preprocessing import (
-    CACHE_CONTROL_EPHEMERAL,
+    CACHE_CONTROL,
     COMPLETED_TOOL_CONTEXT_FOOTER,
     COMPLETED_TOOL_CONTEXT_HEADER,
     THINKING_COMPLIANCE_CONTEXT_HEADER,
@@ -39,7 +39,7 @@ class TestApplyAnthropicCachingSystemMessage:
         content = kw["messages"][0]["content"]
         assert "cache_control" not in content[0]
         assert "cache_control" not in content[1]
-        assert content[2]["cache_control"] == CACHE_CONTROL_EPHEMERAL
+        assert content[2]["cache_control"] == CACHE_CONTROL
 
     def test_system_content_list_stops_at_first_non_static(self):
         """Cache_control is added to the last static item before first static=False."""
@@ -62,7 +62,7 @@ class TestApplyAnthropicCachingSystemMessage:
         content = kw["messages"][0]["content"]
         assert "cache_control" not in content[0]
         assert "cache_control" not in content[1]
-        assert content[2]["cache_control"] == CACHE_CONTROL_EPHEMERAL
+        assert content[2]["cache_control"] == CACHE_CONTROL
         assert "cache_control" not in content[3]
         assert "cache_control" not in content[4]
 
@@ -106,7 +106,7 @@ class TestApplyAnthropicCachingSystemMessage:
 
         content = kw["messages"][0]["content"]
         assert "cache_control" not in content[0]
-        assert content[1]["cache_control"] == CACHE_CONTROL_EPHEMERAL
+        assert content[1]["cache_control"] == CACHE_CONTROL
         assert "cache_control" not in content[2]
         assert "cache_control" not in content[3]
 
@@ -144,7 +144,7 @@ class TestApplyAnthropicCachingSystemMessage:
         _apply_anthropic_caching(kw, ["system"])
 
         content = kw["messages"][0]["content"]
-        assert content[0]["cache_control"] == CACHE_CONTROL_EPHEMERAL
+        assert content[0]["cache_control"] == CACHE_CONTROL
 
     def test_system_content_list_single_non_static_item(self):
         """Single non-static item does not get cache_control."""
@@ -176,7 +176,7 @@ class TestApplyAnthropicCachingSystemMessage:
         _apply_anthropic_caching(kw, ["system"])
 
         msg = kw["messages"][0]
-        assert msg["cache_control"] == CACHE_CONTROL_EPHEMERAL
+        assert msg["cache_control"] == CACHE_CONTROL
 
     def test_system_content_empty_list_no_cache(self):
         """Empty content list doesn't cause errors."""
@@ -192,7 +192,7 @@ class TestApplyAnthropicCachingSystemMessage:
 
         msg = kw["messages"][0]
         # Falls through to string case since list is empty
-        assert msg.get("cache_control") == CACHE_CONTROL_EPHEMERAL
+        assert msg.get("cache_control") == CACHE_CONTROL
 
 
 class TestSoftToolChoiceCompliance:
@@ -407,7 +407,7 @@ class TestApplyAnthropicCachingTools:
         _apply_anthropic_caching(kw, ["tools"])
 
         assert "cache_control" not in kw["tools"][0]
-        assert kw["tools"][1]["cache_control"] == CACHE_CONTROL_EPHEMERAL
+        assert kw["tools"][1]["cache_control"] == CACHE_CONTROL
 
     def test_the_callers_tools_are_not_marked(self):
         """The marker belongs to this request, not to the caller's tool list.
@@ -425,7 +425,7 @@ class TestApplyAnthropicCachingTools:
         kw = {"tools": tools, "messages": []}
         _apply_anthropic_caching(kw, ["tools"])
 
-        assert kw["tools"][-1]["cache_control"] == CACHE_CONTROL_EPHEMERAL
+        assert kw["tools"][-1]["cache_control"] == CACHE_CONTROL
         assert all("cache_control" not in tool for tool in tools)
 
     def test_empty_tools_no_error(self):
@@ -455,7 +455,7 @@ class TestApplyAnthropicCachingUserMessages:
 
         content = kw["messages"][0]["content"]
         assert "cache_control" not in content[0]
-        assert content[1]["cache_control"] == CACHE_CONTROL_EPHEMERAL
+        assert content[1]["cache_control"] == CACHE_CONTROL
 
     def test_user_content_string_gets_cache_control_on_message(self):
         """When content is a string, cache_control is added to the message itself."""
@@ -470,7 +470,7 @@ class TestApplyAnthropicCachingUserMessages:
         _apply_anthropic_caching(kw, ["messages"])
 
         msg = kw["messages"][0]
-        assert msg["cache_control"] == CACHE_CONTROL_EPHEMERAL
+        assert msg["cache_control"] == CACHE_CONTROL
 
 
 class TestApplyAnthropicCachingMultipleLocations:
@@ -492,8 +492,8 @@ class TestApplyAnthropicCachingMultipleLocations:
         }
         _apply_anthropic_caching(kw, ["system", "messages"])
 
-        assert kw["messages"][0]["cache_control"] == CACHE_CONTROL_EPHEMERAL
-        assert kw["messages"][1]["cache_control"] == CACHE_CONTROL_EPHEMERAL
+        assert kw["messages"][0]["cache_control"] == CACHE_CONTROL
+        assert kw["messages"][1]["cache_control"] == CACHE_CONTROL
 
     def test_no_messages_no_error(self):
         """Missing messages doesn't cause errors."""
@@ -556,7 +556,7 @@ class TestApplyAnthropicCachingMultipleSystemMessages:
 
         # The breakpoint must be on the static block in the first system message
         first_sys_content = kw["messages"][0]["content"]
-        assert first_sys_content[0]["cache_control"] == CACHE_CONTROL_EPHEMERAL
+        assert first_sys_content[0]["cache_control"] == CACHE_CONTROL
 
         # NOT on the dynamic time context (last system message)
         assert "cache_control" not in kw["messages"][2]

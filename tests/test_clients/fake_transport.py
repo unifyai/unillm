@@ -68,8 +68,8 @@ ENDPOINTS = (
     "mistral-large@mistral",
 )
 
-# Claude behind OpenRouter: requested markers are placed only once the
-# client also has an affinity key.
+# Claude behind OpenRouter, which takes Anthropic's breakpoints as the direct
+# API does.
 CLAUDE_ON_OPENROUTER = (
     "anthropic/claude-sonnet-4.6@openrouter",
     "claude-4.5-sonnet@bedrock",
