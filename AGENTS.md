@@ -154,7 +154,7 @@ The `LLM Cache Check` job counts the `.cache_miss.txt` files in the pytest job's
 
 These are not loaded by default. Read the file when the work matches its description.
 
-- `~/global-agent-rules/rules/shared-agent-context.md` — Questions about what the team did or decided in earlier agent sessions (did we set up X, who changed Y, why Z) - every Cursor, Claude Code and Codex transcript is in ~/shared_context
+- [`.agents/global-rules/rules/shared-agent-context.md`](.agents/global-rules/rules/shared-agent-context.md) — Questions about what the team did or decided in earlier agent sessions (did we set up X, who changed Y, why Z) - every Cursor, Claude Code and Codex transcript is in ~/shared_context
 
 ---
 
@@ -463,6 +463,17 @@ up to ten times what it should.
   (Anthropic's `cache_read_input_tokens`, OpenRouter's `cached_tokens`)
   and the provider's usage report. A call path that repeats a prefix and
   shows no cache reads is a bug, fixed before the next run.
+
+## Claude through OpenRouter spends the company's own credits first
+
+OpenRouter serves a Claude call on a key that carries the company's
+Anthropic keys (bring-your-own-key, on the `dan` and `api` keys) from those
+keys first, so it spends the Claude plans' free monthly API credits before
+the company pays for anything. Leave Anthropic models' provider routing at
+its default: a `provider.order` or `only` naming Amazon Bedrock, Google
+Vertex or any other host skips those credits and pays list price. Which
+keys carry them, in what order, and how the order is kept are in brain's
+[Provider Credits](https://github.com/unifyai/brain/blob/main/docs/operations/provider-credits.md#being-claimed).
 
 ## OpenAI only through OpenRouter
 
