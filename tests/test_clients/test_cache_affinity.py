@@ -45,7 +45,6 @@ _PINNED_OPENROUTER = (
     "kimi-k3@moonshotai",
     "glm-5.2@zai",
     "minimax-v3@minimax",
-    "mimo-v2.5@xiaomi-mimo",
     "llama-3.3-70b-chat@groq",
     "mistral-large@mistral",
 )

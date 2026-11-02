@@ -49,7 +49,7 @@ WEATHER_TOOL = {
 
 # One endpoint per transport family unillm registers: OpenAI, Anthropic and
 # xAI models behind OpenRouter, direct Anthropic, and the hosts pinned to a
-# fixed OpenRouter provider list (DeepSeek, Kimi, GLM, MiniMax, MiMo, Llama,
+# fixed OpenRouter provider list (DeepSeek, Kimi, GLM, MiniMax, Llama,
 # Mistral and gpt-oss).
 ENDPOINTS = (
     "openai/gpt-5.6-sol@openrouter",
@@ -63,7 +63,6 @@ ENDPOINTS = (
     "kimi-k3@moonshotai",
     "glm-5.2@zai",
     "minimax-v3@minimax",
-    "mimo-v2.5@xiaomi-mimo",
     "llama-3.3-70b-chat@groq",
     "mistral-large@mistral",
 )

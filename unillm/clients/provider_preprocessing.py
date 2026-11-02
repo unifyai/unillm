@@ -2,7 +2,7 @@
 
 import copy
 import json
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .response_format import (
     ensure_response_format_spec,
@@ -24,23 +24,6 @@ THINKING_PREFILL_EXPLANATION = (
 
 THINKING_COMPLIANCE_CONTEXT_HEADER = "[Prior tool execution context]"
 THINKING_COMPLIANCE_CONTEXT_FOOTER = "[Continue from here]"
-COMPLETED_TOOL_CONTEXT_HEADER = (
-    "[Prior tool execution context]\n"
-    "The entries below are authoritative records of tool calls that were already "
-    "started in prior turns. Do not repeat a tool call solely to obtain a result "
-    "that is already present here. Treat completed results as final, treat "
-    "pending entries as already in flight, and continue from this state."
-)
-COMPLETED_TOOL_CONTEXT_FOOTER = (
-    "[Continue from the tool execution state above. If the requested work is "
-    "complete, answer the user instead of re-calling completed tools.]"
-)
-COMPLETED_TOOL_IMAGE_CONTEXT_FOOTER = (
-    "The image(s) above are already part of completed tool results. Do not call "
-    "the same image-producing tool again. Answer using the completed image "
-    "result and text context above."
-)
-
 TOOL_CHOICE_REQUIRED_INSTRUCTION = (
     "IMPORTANT: You MUST call a tool on this turn. A tool call is required - "
     "do not respond with text only. Select the most appropriate tool and call it."
@@ -110,11 +93,6 @@ def _has_non_compliant_tool_calls(messages: List[Dict[str, Any]]) -> bool:
 
 def _transform_tool_calls_to_context(
     messages: List[Dict[str, Any]],
-    *,
-    context_header: str = THINKING_COMPLIANCE_CONTEXT_HEADER,
-    context_footer: str = THINKING_COMPLIANCE_CONTEXT_FOOTER,
-    image_context_footer: Optional[str] = None,
-    predicate: Optional[Callable[[Dict[str, Any]], bool]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Transform non-compliant assistant tool call messages into user context.
@@ -124,23 +102,16 @@ def _transform_tool_calls_to_context(
     (and its paired tool results) into a user message with JSON context.
 
     The transformation:
-    1. Finds assistant messages matching the predicate (or all non-compliant ones)
+    1. Finds the non-compliant assistant messages
     2. Collects the assistant message and all following tool result messages
     3. Replaces them with a single user message containing the JSON representation
 
     Args:
         messages: List of message dicts to transform.
-        context_header: Header text for the context block.
-        context_footer: Footer text prompting continuation.
-        predicate: Optional function to determine which assistant messages to
-                   transform. If None, transforms all non-compliant messages.
 
     Returns:
         New list with non-compliant messages transformed to user context.
     """
-    if predicate is None:
-        predicate = _is_non_compliant_assistant_tool_call
-
     result = []
     i = 0
 
@@ -148,7 +119,7 @@ def _transform_tool_calls_to_context(
         msg = messages[i]
 
         # Check if this is an assistant message we should transform
-        if predicate(msg):
+        if _is_non_compliant_assistant_tool_call(msg):
             # Collect this assistant message and all following tool messages
             context_messages = [msg]
             j = i + 1
@@ -175,15 +146,16 @@ def _transform_tool_calls_to_context(
                     cleaned.append(cm)
 
             context_json = json.dumps(cleaned, indent=2)
-            context_text = f"{context_header}\n{context_json}\n{context_footer}"
+            context_text = (
+                f"{THINKING_COMPLIANCE_CONTEXT_HEADER}\n{context_json}\n"
+                f"{THINKING_COMPLIANCE_CONTEXT_FOOTER}"
+            )
 
             if all_images:
                 content: Any = [
                     {"type": "text", "text": context_text},
                     *all_images,
                 ]
-                if image_context_footer is not None:
-                    content.append({"type": "text", "text": image_context_footer})
                 result.append({"role": "user", "content": content})
             else:
                 result.append({"role": "user", "content": context_text})
@@ -216,32 +188,6 @@ def _apply_thinking_compliance(
         return messages
 
     return _transform_tool_calls_to_context(messages)
-
-
-def _transform_completed_tool_calls_to_context(
-    messages: List[Dict[str, Any]],
-    *,
-    context_header: str = THINKING_COMPLIANCE_CONTEXT_HEADER,
-    context_footer: str = THINKING_COMPLIANCE_CONTEXT_FOOTER,
-    image_context_footer: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    completed_call_message_ids = {
-        id(msg)
-        for idx, msg in enumerate(messages[:-1])
-        if msg.get("role") == "assistant"
-        and msg.get("tool_calls")
-        and messages[idx + 1].get("role") == "tool"
-    }
-    if not completed_call_message_ids:
-        return messages
-
-    return _transform_tool_calls_to_context(
-        messages,
-        context_header=context_header,
-        context_footer=context_footer,
-        image_context_footer=image_context_footer,
-        predicate=lambda msg: id(msg) in completed_call_message_ids,
-    )
 
 
 def _strip_thinking_blocks(
@@ -726,47 +672,6 @@ def _apply_deepseek_thinking_compliance(kw: Dict[str, Any]) -> None:
             msg["reasoning_content"] = ""
 
 
-def _completed_image_tool_names(messages: List[Dict[str, Any]]) -> set[str]:
-    call_id_to_name = {}
-    for msg in messages:
-        if msg.get("role") != "assistant":
-            continue
-        for tool_call in msg.get("tool_calls") or []:
-            if not isinstance(tool_call, dict):
-                continue
-            function = tool_call.get("function")
-            if not isinstance(function, dict):
-                continue
-            call_id = tool_call.get("id")
-            name = function.get("name")
-            if isinstance(call_id, str) and isinstance(name, str) and name:
-                call_id_to_name[call_id] = name
-
-    names = set()
-    for msg in messages:
-        if msg.get("role") != "tool":
-            continue
-        _, images = _extract_image_blocks(msg.get("content", ""))
-        if not images:
-            continue
-        name = msg.get("name") or call_id_to_name.get(msg.get("tool_call_id"))
-        if isinstance(name, str) and name:
-            names.add(name)
-    return names
-
-
-def _suppress_tools_after_completed_image_result(
-    kw: Dict[str, Any],
-    messages: List[Dict[str, Any]],
-) -> None:
-    completed_image_tools = _completed_image_tool_names(messages)
-    if not completed_image_tools:
-        return
-
-    kw.pop("tools", None)
-    kw.pop("tool_choice", None)
-
-
 def apply_provider_preprocessing(
     kw: Dict[str, Any],
     provider: Optional[str],
@@ -784,18 +689,6 @@ def apply_provider_preprocessing(
 
     if provider == "deepseek":
         _apply_deepseek_thinking_compliance(kw)
-        _strip_internal_annotations(kw)
-        return kw
-
-    if provider == "xiaomi-mimo":
-        _suppress_tools_after_completed_image_result(kw, messages)
-        messages = _transform_completed_tool_calls_to_context(
-            messages,
-            context_header=COMPLETED_TOOL_CONTEXT_HEADER,
-            context_footer=COMPLETED_TOOL_CONTEXT_FOOTER,
-            image_context_footer=COMPLETED_TOOL_IMAGE_CONTEXT_FOOTER,
-        )
-        kw["messages"] = messages
         _strip_internal_annotations(kw)
         return kw
 

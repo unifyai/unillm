@@ -17,7 +17,6 @@ from unillm.endpoints import (
     minimax,
     moonshotai,
     openrouter,
-    xiaomi_mimo,
     zai,
 )
 
@@ -309,7 +308,6 @@ class TestSupportedModelPricingCoverage:
         "minimax": minimax.models,
         "moonshotai": moonshotai.models,
         "openrouter": openrouter.models,
-        "xiaomi-mimo": xiaomi_mimo.models,
         "zai": zai.models,
     }
 

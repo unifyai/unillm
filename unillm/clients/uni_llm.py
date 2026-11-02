@@ -76,8 +76,6 @@ _OPENROUTER_HARD_PROVIDER_ORDER: dict[str, tuple[str, ...]] = {
     "mistralai/mistral-large": ("mistral",),
     "mistralai/mistral-medium-3": ("mistral",),
     "mistralai/mistral-medium-3.1": ("mistral",),
-    "xiaomi/mimo-v2.5": ("digitalocean", "deepinfra"),
-    "xiaomi/mimo-v2.5-pro": ("digitalocean", "deepinfra"),
     "z-ai/glm-5.2": (
         "together",
         "fireworks",
@@ -121,9 +119,6 @@ _MISTRAL_MEDIUM_3_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
 ]
 _MISTRAL_MEDIUM_31_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
     "mistralai/mistral-medium-3.1"
-]
-_XIAOMI_MIMO_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER[
-    "xiaomi/mimo-v2.5"
 ]
 _ZAI_GLM_HARD_OPENROUTER_PROVIDERS = _OPENROUTER_HARD_PROVIDER_ORDER["z-ai/glm-5.2"]
 
@@ -789,28 +784,6 @@ def _completion_with_transient_retry(**kw: Any) -> Any:
     return retry_transient_llm_sync(_call)
 
 
-def _allow_openai_params(kw: dict, params: Iterable[str]) -> None:
-    """Preserve OpenAI-compatible params that LiteLLM provider metadata omits."""
-    current = kw.get("allowed_openai_params")
-    if current is None:
-        allowed: set[str] = set()
-    elif isinstance(current, str):
-        allowed = {current}
-    else:
-        allowed = {str(param) for param in current}
-
-    allowed.update(params)
-    kw["allowed_openai_params"] = sorted(allowed)
-
-
-def _xiaomi_mimo_token_plan_api_base() -> str | None:
-    api_key = os.environ.get("XIAOMI_MIMO_API_KEY", "")
-    for region in ("sgp", "cn", "ams"):
-        if api_key.startswith(f"tp-{region}"):
-            return f"https://token-plan-{region}.xiaomimimo.com/v1"
-    return None
-
-
 def _apply_deepseek_v4_reasoning_effort(kw: dict, model: str) -> None:
     """Forward DeepSeek V4 graded ``reasoning_effort`` via ``extra_body``.
 
@@ -918,19 +891,6 @@ def _prepare_provider_request_kw(
     # After the gateway branch above, so a call sent to the gateway keeps the
     # gateway's own credential rather than the provider one.
     _pass_provider_credential_explicitly(kw, model, provider)
-
-    if provider == "xiaomi-mimo" and kw.get("api_base") is None:
-        if not model.startswith(_OPENROUTER_MODEL_PREFIX):
-            api_base = _xiaomi_mimo_token_plan_api_base()
-            if api_base is not None:
-                kw["api_base"] = api_base
-
-    if provider == "xiaomi-mimo" and tools:
-        _allow_openai_params(kw, ("tools", "tool_choice"))
-        kw.setdefault("tool_choice", "auto")
-        extra_body = dict(kw.get("extra_body") or {})
-        extra_body["thinking"] = {"type": "disabled"}
-        kw["extra_body"] = extra_body
 
     if provider == "deepseek":
         _apply_deepseek_v4_reasoning_effort(kw, model)
@@ -2339,7 +2299,7 @@ class AsyncUnify(_UniClient):
     # Providers whose litellm handler expects an OpenAI SDK client (AsyncOpenAI)
     # as the ``client`` kwarg.  We must NOT pass an AsyncHTTPHandler for these.
     _OPENAI_SDK_PROVIDERS = frozenset(
-        {"azure", "azure_ai", "openrouter", "xiaomi-mimo"},
+        {"azure", "azure_ai", "openrouter"},
     )
 
     _async_http_client: Optional[AsyncHTTPHandler] = None

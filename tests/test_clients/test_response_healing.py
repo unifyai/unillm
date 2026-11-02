@@ -557,7 +557,7 @@ def test_heal_top_level_tool_call_array():
     assert healed.choices[0].finish_reason == "tool_calls"
 
 
-@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+@pytest.mark.parametrize("provider", ["deepseek", "minimax"])
 def test_healing_avoids_tool_choice_retry(provider):
     content = json.dumps(
         {
@@ -607,7 +607,7 @@ def test_healing_avoids_tool_choice_retry(provider):
     assert retry_reason is None
 
 
-@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+@pytest.mark.parametrize("provider", ["deepseek", "minimax"])
 def test_retry_response_gets_heal_attempt(provider):
     initial = _completion("I can answer directly.")
     healed_content = json.dumps(
@@ -665,7 +665,7 @@ def test_forced_tool_name_triggers_healing():
 
     healed = try_heal_embedded_tool_calls(
         response,
-        provider="xiaomi-mimo",
+        provider="minimax",
         original_tool_choice={"type": "function", "function": {"name": "tool_a"}},
         tools=[TOOL_A],
         response_format_spec=None,
@@ -889,7 +889,7 @@ def test_heal_deepseek_tool_call_name_format():
     assert healed.choices[0].finish_reason == "tool_calls"
 
 
-@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+@pytest.mark.parametrize("provider", ["deepseek", "minimax"])
 def test_heal_tool_call_name_avoids_tool_choice_retry(provider):
     content = json.dumps(
         {
@@ -1368,7 +1368,7 @@ def test_infer_respects_forced_tool_choice_name():
     assert inferred is None
 
 
-@pytest.mark.parametrize("provider", ["deepseek", "minimax", "xiaomi-mimo"])
+@pytest.mark.parametrize("provider", ["deepseek", "minimax"])
 def test_infer_argumentless_prose_triggers_tool_choice_retry(provider):
     content = json.dumps(
         {

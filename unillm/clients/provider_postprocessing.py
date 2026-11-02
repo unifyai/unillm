@@ -8,8 +8,8 @@ but operates on responses rather than requests.
 Currently handles:
 - Anthropic: tool_choice="required" compliance with thinking mode
 - Anthropic/DeepSeek: invalid tool name detection (tool called not in schema)
-- DeepSeek/MiniMax/Xiaomi MiMo: soft forced tool choice compliance
-- DeepSeek/MiniMax/Xiaomi MiMo: embedded tool_calls recovery from JSON content
+- DeepSeek/MiniMax: soft forced tool choice compliance
+- DeepSeek/MiniMax: embedded tool_calls recovery from JSON content
 - json_tool_call wrapper normalization (structured output + inner tool unwrapping)
 - response_format schema validation with retry (all providers)
 - reasoning_content promotion when content is empty (thinking models)
