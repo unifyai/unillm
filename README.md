@@ -103,10 +103,15 @@ Vertex Claude included), carries Anthropic's `cache_control` breakpoints with
 the one-hour TTL, because Claude reads nothing from its prompt cache without
 them. A client places three by default: after the last tool, after the last
 static system block, and on the last message, so each turn of a conversation
-reads the turn before it. Other models cache a repeated prefix on their own
-and are sent no breakpoints; for them, as for Claude, what earns cache reads
-is a request ordered from most to least shared, with nothing that varies
-between calls (a timestamp, a run id) ahead of shared content.
+reads the turn before it. Other models are sent no breakpoints. OpenAI's
+through OpenRouter (measured on GPT-6 Sol) read from the cache only as far as
+an earlier request's whole prompt ran: a conversation that grows turn by turn
+reads each turn before it, but calls that share an opening and differ after it
+read none of it until one call has sent the shared messages alone, after which
+every call that starts with exactly those messages reads them. For every
+model, what earns cache reads is a request ordered from most to least shared,
+with nothing that varies between calls (a timestamp, a run id) ahead of shared
+content.
 
 A caller marks any further shared block, such as a document every call of a
 task reads, with `"_cache_breakpoint": True` on the content block (or on the
@@ -142,7 +147,8 @@ A caller that posts a Claude request body itself, outside a client, gives
 it the same breakpoints with `unillm.place_cache_breakpoints(body)`.
 
 Calls that share a prefix and start at the same moment each write it and read
-none of it: send the first alone, and start the rest once its reply has begun. Each completion's
+none of it: send the first alone, and start the rest once its reply has begun.
+For OpenAI's models that first call carries the shared messages alone. Each completion's
 `usage.prompt_tokens_details.cached_tokens` says how much was read from cache.
 
 ### Response Caching

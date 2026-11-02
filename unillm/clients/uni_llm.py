@@ -1249,8 +1249,7 @@ class _UniClient(_Client, abc.ABC):
             block the caller marks ``"_cache_breakpoint": True`` gets one as well,
             within Anthropic's four. Defaults to all three; ``None`` or ``[]``
             sends no breakpoints at all, the caller's marks included. Other models
-            cache a repeated prefix on their own and are sent no breakpoints.
-            Breakpoints are left out of the response cache key.
+            are sent none. Breakpoints are left out of the response cache key.
 
             cache_affinity: An optional key, stable across one conversation or
             agent run, that asks the transport to send every request carrying it
