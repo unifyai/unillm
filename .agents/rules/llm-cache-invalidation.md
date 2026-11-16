@@ -77,7 +77,7 @@ The refresh reads `ANTHROPIC_API_KEY` and `OPENROUTER_API_KEY` from the `unillm-
 
 ```bash
 for k in ANTHROPIC_API_KEY OPENROUTER_API_KEY; do
-  CLOUDSDK_ACTIVE_CONFIG_NAME=automation gcloud secrets versions access latest --secret "$k" --project saas-368716 \
+  CLOUDSDK_ACTIVE_CONFIG_NAME=automation gcloud secrets versions access latest --secret "$k" \
     | gh secret set "$k" --repo unifyai/unillm --env unillm-llm-cache-refresh
 done
 ```
